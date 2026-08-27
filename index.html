@@ -607,6 +607,8 @@ const TSUB={ov:'Финансовый результат и структура п
 const TMAP={mv:'movement',pd:'production',pc:'procurement',st:'stock'};
 const TCLASS={RAIL:'Транспорт',TRUCK:'Транспорт',SHIP:'Транспорт',SHIPCONTAN:'Транспорт',SUPTRAN:'Транспорт',
   INTERNAL:'Внутризаводское',PORTHANDL:'Терминал/перевалка',PLANTFCA:'Условие поставки',LASTMILE:'Последняя миля'};
+let LG_FLOW_LAYER='distrib'; // 'distrib' | 'interplant' | 'inbound' | 'all'
+let LG_FLOW_TM='all'; // 'all' | 'RAIL' | 'TRUCK' | 'SHIP' | ...
 
 /* ═══════════════ 3. УТИЛИТЫ ═══════════════ */
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
@@ -1137,123 +1139,218 @@ function chFlow(id,h,legsList,fmt,cb){
   const g=cv(id,h);if(!g)return;const{c,x,w}=g;
   if(!legsList.length){
     x.fillStyle=CH.axis;x.textAlign='center';x.font='13px '+FNT;
-    x.fillText('Нет данных по перемещениям',w/2,h/2);bind(c);return;
+    x.fillText('Нет данных по перемещениям под выбранными условиями',w/2,h/2);bind(c);return;
   }
 
-  // Определение этапа узла для сквозного End-to-End потока (0: Исток/Завод -> 1: Хаб/Порт -> 2: Клиент/Сбыт)
-  const getNodeStage=name=>{
-    const s=String(name||'');
-    if(s.startsWith('Sale_')||s.startsWith('Cust_')||s.includes('Клиент'))return 2;
-    if(s.startsWith('Dispatch_')||s.startsWith('Port_')||s.startsWith('WH_')||s.startsWith('Hub_'))return 1;
-    if(s.startsWith('Vendor_')||s.startsWith('Plant_'))return 0;
-    return 1;
-  };
+  const isInterplantOnly = (LG_FLOW_LAYER==='interplant') || legsList.every(l=>l.fr.startsWith('Plant_')&&l.to.startsWith('Plant_'));
+  const activeSelectedNode = F.nd && F.nd.length ? F.nd[0] : null;
 
-  // Собираем уникальные узлы и их объёмы
-  const nodeSet=new Set();
-  legsList.forEach(l=>{nodeSet.add(l.fr);nodeSet.add(l.to)});
-  const allNodes=[...nodeSet].map(name=>{
-    const st=getNodeStage(name);
-    const vOut=S(legsList.filter(l=>l.fr===name),l=>l.v);
-    const vIn=S(legsList.filter(l=>l.to===name),l=>l.v);
-    return {id:name,name,stage:st,vol:Math.max(vOut,vIn,1)};
-  });
-
-  // Коррекция стадий, если поток идет внутри одного уровня
+  // Множество площадок, отгружающих наружу
+  const finalPlantSet = new Set();
   legsList.forEach(l=>{
-    const src=allNodes.find(n=>n.id===l.fr);
-    const dst=allNodes.find(n=>n.id===l.to);
-    if(src&&dst&&src.stage>=dst.stage){
-      if(src.stage===2&&dst.stage===2)src.stage=1;
-      else if(dst.stage<=src.stage)dst.stage=Math.min(2,src.stage+1);
+    if(l.fr.startsWith('Plant_') && (l.to.startsWith('Sale_')||l.to.startsWith('Dispatch_')||l.to.startsWith('Port_'))){
+      finalPlantSet.add(l.fr);
     }
   });
 
-  const stages=[0,1,2].map(st=>allNodes.filter(n=>n.stage===st));
-  // Если промежуточных хабов нет, оставляем 2 колонки
-  const activeStages=stages.filter(cols=>cols.length>0);
-  const numCols=activeStages.length;
-  const p={l:18,r:18,t:42,b:24};
-  const colW=(w-p.l-p.r)/Math.max(numCols,1);
-  const cardW=Math.min(colW*0.62,175),cardH=34;
-  const availH=h-p.t-p.b;
+  // Карта клиентов для локаций спроса Sale_*
+  const saleCustMap=new Map();
+  if(DS&&DS.orders){
+    DS.orders.forEach(o=>{
+      if(o.loc&&o.cl){
+        if(!saleCustMap.has(o.loc))saleCustMap.set(o.loc,new Set());
+        saleCustMap.get(o.loc).add(o.cl);
+      }
+    });
+  }
 
-  const stageTitles=['1. Производство и поставщики','2. Хабы, порты и перевалка','3. Точки отгрузки клиентам'];
-  const stageColIdx=[];
+  // Сбор уникальных узлов
+  const nodeSet=new Set();
+  legsList.forEach(l=>{nodeSet.add(l.fr);nodeSet.add(l.to)});
+  const nodeArr=[...nodeSet];
 
-  // Заголовки стадий
-  x.font='600 11px '+FNT;x.textAlign='center';
-  stages.forEach((stNodes,stIdx)=>{
-    if(!stNodes.length)return;
-    const cIdx=stageColIdx.length;
-    stageColIdx.push(stIdx);
-    const cx=p.l+cIdx*colW+colW/2;
-    x.fillStyle=stIdx===2?CH.ok:(stIdx===0?CH.d1:CH.d6);
-    x.fillText(stageTitles[stIdx],cx,p.t-22);
-    x.strokeStyle=CH.grid;x.lineWidth=1;x.setLineDash([3,3]);
-    x.beginPath();x.moveTo(cx,p.t-10);x.lineTo(cx,h-p.b);x.stroke();x.setLineDash([]);
+  // Топологическое ранжирование DAG для межзаводских цепочек (чтобы разнести заводы по шагам потока)
+  const interplantRanks=new Map();
+  if(isInterplantOnly){
+    nodeArr.forEach(n=>interplantRanks.set(n,0));
+    // Вычисление максимального пути от истоков
+    let changed=true;
+    for(let iter=0;iter<6&&changed;iter++){
+      changed=false;
+      legsList.forEach(l=>{
+        const rSrc=interplantRanks.get(l.fr)||0;
+        const rDst=interplantRanks.get(l.to)||0;
+        if(rDst<=rSrc){
+          interplantRanks.set(l.to,Math.min(3,rSrc+1));
+          changed=true;
+        }
+      });
+    }
+    // Если все заводы скопились в конце, распределяем истоки
+    const inDegrees=new Map();
+    legsList.forEach(l=>inDegrees.set(l.to,(inDegrees.get(l.to)||0)+1));
+    nodeArr.forEach(n=>{
+      if(!inDegrees.has(n)) interplantRanks.set(n,0);
+    });
+  }
+
+  // Определение роли и колонки узла
+  const getNodeMeta=name=>{
+    const s=String(name||'');
+    if(s.startsWith('Sale_')||s.startsWith('Cust_')||s.includes('Клиент'))
+      return {st:5,cat:'sale',title:'Локация спроса',icon:'🎯',col:CH.ok};
+    if(s.startsWith('Dispatch_')||s.startsWith('WH_')||s.startsWith('Склад'))
+      return {st:4,cat:'dispatch',title:'Точка отгрузки',icon:'📍',col:CH.warn};
+    if(s.startsWith('Port_')||s.startsWith('Hub_')||s.startsWith('Порт'))
+      return {st:3,cat:'port',title:'Порт / Хаб',icon:'⚓',col:CH.d6};
+    if(s.startsWith('Plant_')||s.startsWith('Завод')){
+      if(isInterplantOnly){
+        const rnk=Math.min(3,interplantRanks.get(name)||0);
+        if(rnk===0) return {st:0,cat:'donor',title:'Первичный завод (Донор)',icon:'⛏️',col:CH.d4};
+        if(rnk===1) return {st:1,cat:'semi',title:'Первичный передел',icon:'⚙️',col:CH.d2};
+        if(rnk===2) return {st:2,cat:'proc',title:'Финишный прокат',icon:'🏭',col:CH.d1};
+        return {st:3,cat:'finish',title:'Сборка и выпуск',icon:'📦',col:CH.d3};
+      }
+      if(finalPlantSet.has(name)){
+        return {st:2,cat:'plant_fin',title:'Производство ГП',icon:'🏭',col:CH.d1};
+      }
+      return {st:1,cat:'plant_semi',title:'Производство полуфабрикатов',icon:'⚙️',col:CH.d2};
+    }
+    if(s.startsWith('Vendor_')||s.startsWith('Поставщик'))
+      return {st:0,cat:'vendor',title:'Поставщик сырья',icon:'📦',col:CH.d4};
+    return {st:3,cat:'other',title:'Узел сети',icon:'🏢',col:CH.ctrl};
+  };
+
+  const allNodes=nodeArr.map(name=>{
+    const meta=getNodeMeta(name);
+    const vOut=S(legsList.filter(l=>l.fr===name),l=>l.v);
+    const vIn=S(legsList.filter(l=>l.to===name),l=>l.v);
+    const vol=Math.max(vOut,vIn,1);
+    let extra='';
+    if(meta.cat==='sale'&&saleCustMap.has(name)){
+      const clArr=[...saleCustMap.get(name)];
+      extra=clArr.slice(0,2).join(', ')+(clArr.length>2?` +${clArr.length-2}`:'');
+    }
+    return {id:name,name,stage:meta.st,cat:meta.cat,title:meta.title,icon:meta.icon,color:meta.col,vol,extra};
   });
 
-  // Расчет координат карточек
+  const STAGE_TITLES=isInterplantOnly?[
+    '1. Первичные заводы (Доноры)',
+    '2. Первичный передел',
+    '3. Финишный прокат',
+    '4. Сборка и выпуск'
+  ]:[
+    '1. Поставщики сырья',
+    '2. Полуфабрикаты',
+    '3. Готовая продукция',
+    '4. Хабы и порты',
+    '5. Точки отгрузки',
+    '6. Локации спроса'
+  ];
+
+  const maxStageCount = isInterplantOnly ? 4 : 6;
+  const presentStages=Array.from({length:maxStageCount},(_,i)=>i).filter(st=>allNodes.some(n=>n.stage===st));
+  const p={l:16,r:16,t:44,b:24};
+  const numCols=Math.max(presentStages.length,1);
+  const colW=(w-p.l-p.r)/numCols;
+  const cardW=Math.min(colW*0.84,210),cardH=38;
+  const availH=h-p.t-p.b;
+
+  // Отрисовка колонок стадий
+  x.font='600 11px '+FNT;x.textAlign='center';
+  presentStages.forEach((stIdx,cIdx)=>{
+    const cx=p.l+cIdx*colW+colW/2;
+    const stageColors=isInterplantOnly?[CH.d4,CH.d2,CH.d1,CH.d3]:[CH.d4,CH.d2,CH.d1,CH.d6,CH.warn,CH.ok];
+    x.fillStyle=stageColors[stIdx]||CH.txt;
+    x.fillText(STAGE_TITLES[stIdx]||`Этап ${stIdx+1}`,cx,p.t-20);
+    x.strokeStyle=CH.grid;x.lineWidth=1;x.setLineDash([3,3]);
+    x.beginPath();x.moveTo(cx,p.t-8);x.lineTo(cx,h-p.b);x.stroke();x.setLineDash([]);
+  });
+
+  // Расчет позиций карточек
   const nodeMap=new Map();
-  activeStages.forEach((colNodes,cIdx)=>{
-    const stIdx=stageColIdx[cIdx];
-    colNodes.sort((a,b)=>b.vol-a.vol);
+  presentStages.forEach((stIdx,cIdx)=>{
+    const colNodes=allNodes.filter(n=>n.stage===stIdx).sort((a,b)=>b.vol-a.vol);
     const stepY=availH/Math.max(colNodes.length,1);
     colNodes.forEach((n,rIdx)=>{
-      const curH=Math.min(cardH,stepY-6);
+      const curH=Math.min(cardH,Math.max(28,stepY-6));
       n.x=p.l+cIdx*colW+(colW-cardW)/2;
       n.y=p.t+rIdx*stepY+(stepY-curH)/2;
       n.w=cardW;n.h=curH;
-      n.color=stIdx===2?CH.ok:(stIdx===0?CH.d1:CH.d2);
       nodeMap.set(n.id,n);
     });
   });
 
+  // Множество связанных с выбранным узлом
+  const isConnectedLeg = l => !activeSelectedNode || l.fr===activeSelectedNode || l.to===activeSelectedNode;
+  const isConnectedNode = n => !activeSelectedNode || n.id===activeSelectedNode || legsList.some(l=>(l.fr===activeSelectedNode&&l.to===n.id)||(l.to===activeSelectedNode&&l.fr===n.id));
+
   // Отрисовка лент потоков (Sankey Bezier)
   const maxLegVol=Math.max(...legsList.map(l=>l.v),1);
-  legsList.slice().sort((a,b)=>a.v-b.v).forEach((l,i)=>{
+  legsList.slice().sort((a,b)=>a.v-b.v).forEach(l=>{
     const src=nodeMap.get(l.fr),dst=nodeMap.get(l.to);
     if(!src||!dst)return;
-    const sx=src.x+src.w,sy=src.y+src.h/2;
-    const ex=dst.x,ey=dst.y+dst.h/2;
-    const flowThick=Math.max(3,Math.min(22,(l.v/maxLegVol)*20));
-    const dx=Math.max(24,Math.abs(ex-sx)*0.45);
+
+    const isHl = activeSelectedNode ? (l.fr===activeSelectedNode || l.to===activeSelectedNode) : false;
+    const isDim = activeSelectedNode ? !isHl : false;
+
+    let sx=src.x+src.w,sy=src.y+src.h/2;
+    let ex=dst.x,ey=dst.y+dst.h/2;
+
+    const isSameCol=(src.stage===dst.stage);
+    if(isSameCol){
+      sx=src.x+src.w;ex=dst.x+src.w;
+    }
+
+    const flowThick=Math.max(2.5,Math.min(22,(l.v/maxLegVol)*18));
+    const dx=isSameCol?34:Math.max(22,Math.abs(ex-sx)*0.45);
 
     const grad=x.createLinearGradient(sx,sy,ex,ey);
-    grad.addColorStop(0,rgba(src.color,0.38));
-    grad.addColorStop(1,rgba(dst.color,0.38));
+    const alphaSrc = isHl ? 0.75 : (isDim ? 0.08 : 0.42);
+    const alphaDst = isHl ? 0.75 : (isDim ? 0.08 : 0.42);
+    grad.addColorStop(0,rgba(isHl?CH.brand:src.color,alphaSrc));
+    grad.addColorStop(1,rgba(isHl?CH.brand:dst.color,alphaDst));
 
     x.beginPath();
-    x.moveTo(sx,sy-flowThick/2);
-    x.bezierCurveTo(sx+dx,sy-flowThick/2,ex-dx,ey-flowThick/2,ex,ey-flowThick/2);
-    x.lineTo(ex,ey+flowThick/2);
-    x.bezierCurveTo(ex-dx,ey+flowThick/2,sx+dx,sy+flowThick/2,sx,sy+flowThick/2);
-    x.closePath();
-    x.fillStyle=grad;x.fill();
+    if(isSameCol){
+      x.moveTo(sx,sy);
+      x.bezierCurveTo(sx+dx,sy,ex+dx,ey,ex,ey);
+      x.strokeStyle=isHl?CH.brand:rgba(src.color,isDim?0.10:0.55);
+      x.lineWidth=isHl?Math.max(flowThick,4):flowThick;
+      x.stroke();
+    }else{
+      x.moveTo(sx,sy-flowThick/2);
+      x.bezierCurveTo(sx+dx,sy-flowThick/2,ex-dx,ey-flowThick/2,ex,ey-flowThick/2);
+      x.lineTo(ex,ey+flowThick/2);
+      x.bezierCurveTo(ex-dx,ey+flowThick/2,sx+dx,sy+flowThick/2,sx,sy+flowThick/2);
+      x.closePath();
+      x.fillStyle=grad;x.fill();
 
-    x.strokeStyle=rgba(src.color,0.6);x.lineWidth=1;
-    x.beginPath();
-    x.moveTo(sx,sy);
-    x.bezierCurveTo(sx+dx,sy,ex-dx,ey,ex,ey);
-    x.stroke();
+      x.strokeStyle=isHl?CH.brand:rgba(src.color,isDim?0.10:0.65);
+      x.lineWidth=isHl?1.8:1;
+      x.beginPath();x.moveTo(sx,sy);x.bezierCurveTo(sx+dx,sy,ex-dx,ey,ex,ey);x.stroke();
+    }
 
-    // Бейджик вида транспорта по центру потока
-    const mx=(sx+ex)/2,my=(sy+ey)/2;
+    // Иконка вида транспорта по центру
+    const mx=isSameCol?sx+dx/2:(sx+ex)/2,my=(sy+ey)/2;
     const icoStr=TM_ICONS[l.tm]||l.tm||'Транспорт';
     const shortIco=icoStr.split(' ')[0]||'🚚';
-    const tagW=22,tagH=18;
+    const tagW=20,tagH=16;
     drawBox(x,mx-tagW/2,my-tagH/2,tagW,tagH,3);
-    x.fillStyle=CH.surf;x.fill();
-    x.strokeStyle=CH.line;x.lineWidth=1;x.stroke();
-    x.fillStyle=CH.txt;x.font='10px '+FNT;
+    x.fillStyle=isDim?CH.pane:CH.surf;x.fill();
+    x.strokeStyle=isHl?CH.brand:(isDim?CH.dim:CH.line);
+    x.lineWidth=isHl?1.5:1;x.stroke();
+    x.fillStyle=isDim?CH.dimTxt:CH.txt;x.font='9.5px '+FNT;
     x.textAlign='center';x.textBaseline='middle';
     x.fillText(shortIco,mx,my+1);
 
-    // Хитбокс для тултипа потока
-    reg(c,mx-20,my-14,40,28,
+    // Список перемещаемых продуктов
+    const prodsTxt = l.prods && l.prods.length ? l.prods.join(', ') : '—';
+
+    reg(c,mx-18,my-12,36,24,
       `<b>${l.fr} → ${l.to}</b><br>`
       +`Вид транспорта: <b>${icoStr}</b><br>`
+      +`Перемещаемый продукт: <b>${prodsTxt}</b><br>`
       +`Объём потока: <b>${fmt(l.v)}</b><br>`
       +(l.c?`Затраты: <b>${bn(l.c)}</b><br>`:'')
       +(l.rate>1?`Тариф: <b>${nf(l.rate)} ₽/т</b>`:'Тариф: условие поставки/внутрисети'),
@@ -1263,29 +1360,63 @@ function chFlow(id,h,legsList,fmt,cb){
   // Отрисовка карточек узлов
   allNodes.forEach(n=>{
     if(!n.w)return;
-    x.fillStyle=CH.surf;
+    const isSelected = (activeSelectedNode===n.id);
+    const isConnected = isConnectedNode(n);
+    const isDim = activeSelectedNode && !isConnected;
+
+    // Свечение для выбранного узла (Neon Glow Halo)
+    if(isSelected){
+      x.save();
+      x.shadowColor=rgba(CH.brand,0.7);
+      x.shadowBlur=14;
+      x.shadowOffsetX=0;
+      x.shadowOffsetY=0;
+      x.fillStyle=CH.brandBg||'#f1e0ff';
+      drawBox(x,n.x-2,n.y-2,n.w+4,n.h+4,6);
+      x.fill();
+      x.restore();
+    }
+
+    x.fillStyle=isSelected?(CH.brandBg||'#f1e0ff'):(isDim?'#fbfbfc':CH.surf);
     drawBox(x,n.x,n.y,n.w,n.h,4);x.fill();
-    x.strokeStyle=CH.line;x.lineWidth=1;x.stroke();
 
-    // Цветовая плашка слева
-    x.fillStyle=n.color;
-    x.fillRect(n.x,n.y+3,4,n.h-6);
+    // Рамка карточки
+    if(isSelected){
+      x.strokeStyle=CH.brand;
+      x.lineWidth=2.4;
+    }else if(isConnected&&activeSelectedNode){
+      x.strokeStyle=CH.accent||CH.brand;
+      x.lineWidth=1.5;
+    }else{
+      x.strokeStyle=isDim?CH.dim:CH.line;
+      x.lineWidth=1;
+    }
+    x.stroke();
 
-    // Название узла
-    x.fillStyle=CH.txt;x.font='600 11px '+FNT;
+    // Маркер роли слева
+    x.fillStyle=isDim?CH.dim:(isSelected?CH.brand:n.color);
+    x.fillRect(n.x,n.y+3,isSelected?4.5:3.5,n.h-6);
+
+    // Заголовок карточки
+    x.fillStyle=isDim?CH.dimTxt:(isSelected?CH.brand:CH.txt);
+    x.font=(isSelected?'700 ':'600 ')+'10.5px '+FNT;
     x.textAlign='left';x.textBaseline='top';
-    const maxChars=Math.max(9,Math.floor((n.w-20)/7.2));
+    const maxChars=Math.max(8,Math.floor((n.w-26)/6.8));
     const title=n.name.length>maxChars?n.name.slice(0,maxChars-1)+'…':n.name;
-    x.fillText(title,n.x+9,n.y+4);
+    x.fillText(`${n.icon} ${title}${isSelected?' ✓':''}`,n.x+8,n.y+4);
 
-    // Тоннаж узла
-    x.fillStyle=CH.sub;x.font='10px '+FNT;
-    x.fillText(fmt(n.vol),n.x+9,n.y+18);
+    // Вторая строка
+    x.fillStyle=isDim?CH.dimTxt:(isSelected?CH.brand:(n.extra?CH.ok:CH.sub));
+    x.font=(isSelected?'600 ':'')+'9.5px '+FNT;
+    const subTxt=n.extra?`${fmt(n.vol)} · ${n.extra}`:fmt(n.vol);
+    const subCrop=subTxt.length>maxChars+4?subTxt.slice(0,maxChars+3)+'…':subTxt;
+    x.fillText(subCrop,n.x+8,n.y+19);
 
     reg(c,n.x,n.y,n.w,n.h,
-      `<b>Узел: ${n.name}</b><br>`
+      `<b>${n.title}: ${n.name}</b>${isSelected?' <span style="color:var(--scp-accent);font-weight:700">[ВЫБРАН]</span>':''}<br>`
+      +(n.extra?`Клиент: <b>${n.extra}</b><br>`:'')
       +`Сквозной объём: <b>${fmt(n.vol)}</b><br>`
-      +`<span style="color:var(--scp-accent)">Клик: отфильтровать всю панель по узлу</span>`,
+      +`<span style="color:var(--scp-accent)">${isSelected?'Клик: снять выделение узла':'Клик: сфокусировать граф и цепочку на узле'}</span>`,
       cb?()=>cb(n.id):null);
   });
 
@@ -1498,8 +1629,29 @@ function tabLG(){
   const byM=grp(O,r=>r.tm,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),rate:S(v.filter(x=>!x.stub),r=>r.cost)/Math.max(S(v.filter(x=>!x.stub),r=>r.v),1)}))
     .sort((a,b)=>b.c-a.c);
   const byC=grp(O,r=>r.tclass,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v)})).sort((a,b)=>b.c-a.c);
-  const legs=grp(O,r=>r.fr+' → '+r.to,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),fr:v[0].fr,to:v[0].to,tm:v[0].tm,
-    rate:S(v.filter(x=>!x.stub),r=>r.cost)/Math.max(S(v.filter(x=>!x.stub),r=>r.v),1)})).sort((a,b)=>b.c-a.c);
+
+  // Классификатор контура плеча
+  const getLegLayer=l=>{
+    const isOut = l.to.startsWith('Sale_')||l.to.startsWith('Dispatch_')||l.fr.startsWith('Dispatch_')||l.fr.startsWith('Port_')||l.to.startsWith('Port_');
+    const isPlant = l.fr.startsWith('Plant_')&&l.to.startsWith('Plant_');
+    const isIn = l.fr.startsWith('Vendor_');
+    if(isOut)return 'distrib';
+    if(isPlant)return 'interplant';
+    if(isIn)return 'inbound';
+    return 'distrib';
+  };
+
+  const legs=grp(O,r=>r.fr+' → '+r.to,v=>({
+    c:S(v,r=>r.cost),
+    v:S(v,r=>r.v),
+    fr:v[0].fr,
+    to:v[0].to,
+    tm:v[0].tm,
+    prods:uq(v,z=>z.pr).filter(Boolean),
+    layer:getLegLayer(v[0]),
+    rate:S(v.filter(x=>!x.stub),r=>r.cost)/Math.max(S(v.filter(x=>!x.stub),r=>r.v),1)
+  })).sort((a,b)=>b.v-a.v);
+
   const totCost=S(fOps(),r=>r.cost);
   const legsPerOrder=grp(O,r=>r.o,v=>({n:v.length}));
   const K=[['Затраты на логистику',bn(cost),pc(cost/Math.max(totCost,1))+' затрат цепочки',''],
@@ -1509,58 +1661,119 @@ function tabLG(){
      S(legsPerOrder,l=>l.n)/legsPerOrder.length>6?'mid':''],
    ['Строк-заглушек',pc(O.filter(r=>r.stub).length/O.length),'тариф не более 1 ₽/т','mid'],
    ['Уникальных плеч',nf(legs.length),'узлов сети: '+uq(O,r=>r.fr).length,'']];
+
+  // Фильтрация плеч под выбранный контур и вид транспорта
+  let flowLegs = legs.filter(l=>l.fr&&l.to);
+  if(LG_FLOW_LAYER==='distrib') flowLegs = flowLegs.filter(l=>l.layer==='distrib');
+  else if(LG_FLOW_LAYER==='interplant') flowLegs = flowLegs.filter(l=>l.layer==='interplant');
+  else if(LG_FLOW_LAYER==='inbound') flowLegs = flowLegs.filter(l=>l.layer==='inbound');
+
+  // Доступные виды транспорта для активного контура
+  const availTms = uq(flowLegs,l=>l.tm);
+  if(LG_FLOW_TM!=='all'&&!availTms.includes(LG_FLOW_TM)) LG_FLOW_TM='all';
+
+  if(LG_FLOW_TM!=='all') flowLegs = flowLegs.filter(l=>l.tm===LG_FLOW_TM);
+
+  const hasClientFilter = F.cl.length>0||F.pr.length>0;
+  const dispFlowLegs = hasClientFilter ? flowLegs : flowLegs.slice(0,32);
+
   const html=`
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]||''}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
+    <div class="card w">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+        <div>
+          <h3>Потоки сети: откуда и куда</h3>
+          <div class="sub" style="margin-bottom:0">Толщина потока — тонны. Наведите на иконку транспорта, чтобы увидеть перемещаемый продукт:</div>
+        </div>
+        <div class="seg">
+          <button class="btn ${LG_FLOW_LAYER==='distrib'?'p':''}" id="lgLayerDistrib">🚚 Дистрибуция клиентам</button>
+          <button class="btn ${LG_FLOW_LAYER==='interplant'?'p':''}" id="lgLayerInter">🏭 Межзаводские заготовки</button>
+          <button class="btn ${LG_FLOW_LAYER==='inbound'?'p':''}" id="lgLayerInbound">📦 Снабжение сырьем</button>
+          <button class="btn ${LG_FLOW_LAYER==='all'?'p':''}" id="lgLayerAll">🌐 Сквозная сеть</button>
+        </div>
+      </div>
+      <div class="tbar" style="margin-bottom:10px">
+        <span class="tbar-lbl">Вид транспорта:</span>
+        <button class="chip ${LG_FLOW_TM==='all'?'on':''}" data-ltm="all">Все виды (${flowLegs.length})</button>
+        ${availTms.map(t=>`<button class="chip ${LG_FLOW_TM===t?'on':''}" data-ltm="${esc(t)}">${TM_ICONS[t]||t}</button>`).join('')}
+      </div>
+      <canvas id="l3"></canvas>
+    </div>
     <div class="card"><h3>Затраты по виду транспорта</h3><div class="sub">Клик — фильтр по виду</div><canvas id="l1"></canvas></div>
     <div class="card"><h3>Класс операции перемещения</h3><div class="sub">Транспорт, внутризаводское, терминал, условие поставки</div><canvas id="l2"></canvas></div>
-    <div class="card w"><h3>Потоки сети: откуда и куда</h3><div class="sub">Толщина потока — тонны. Клик по узлу — фильтр по узлу сети, снимается кнопкой «Сбросить» в панели фильтров</div><canvas id="l3"></canvas></div>
     <div class="card"><h3>Топ плеч по затратам</h3><div class="sub">Клик — фильтр по виду транспорта плеча</div><canvas id="l4"></canvas></div>
     <div class="card"><h3>Тариф по видам транспорта</h3><div class="sub">Только реальные ставки, ₽/т</div><canvas id="l5"></canvas></div>
     <div class="card w"><h3>Матрица плеч</h3><div class="sub">Тонны, затраты и удельный тариф. Сортировка и мультифильтры</div><div id="l6"></div></div>
   </div>`;
+
   setTimeout(()=>{
+    // Слушатели переключателя контуров
+    if($('#lgLayerDistrib'))$('#lgLayerDistrib').onclick=()=>{LG_FLOW_LAYER='distrib';LG_FLOW_TM='all';render()};
+    if($('#lgLayerInter'))$('#lgLayerInter').onclick=()=>{LG_FLOW_LAYER='interplant';LG_FLOW_TM='all';render()};
+    if($('#lgLayerInbound'))$('#lgLayerInbound').onclick=()=>{LG_FLOW_LAYER='inbound';LG_FLOW_TM='all';render()};
+    if($('#lgLayerAll'))$('#lgLayerAll').onclick=()=>{LG_FLOW_LAYER='all';LG_FLOW_TM='all';render()};
+
+    // Слушатели переключателя вида транспорта
+    $$('[data-ltm]').forEach(b=>{
+      b.onclick=()=>{LG_FLOW_TM=b.dataset.ltm;render()};
+    });
+
+    // Динамический расчёт адаптивной высоты канваса под плотность узлов
+    const nodesInFlow = new Set();
+    dispFlowLegs.forEach(l=>{nodesInFlow.add(l.fr);nodesInFlow.add(l.to)});
+    const isInterplant = (LG_FLOW_LAYER==='interplant') || dispFlowLegs.every(l=>l.fr.startsWith('Plant_')&&l.to.startsWith('Plant_'));
+    const maxNodesInColEstimate = Math.ceil(nodesInFlow.size / (isInterplant ? 3.2 : 4.5));
+    const autoGraphHeight = Math.max(380, Math.min(820, maxNodesInColEstimate * 52 + 90));
+
+    // Отрисовка потоков
+    if(dispFlowLegs.length) chFlow('#l3',H('#l3',autoGraphHeight,0.36,360,820),dispFlowLegs,v=>nf(v)+' т',k=>setF('nd',k));
+    else{const g=cv('#l3',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('В выбранном контуре и виде транспорта нет перемещений',g.w/2,100)}}
+
     chH('#l1',H('#l1',240,0.5),byM.map((m,i)=>({k:m.k,v:m.c,c:PAL[i%PAL.length],
       tip:`<b>${m.k}</b><br>Затраты: ${bn(m.c)}<br>Объём: ${nf(m.v)} т<br>Тариф: ${nf(m.rate)} ₽/т<br>Класс: ${TCLASS[m.k]||'—'}`})),bn,it=>setF('tm',it.k));
     chDonut('#l2',H('#l2',240,0.55),byC.map((c,i)=>({k:c.k,v:c.c,c:PAL[i]})),'Затраты',bn,null);
-    const flowLegs=legs.filter(l=>l.fr&&l.to).slice(0,18);
-    if(flowLegs.length) chFlow('#l3',H('#l3',340,0.34,300,440),flowLegs,v=>nf(v)+' т',k=>setF('nd',k));
-    else{const g=cv('#l3',190);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
-      g.x.fillText('Нет плеч с заполненными полями «откуда» и «куда»',g.w/2,95)}}
-    chH('#l4',H('#l4',260,0.55),legs.slice(0,9).map(l=>({k:l.k,v:l.c,tm:l.tm,c:CH.d1,
-      tip:`<b>${l.k}</b><br>${l.tm} · ${nf(l.v)} т<br>Затраты: ${bn(l.c)}<br>Тариф: ${nf(l.rate)} ₽/т`})),bn,it=>setF('tm',it.tm));
+
+    const legsByCost=legs.slice().sort((a,b)=>b.c-a.c);
+    chH('#l4',H('#l4',260,0.55),legsByCost.slice(0,9).map(l=>({k:l.fr+' → '+l.to,v:l.c,tm:l.tm,c:CH.d1,
+      tip:`<b>${l.fr} → ${l.to}</b><br>${l.tm} · ${nf(l.v)} т<br>Продукты: ${l.prods.join(', ')||'—'}<br>Затраты: ${bn(l.c)}<br>Тариф: ${nf(l.rate)} ₽/т`})),bn,it=>setF('tm',it.tm));
+
     const rm=byM.filter(m=>m.rate>1).sort((a,b)=>b.rate-a.rate);
     chBars('#l5',H('#l5',260,0.45),rm.map(m=>m.k),[{c:CH.d6,v:rm.map(m=>m.rate)}],v=>nf(v/1000,1)+'k',
       i=>`<b>${rm[i].k}</b><br>Тариф: ${nf(rm[i].rate)} ₽/т<br>Объём: ${nf(rm[i].v)} т`,i=>setF('tm',rm[i].k),1,1);
+
     dtable('#l6',[
       {k:'fr',t:'Откуда',left:1,flt:1},
       {k:'to',t:'Куда',left:1,flt:1},
       {k:'tm',t:'Вид',flt:1},
       {k:'tc',t:'Класс',flt:1,v:l=>TCLASS[l.tm]||'—'},
+      {k:'prods',t:'Продукты',left:1,flt:1,v:l=>l.prods.join(', ')},
       {k:'v',t:'Тонн',num:1,f:v=>nf(v)},
       {k:'c',t:'Затраты, млн',num:1,f:v=>nf(v/1e6,1)},
       {k:'rate',t:'Тариф ₽/т',num:1,f:v=>nf(v),cls:v=>v>10000?'neg':v>3000?'mid':''},
-      {k:'n',t:'Операций',num:1}
-    ],legs,{key:'lg_legs',sort:'c',dir:'desc',h:350,csv:1,name:'legs'});
+      {k:'layer',t:'Контур',flt:1,v:l=>l.layer==='distrib'?'Дистрибуция':l.layer==='interplant'?'Межзаводской':'Снабжение'}
+    ],legs,{key:'lg_legs',sort:'v',dir:'desc',h:350,csv:1,name:'legs'});
   },0);
-  const topLeg=legs[0],expensive=legs.filter(l=>l.rate>10000);
+
+  const topLeg=legs.slice().sort((a,b)=>b.c-a.c)[0]||{fr:'—',to:'—',c:0,v:0,tm:'—'};
+  const expensive=legs.filter(l=>l.rate>10000);
   const avgLegs=S(legsPerOrder,l=>l.n)/legsPerOrder.length;
+
   return html+summary('Резюме: логистика',[
     {t:'Выводы',i:[
       `Логистика составляет <span class="h">${bn(cost)}</span>, или ${pc(cost/Math.max(totCost,1))} затрат цепочки. Средний тариф ${nf(cost/Math.max(S(real,r=>r.v),1))} ₽/т.`,
-      `Дороже всего плечо <span class="h">${topLeg.k}</span> (${topLeg.tm}): ${bn(topLeg.c)} при ${nf(topLeg.v)} т.`,
+      `Дороже всего плечо <span class="h">${topLeg.fr} → ${topLeg.to}</span> (${topLeg.tm}): ${bn(topLeg.c)} при ${nf(topLeg.v)} т.`,
       `Доминирующий вид: <span class="h">${byM[0].k}</span> — ${pc(byM[0].c/Math.max(cost,1))} логистических затрат.`,
       `В среднем <span class="h">${nf(avgLegs,1)}</span> плеч на заказ; часть цепочек проходит три и более промежуточных узла.`]},
     {t:'Аномалии',i:[
-      `<span class="h">${pc(O.filter(r=>r.stub).length/O.length)}</span> строк перемещения имеют тариф не более 1 ₽/т (LASTMILE, PLANTFCA, часть SUPTRAN) — это заглушки, а не реальные ставки. Логистические затраты по факту <span class="h">недооценены</span>.`,
-      `Поле «Тип транспорта» смешивает виды транспорта (RAIL, TRUCK, SHIP) с условиями поставки (PLANTFCA) и операциями терминала (PORTHANDL) — метрики по транспорту без реклассификации некорректны.`,
-      expensive.length?`Плечи с тарифом выше 10 000 ₽/т: ${expensive.slice(0,3).map(l=>l.k).join(' | ')} — проверить обоснованность маршрута.`:`Плеч с аномально высоким удельным тарифом не выявлено.`,
-      `В строках перемещения поле «Ресурс» содержит локации, а не ресурсы — при соединении таблиц это даёт ложные связи.`]},
+      `<span class="h">${pc(O.filter(r=>r.stub).length/O.length)}</span> строк перемещения имеют тариф не более 1 ₽/т (LASTMILE, PLANTFCA, часть SUPTRAN) — это технические заглушки модели.`,
+      `Поле «Тип транспорта» смешивает виды транспорта (RAIL, TRUCK, SHIP) с условиями поставки (PLANTFCA) и операциями терминала (PORTHANDL).`,
+      expensive.length?`Плечи с тарифом выше 10 000 ₽/т: ${expensive.slice(0,3).map(l=>`${l.fr} → ${l.to}`).join(' | ')} — проверить обоснованность маршрута.`:`Плеч с аномально высоким удельным тарифом не выявлено.`]},
     {t:'Рекомендации',i:[
-      `Заполнить реальные тарифы для LASTMILE и PLANTFCA либо вынести их в отдельную статью «условия поставки» — иначе себестоимость доставки до клиента искажена.`,
-      `Ввести справочник: <span class="h">вид транспорта</span> и <span class="h">тип операции сети</span> (перевалка, внутризаводское, базис поставки) как два независимых поля.`,
-      `Добавить в модель расстояние и время в пути — это откроет метрики тонно-километров, стоимости километра и утилизации, которые сейчас недоступны.`,
-      `Проанализировать цепочки с пятью и более плечами на возможность прямой отгрузки: каждая перевалка добавляет и стоимость, и срок.`]}]);
+      `Используйте переключатель контуров над графом (<b>Дистрибуция клиентам</b> / <b>Межзаводские заготовки</b> / <b>Снабжение сырьем</b>) и фильтр по видам транспорта для точечного анализа плеч.`,
+      `Заполнить реальные тарифы для LASTMILE и PLANTFCA либо вынести их в отдельную статью условий поставки.`,
+      `Проанализировать цепочки с пятью и более плечами на возможность прямой отгрузки.`]}]);
 }
 
 /* ═══════════════ 11. БЛОК: ПРОИЗВОДСТВО ═══════════════ */
