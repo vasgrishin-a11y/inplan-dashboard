@@ -369,10 +369,10 @@ input[type=number]{font-family:'Open Sans',sans-serif}
           <svg id="iconSun" viewBox="0 0 24 24" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           <svg id="iconMoon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <button class="icon-btn p" id="bLoad" data-tip="Загрузить датасет из XLSX">
+        <button class="icon-btn p" id="bLoad" data-tip="Загрузить XLSX (demand, capacity_view_sp, res_loc_loc)">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </button>
-        <input type="file" id="fIn" accept=".xlsx,.xls" style="display:none">
+        <input type="file" id="fIn" accept=".xlsx,.xls" multiple style="display:none">
         <button class="icon-btn" id="bSave" data-tip="Сохранить версию для сравнения">
           <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         </button>
@@ -591,9 +591,19 @@ const SEED={
  {o:166,p:12,t:"pd",pl:"Plant_33",pr:"FCC_8",rs:"Plant_33_RES_183",fr:"",to:"",tm:"",v:7719.36,r:2300,vd:"",rt:"F_BCR_CC_00015_TMZ_0001",oid:"A",dp:1},
  {o:166,p:12,t:"pd",pl:"Plant_33",pr:"STL_01",rs:"Plant_33_RES_182",fr:"",to:"",tm:"",v:7696.09,r:12200,vd:"",rt:"S_STL_00002_TMZ_0001",oid:"B",dp:1},
  {o:166,p:12,t:"pc",pl:"Vendor_2",pr:"Scrap_1",rs:"",fr:"",to:"",tm:"",v:6888.01,r:20800,vd:"Vendor_2",rt:"",oid:"B.1",dp:5}
+ ],
+ capacity:[
+  {pl:"Plant_25",rs:"Plant_25_RES_136",rsName:"Линия проката 136",grp:"GRP_ROLL",p:0,norm:1200,avail:1200,load:1200,free:0,util:1.0,isAlt:false,altFor:""},
+  {pl:"Plant_25",rs:"Plant_25_RES_138_ALT",rsName:"Резервный стан 138",grp:"GRP_ROLL",p:0,norm:1500,avail:1500,load:450,free:1050,util:0.3,isAlt:true,altFor:"Plant_25_RES_136"},
+  {pl:"Plant_13",rs:"Plant_13_RES_20",rsName:"Термопечь 20",grp:"GRP_HEAT",p:0,norm:3500,avail:3500,load:3386.69,free:113.31,util:0.967,isAlt:false,altFor:""},
+  {pl:"Plant_13",rs:"Plant_13_RES_17",rsName:"Трубопрокат 17",grp:"GRP_PIPE",p:0,norm:4000,avail:4000,load:3386.69,free:613.31,util:0.846,isAlt:false,altFor:""},
+  {pl:"Plant_35",rs:"Plant_35_RES_191",rsName:"Листопрокат 191",grp:"GRP_SHT",p:0,norm:2400,avail:2400,load:2316.07,free:83.93,util:0.965,isAlt:false,altFor:""},
+  {pl:"Plant_35",rs:"Plant_35_RES_196",rsName:"Финишный стан 196",grp:"GRP_FIN",p:0,norm:5000,avail:5000,load:4527.48,free:472.52,util:0.905,isAlt:false,altFor:""},
+  {pl:"Plant_35",rs:"Plant_35_RES_188",rsName:"Формовочный агрегат 188",grp:"GRP_FORM",p:0,norm:500,avail:500,load:20.78,free:479.22,util:0.041,isAlt:false,altFor:""},
+  {pl:"Plant_18",rs:"Plant_18_RES_25",rsName:"Агрегат резки 25",grp:"GRP_CUT",p:0,norm:10000,avail:10000,load:9941.33,free:58.67,util:0.994,isAlt:false,altFor:""},
+  {pl:"Plant_20",rs:"Plant_20_RES_29",rsName:"Калибровочный стан 29",grp:"GRP_CAL",p:0,norm:12000,avail:12000,load:11050,free:950,util:0.920,isAlt:false,altFor:""}
  ]
 };
-
 /* ═══════════════ 2. СОСТОЯНИЕ ═══════════════ */
 let DS=null, TAB='ov';
 const F={p:[],ch:[],cl:[],pr:[],pi:[],pl:[],vd:[],tm:[],nd:[]};
@@ -800,9 +810,291 @@ function build(src){
     stub:Math.abs(r.r)<=1,tclass:TCLASS[r.tm]||r.tm||'—'};
     ['pl','pr','rs','fr','to','tm','vd','rt','oid'].forEach(k=>x[k]=esc(x[k]));return x});
   const om=new Map(o.map(x=>[x.id,x]));
-  ops.forEach(r=>{const x=om.get(r.o);r.cl=x?x.cl:'';r.chan=x?x.chan:'';r.sprod=x?x.prod:''});
-  return {name:src.name||'Датасет',orders:o,ops,ts:new Date().toISOString()};
+  ops.forEach(r=>{
+    const x=om.get(r.o);
+    r.cl=x?x.cl:'';
+    r.chan=x?x.chan:'';
+    r.sprod=x?x.prod:'';
+    r.d=x?x.d:(r.d||'');
+  });
+  
+const cap = (src.capacity || []).map(c=>({
+  ...c,
+  pl: esc(c.pl),
+  rs: esc(c.rs),
+  rsName: esc(c.rsName || c.rs),
+  grp: esc(c.grp || ''),
+  altFor: esc(c.altFor || ''),
+  isBottleneck: c.isBottleneck !== undefined ? c.isBottleneck : (c.util >= 0.90),
+  isCrit: c.isCrit !== undefined ? c.isCrit : (c.util >= 0.999)
+}));
+
+  return {
+    name: src.name||'Датасет',
+    orders: o,
+    ops,
+    capacity: cap,
+    hasCap: cap.length > 0,
+    ts: new Date().toISOString()
+  };
 }
+/* ═══════════════ 4.2. ДВИЖОК СКВОЗНОГО АНАЛИЗА МОЩНОСТЕЙ И RCA ═══════════════ */
+const CapacityRCA = {
+  getCap(rsId, plId, orderPeriod, orderDate){
+    if(!rsId || !String(rsId).trim()) return null;
+    if(!DS || !DS.hasCap || !DS.capacity || !DS.capacity.length) return null;
+    const rLower = String(rsId||'').trim().toLowerCase();
+    const pLower = String(plId||'').trim().toLowerCase();
+    const targetDate = normalizePeriodKey(orderDate);
+
+    // 1. Точное совпадение по периоду (YYYY-MM)
+    if(targetDate){
+      const match = DS.capacity.find(c => 
+        c.rs.toLowerCase() === rLower &&
+        (!plId || (c.pl && c.pl.toLowerCase() === pLower)) &&
+        (c.periodKey === targetDate || c.isGlobal)
+      );
+      if(match) return match;
+    }
+
+    // 2. Совпадение по номеру периода
+    if(orderPeriod !== undefined && orderPeriod !== null){
+      const matchP = DS.capacity.find(c => 
+        c.rs.toLowerCase() === rLower &&
+        (!plId || (c.pl && c.pl.toLowerCase() === pLower)) &&
+        (c.p === Number(orderPeriod) || c.isGlobal)
+      );
+      if(matchP) return matchP;
+    }
+
+    // 3. Глобальное ограничение или общее совпадение
+    return DS.capacity.find(c => 
+      c.rs.toLowerCase() === rLower &&
+      (!plId || (c.pl && c.pl.toLowerCase() === pLower))
+    ) || DS.capacity.find(c => c.rs.toLowerCase() === rLower) || null;
+  },
+
+  /**
+   * Точный поиск лимита res_loc_loc с учетом глобальных ограничений (periodid=1 / isGlobal) и BOM-масок
+   */
+  getLogLimit(rsId, locFr, locTo, prod, orderPeriod, orderDate){
+    if(!DS || !DS.capacity || !DS.capacity.length) return null;
+    const rLower = rsId ? String(rsId).trim().toLowerCase() : '';
+    const frLower = locFr ? String(locFr).trim().toLowerCase() : '';
+    const toLower = locTo ? String(locTo).trim().toLowerCase() : '';
+    const prodLower = prod ? String(prod).trim().toLowerCase() : '';
+    const targetDate = normalizePeriodKey(orderDate);
+
+    return DS.capacity.find(c => {
+      const isLogCat = (c.cat === 'route' || c.cat === 'logistics' || c.cat === 'warehouse' || c.cat === 'loading' || c.cat === 'unloading');
+      if(!isLogCat) return false;
+
+      // Проверка периода с учетом глобальных ограничений
+      const dateMatch = c.isGlobal || !targetDate || !c.periodKey || (c.periodKey === targetDate) || (orderPeriod !== undefined && c.p === Number(orderPeriod));
+      if(!dateMatch) return false;
+
+      if(rLower && c.rs.toLowerCase() === rLower) return true;
+
+      const frMatch = !c.locFrList || c.locFrList.includes('all') || (frLower && c.locFrList.some(f => f.toLowerCase() === frLower));
+      const toMatch = !c.locToList || c.locToList.includes('all') || (toLower && c.locToList.some(t => t.toLowerCase() === toLower));
+      const prodMatch = !c.prodList || c.prodList.includes('all') || (prodLower && c.prodList.some(p => p.toLowerCase() === prodLower));
+
+      return frMatch && toMatch && prodMatch;
+    }) || null;
+  },
+
+  /**
+   * Сквозной сбор продуктов BOM для заказа (включая полуфабрикаты из аналогичных заказов при полном дефиците)
+   */
+  getOrderBOMProducts(order){
+    const ordOps = (DS.ops||[]).filter(op => op.o === order.id);
+    const prods = new Set([order.prod]);
+    ordOps.forEach(op => { if(op.pr) prods.add(op.pr); });
+
+    // Если у заказа дефицит и мало операций, ищем типовую BOM-структуру для этого SKU в других заказах
+    if(prods.size <= 1 && DS.ops){
+      DS.ops.forEach(op => {
+        if(op.sprod === order.prod || op.pr === order.prod){
+          if(op.pr) prods.add(op.pr);
+        }
+      });
+    }
+    return prods;
+  },
+
+  /**
+   * Раздельный анализ производственных и логистических узких мест заказа (включая блокировки и дефициты)
+   */
+  analyzeOrderChain(order){
+    if(!DS) return {hasData:false, prodBottleneck:null, logBottleneck:null, isStarving:false, rootCause:'—'};
+
+    const ordOps = (DS.ops||[]).filter(op => op.o === order.id);
+    const prodOps = ordOps.filter(op => op.type === 'production');
+    const logOps = ordOps.filter(op => op.type === 'movement' || op.type === 'stock');
+    const bomProducts = this.getOrderBOMProducts(order);
+    const targetDate = normalizePeriodKey(order.d);
+
+    if(!DS.hasCap && !ordOps.length){
+      return { hasData: Boolean(DS && DS.hasCap), prodBottleneck: null, logBottleneck: null, isStarving: false, rootCause:'—' };
+    }
+
+    // 1. Производственные мощности
+    const prodChain = [];
+    prodOps.forEach((op, idx) => {
+      const rsId = op.rs || `RES_${op.pl}_${idx}`;
+      const cap = this.getCap(rsId, op.pl, order.p, order.d);
+      if(cap && cap.cat !== 'route' && cap.cat !== 'logistics' && cap.cat !== 'warehouse'){
+        prodChain.push({
+          rs: cap.rs,
+          rsName: cap.rsName,
+          pl: cap.pl || op.pl,
+          util: cap.util,
+          free: cap.free,
+          load: cap.load,
+          avail: cap.avail,
+          isBottleneck: cap.util >= 0.90
+        });
+      }
+    });
+
+    // Если у дефицитного заказа нет производственных операций в marking_demand, ищем мощности по BOM
+    if(!prodChain.length && DS.capacity && order.unm > 0){
+      DS.capacity.forEach(cap => {
+        if(cap.cat === 'production' && (cap.isGlobal || !targetDate || cap.periodKey === targetDate || cap.p === order.p)){
+          const relatesToBOM = [...bomProducts].some(p => (cap.rsName && cap.rsName.includes(p)) || (cap.rs && cap.rs.includes(p)));
+          if(relatesToBOM || cap.util >= 0.90){
+            prodChain.push({
+              rs: cap.rs,
+              rsName: cap.rsName,
+              pl: cap.pl,
+              util: cap.util,
+              free: cap.free,
+              load: cap.load,
+              avail: cap.avail,
+              isBottleneck: cap.util >= 0.90
+            });
+          }
+        }
+      });
+    }
+
+    prodChain.sort((a,b) => b.util - a.util);
+    const prodBottleneck = prodChain.length && prodChain[0].util >= 0.90 ? prodChain[0] : null;
+
+    // 2. Логистические мощности и маршруты (из операций)
+    const logChain = [];
+    logOps.forEach((op) => {
+      const cap = this.getLogLimit(op.rs, op.fr, op.to, op.pr || order.prod, order.p, order.d) ||
+                  this.getCap(op.rs, null, order.p, order.d) ||
+                  (DS.capacity||[]).find(c => 
+                    (c.cat === 'route' || c.cat === 'logistics' || c.cat === 'warehouse' || c.cat === 'loading' || c.cat === 'unloading') &&
+                    ((op.rs && c.rs.toLowerCase() === op.rs.toLowerCase()) ||
+                     (op.fr && op.to && c.locFr && c.locTo && c.locFr.toLowerCase() === op.fr.toLowerCase() && c.locTo.toLowerCase() === op.to.toLowerCase()))
+                  );
+
+      if(cap && !logChain.some(item => item.rs === cap.rs)){
+        const isBlocked = (cap.avail === 0 || cap.isBlocked);
+        const util = isBlocked ? 1.0 : cap.util;
+        logChain.push({
+          rs: cap.rs,
+          rsName: cap.rsName || (cap.locFr && cap.locTo ? `${cap.locFr} → ${cap.locTo}` : cap.rs),
+          resType: cap.resType || (cap.cat === 'route' ? 'Лимит направления' : 'Логистика'),
+          cat: cap.cat,
+          pl: cap.pl || (cap.locFr ? `${cap.locFr} → ${cap.locTo}` : op.fr || op.to),
+          locFr: cap.locFr || op.fr,
+          locTo: cap.locTo || op.to,
+          prodTarget: cap.prodTarget || cap.prodRaw || op.pr || order.prod,
+          util,
+          free: isBlocked ? 0 : cap.free,
+          load: cap.load,
+          avail: cap.avail,
+          isBlocked,
+          isBottleneck: isBlocked || util >= 0.90
+        });
+      }
+    });
+
+    // 3. Анализ заблокированных направлений и ограничений res_loc_loc (включая global periodid=1 и BOM)
+    if(DS.capacity && order.unm > 0){
+      const orderLocations = new Set([order.loc, ...ordOps.flatMap(o => [o.pl, o.fr, o.to]).filter(Boolean)]);
+
+      const relevantLimits = DS.capacity.filter(c => {
+        if(c.cat !== 'route' && c.cat !== 'logistics' && c.cat !== 'warehouse') return false;
+        
+        // Дата: совпадение по периоду или глобальный лимит
+        const dateMatch = c.isGlobal || !targetDate || !c.periodKey || (c.periodKey === targetDate) || (order.p !== undefined && c.p === Number(order.p));
+        if(!dateMatch) return false;
+
+        // Продукт: проверка по всей спецификации BOM
+        const prodMatch = !c.prodList || c.prodList.includes('all') || c.prodList.some(p => bomProducts.has(p));
+        
+        // Локация
+        const locMatch = !c.locToList || c.locToList.includes('all') || c.locToList.some(l => orderLocations.has(l)) ||
+                         (c.locFrList && c.locFrList.some(l => orderLocations.has(l))) ||
+                         (c.pl && orderLocations.has(c.pl));
+
+        return prodMatch && locMatch && (c.avail === 0 || c.isBlocked || c.util >= 0.90);
+      });
+
+      relevantLimits.forEach(cap => {
+        if(!logChain.some(item => item.rs === cap.rs)){
+          const isBlocked = (cap.avail === 0 || cap.isBlocked);
+          logChain.push({
+            rs: cap.rs,
+            rsName: cap.rsName || `${cap.locFr || 'Сеть'} → ${cap.locTo || order.loc}`,
+            resType: cap.resType || (isBlocked ? 'Блокировка направления (res_loc_loc)' : 'Лимит направления'),
+            cat: cap.cat,
+            pl: cap.locFr ? `${cap.locFr} → ${cap.locTo}` : (cap.pl || order.loc),
+            locFr: cap.locFr,
+            locTo: cap.locTo,
+            prodTarget: cap.prodTarget || cap.prodRaw || order.prod,
+            util: isBlocked ? 1.0 : cap.util,
+            free: isBlocked ? 0 : cap.free,
+            load: cap.load,
+            avail: cap.avail,
+            isBlocked,
+            isBottleneck: true
+          });
+        }
+      });
+    }
+
+    logChain.sort((a,b) => (b.isBlocked ? 2 : b.util) - (a.isBlocked ? 2 : a.util));
+    const logBottleneck = logChain.length && (logChain[0].isBottleneck || logChain[0].isBlocked) ? logChain[0] : null;
+
+    // Определение интегральной причины дефицита (RCA)
+    let rootCause = 'В норме';
+    if(order.unm > 0){
+      if(logBottleneck && logBottleneck.isBlocked){
+        rootCause = `Блокировка логистики: ${logBottleneck.rsName}`;
+      } else if(prodBottleneck && prodBottleneck.util >= 0.99){
+        rootCause = `Перегруз производства (100%): ${prodBottleneck.rsName}`;
+      } else if(logBottleneck && logBottleneck.util >= 0.95){
+        rootCause = `Лимит логистики: ${logBottleneck.rsName}`;
+      } else if(prodBottleneck){
+        rootCause = `Узкое место цеха: ${prodBottleneck.rsName}`;
+      } else {
+        rootCause = 'Сырьевой / мультифакторный дефицит';
+      }
+    }
+
+    return {
+      hasData: true,
+      prodBottleneck,
+      logBottleneck,
+      rootCause,
+      isStarving: Boolean(prodBottleneck && prodChain.some(r => r !== prodBottleneck && r.util < 0.45))
+    };
+  },
+
+  drillDownToOrder(orderId, rsKey, mode='prod_res'){
+    SELECTED_ORDER_ID = Number(orderId);
+    TREE_VIEW_MODE = mode;
+    TREE_FOCUSED_KEY = rsKey || null;
+    go('tree');
+  }
+};
+
 function fOrders(excludeKey=null){
   return DS.orders.filter(o=>{
     if(excludeKey!=='p' && F.p.length && !F.p.includes(String(o.p))) return false;
@@ -1537,14 +1829,20 @@ function tabDM(){
   const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
   const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU');
   const p1=D.filter(o=>o.pr==1);
-  const K=[['План спроса',nf(dem)+' т',D.length+' '+plural(D.length,['заказ','заказа','заказов']),''],
-   ['План продаж',nf(sal)+' т',pc(sal/dem)+' от спроса',''],
-   ['Неудовлетворённый спрос',nf(unm)+' т',pc(unm/dem),'neg'],
-   ['Заказов с дефицитом',nf(D.filter(o=>o.unm>0).length),'требуют мощностей','mid'],
-   ['Средняя цена',nf(rev/sal)+' ₽/т','взвешенно',''],
-   ['Средняя себестоимость',nf(cost/sal)+' ₽/т','полная',''],
-   ['Экспорт в марже',pc(S(ex,o=>o.mar)/mar),'канал EX',''],
-   ['Service Level приоритета 1',p1.length?pc(S(p1,o=>o.sal)/S(p1,o=>o.dem)):'—','высший приоритет',p1.length&&S(p1,o=>o.sal)/S(p1,o=>o.dem)<.9?'neg':'pos']];
+  const lmTotal=S(D,o=>o.unm*o.mpt);
+  const defOrders=D.filter(o=>o.unm>0);
+
+  const K=[
+    ['План спроса', nf(dem)+' т', D.length+' '+plural(D.length,['заказ','заказа','заказов']), ''],
+    ['План отгрузки', nf(sal)+' т', `Покрытие: ${pc(sal/dem)} (дефицит ${nf(unm)} т)`, sal/dem>=0.95?'pos':sal/dem>=0.8?'mid':'neg'],
+    ['Упущенная маржа (Lost Margin)', bn(lmTotal), `${defOrders.length} ${plural(defOrders.length,['заказ','заказа','заказов'])} с дефицитом`, 'neg'],
+    ['Маржинальность продаж', pc(mar/rev), `Выручка ${bn(rev)} | Маржа ${bn(mar)}`, 'pos'],
+    ['Средняя цена реализации', nf(rev/sal)+' ₽/т', 'взвешенно по продажам', ''],
+    ['Средняя себестоимость', nf(cost/sal)+' ₽/т', 'полный цикл цепочки', ''],
+    ['Экспортный контур (EX)', pc(S(ex,o=>o.mar)/mar), `Объем: ${nf(S(ex,o=>o.sal))} т (${pc(S(ex,o=>o.sal)/sal)})`, ''],
+    ['Надежность исполнения (OTIF)', pc(D.filter(o=>o.unm===0).length / D.length), `${D.filter(o=>o.unm===0).length} из ${D.length} заказов без дефицита`, D.filter(o=>o.unm===0).length / D.length >= 0.85 ? 'pos' : 'mid']
+  ];
+
   const per=grp(D,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)})).sort((a,b)=>a.k-b.k);
   const def=grp(D.filter(o=>o.unm>0),o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt),prod:v[0].prod}))
     .sort((a,b)=>b.v-a.v).slice(0,8);
@@ -1564,7 +1862,7 @@ function tabDM(){
       <div class="lg"><span><i style="background:${CH.d1}"></i>Маржа</span><span><i style="background:${CH.warn}"></i>Service Level</span></div><canvas id="d4"></canvas></div>
     <div class="card"><h3>Цена и себестоимость по продуктам</h3><div class="sub">Синяя точка — цена, вторая — себестоимость. Длина отрезка равна марже</div><canvas id="d5"></canvas></div>
     <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽</div><canvas id="d6"></canvas></div>
-    <div class="card w"><h3>Дефициты и упущенная выгода</h3><div class="sub">Клик по заголовку — сортировка, значок ▾ — мультифильтр</div><div id="d7"></div></div>
+    <div class="card w"><h3>Дефициты, упущенная маржа и корневые причины (RCA)</h3><div class="sub">Клик по бейджу узкого места открывает сквозную цепочку заказа с фокусом на лимите</div><div id="d7"></div></div>
   </div>`;
   setTimeout(()=>{
     chStackLine('#d1',H('#d1',270,0.48),per.map(p=>'P'+p.k),
@@ -1587,17 +1885,56 @@ function tabDM(){
     const rws=uq(D,o=>o.cl),cls=uq(D,o=>o.p).sort((a,b)=>a-b);
     chHeat('#d6',H('#d6',290,0.55),rws,cls.map(c=>'P'+c),rws.map(r=>cls.map(c=>S(D.filter(o=>o.cl===r&&o.p==c),o=>o.mar))),bn,
       (r,c)=>{F.cl=[r];F.p=[String(c).slice(1)];render()});
+
     dtable('#d7',[
+      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" onclick="event.stopPropagation();SELECTED_ORDER_ID=${o.id};TREE_FOCUSED_KEY=null;go('tree')">№${v} ↗</span>`},
       {k:'loc',t:'Локация',left:1,flt:1},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
       {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
       {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
-      {k:'sal',t:'Продажи',num:1,f:v=>nf(v,1)},
+      {k:'sal',t:'Отгрузка',num:1,f:v=>nf(v,1)},
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:()=>'neg'},
       {k:'cov',t:'Покрытие',num:1,v:o=>o.dem?o.sal/o.dem:0,f:v=>pc(v),cls:v=>v>.5?'mid':'neg'},
-      {k:'mpt',t:'Маржа ₽/т',num:1,f:v=>nf(v)},
-      {k:'lr',t:'Упущ. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v)},
+      {k:'rca_prod',t:'Узкое место (пр-во)',left:1,flt:1,v:o=>{
+        const res = CapacityRCA.analyzeOrderChain(o);
+        if(!res.hasData) return 'Базовый режим';
+        return res.prodBottleneck ? `${res.prodBottleneck.rsName} (${pc(res.prodBottleneck.util)})` : 'В норме';
+      },f:(v,o)=>{
+        const res = CapacityRCA.analyzeOrderChain(o);
+        if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
+        if(!res.prodBottleneck) return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
+        const bn = res.prodBottleneck;
+        return `<span class="tag" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" 
+                      title="Клик: открыть цепочку производственных мощностей заказа" 
+                      onclick="event.stopPropagation();CapacityRCA.drillDownToOrder(${o.id}, '${bn.rs}', 'prod_res')">
+          🛑 ${bn.rsName}: ${pc(bn.util)} ↗
+        </span>`;
+      }},
+      {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{
+        const res = CapacityRCA.analyzeOrderChain(o);
+        if(!res.hasData) return 'Базовый режим';
+        if(res.logBottleneck){
+          const bn = res.logBottleneck;
+          return bn.isBlocked ? `⛔ Блок: ${bn.rsName}` : `📦 ${bn.rsName} (${pc(bn.util)})`;
+        }
+        return 'В норме';
+      },f:(v,o)=>{
+        const res = CapacityRCA.analyzeOrderChain(o);
+        if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
+        if(!res.logBottleneck) return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
+        const bn = res.logBottleneck;
+        const icon = bn.isBlocked ? '⛔' : '📦';
+        const txt = bn.isBlocked ? `Блок: ${bn.rsName}` : `${bn.rsName}: ${pc(bn.util)}`;
+        const colStyle = bn.isBlocked 
+          ? 'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)' 
+          : 'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
+        return `<span class="tag" style="${colStyle};font-weight:600;cursor:pointer" 
+                      title="Клик: открыть цепочку логистических мощностей и ограничений маршрутов заказа" 
+                      onclick="event.stopPropagation();CapacityRCA.drillDownToOrder(${o.id}, '${bn.rs}', 'log_res')">
+          ${icon} ${txt} ↗
+        </span>`;
+      }},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>o.unm*o.mpt,f:v=>mln(v),cls:()=>'neg'}
     ],D.filter(o=>o.unm>0),{key:'dm_def',sort:'lm',dir:'desc',h:340,csv:1,name:'deficits'});
   },0);
@@ -1789,50 +2126,113 @@ function tabPD(){
   const byPr=grp(O,r=>r.pr,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),rate:S(v,r=>r.cost)/Math.max(S(v,r=>r.v),1)})).sort((a,b)=>b.c-a.c);
   const dep=grp(O,r=>r.dp,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v)})).sort((a,b)=>a.k-b.k);
   const multi=grp(O,r=>r.pr,v=>({pl:uq(v,x=>x.pl).length,rows:v})).filter(x=>x.pl>1);
-  const K=[['Затраты на производство',bn(cost),pc(cost/Math.max(totCost,1))+' затрат цепочки',''],
+
+  const bnList = (DS.hasCap ? DS.capacity.filter(c=>c.isBottleneck) : [])
+    .sort((a,b)=>b.util-a.util);
+  const avgCapUtil = DS.hasCap && DS.capacity.length 
+    ? (S(DS.capacity,c=>c.load) / Math.max(S(DS.capacity,c=>c.avail),1))
+    : null;
+
+  const K=[
+   ['Затраты на производство',bn(cost),pc(cost/Math.max(totCost,1))+' затрат цепочки',''],
    ['Объём операций',nf(vol)+' т',O.length+' '+plural(O.length,['операция','операции','операций']),''],
-   ['Средний передел',nf(cost/Math.max(vol,1))+' ₽/т','взвешенно',''],
+   ['Средняя загрузка мощностей',avgCapUtil!==null?pc(avgCapUtil):'Базовый режим',DS.hasCap?`доступно ${nf(S(DS.capacity,c=>c.avail))} т`:'лист capacity_view_sp не найден',avgCapUtil>0.9?'neg':avgCapUtil>0.75?'mid':'pos'],
+   ['Узких мест (≥90%)',DS.hasCap?nf(bnList.length)+' '+plural(bnList.length,['ресурс','ресурса','ресурсов']):'—',DS.hasCap?`${bnList.filter(b=>b.isCrit).length} перегружены на 100%+`:'требуется capacity_view_sp',bnList.length?'neg':'pos'],
    ['Задействовано заводов',nf(byPl.length),uq(O,r=>r.rs).length+' '+plural(uq(O,r=>r.rs).length,['ресурс','ресурса','ресурсов']),''],
-   ['Машино-часы',nf(S(O,r=>r.rc||0)),'по строкам с данными',''],
-   ['Максимальная глубина BOM',nf(Math.max(...O.map(r=>r.dp||1))),'уровней разузлования','mid']];
+   ['Максимальная глубина BOM',nf(Math.max(...O.map(r=>r.dp||1))),'уровней разузлования','mid']
+  ];
+
   const html=`
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]||''}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
     <div class="card"><h3>Затраты по заводам</h3><div class="sub">Клик — фильтр по заводу</div><canvas id="p1"></canvas></div>
-    <div class="card"><h3>Нагрузка ресурсов, машино-часы</h3><div class="sub">Доступная мощность в данных отсутствует, процент утилизации не рассчитывается</div><canvas id="p2"></canvas></div>
+    <div class="card">
+      <h3>${DS.hasCap ? 'Топ узких мест: загрузка мощностей от норматива' : 'Нагрузка ресурсов, машино-часы'}</h3>
+      <div class="sub">${DS.hasCap ? 'Ранжирование самых критичных мощностей (≥90% утилизации)' : 'Доступная мощность в данных отсутствует, отображаются только машино-часы'}</div>
+      <canvas id="p2"></canvas>
+    </div>
     <div class="card"><h3>Себестоимость передела по рецептам</h3><div class="sub">₽/т. Сравнение альтернативных маршрутов</div><canvas id="p3"></canvas></div>
     <div class="card"><h3>Затраты по уровню разузлования</h3><div class="sub">Где в BOM накапливается стоимость</div><canvas id="p4"></canvas></div>
     <div class="card"><h3>Затраты по заводам и продуктам</h3><div class="sub">Тепловая карта, млн ₽</div><canvas id="p5"></canvas></div>
-    <div class="card"><h3>Топ полуфабрикатов по затратам</h3><div class="sub">Справочно, без фильтрации</div><canvas id="p6"></canvas></div>
-    <div class="card w"><h3>Производственные маршруты</h3><div class="sub">Рецепт, продукт и ресурс. Сортировка и мультифильтры</div><div id="p7"></div></div>
+    <div class="card"><h3>${DS.hasCap ? 'Баланс мощностей: занято vs доступно' : 'Топ полуфабрикатов по затратам'}</h3>
+      <div class="sub">${DS.hasCap ? 'Загрузка основных групп оборудования' : 'Справочно, без фильтрации'}</div>
+      <canvas id="p6"></canvas>
+    </div>
+    <div class="card w"><h3>${DS.hasCap ? 'Реестр мощностей и узких мест (capacity_view_sp)' : 'Производственные маршруты'}</h3>
+      <div class="sub">${DS.hasCap ? 'Сквозной баланс мощностей, процент утилизации и альтернативные мощности' : 'Рецепт, продукт и ресурс. Сортировка и мультифильтры'}</div>
+      <div id="p7"></div>
+    </div>
   </div>`;
+
   setTimeout(()=>{
     chH('#p1',H('#p1',250,0.52),byPl.slice(0,9).map((p,i)=>({k:p.k||'—',v:p.c,c:PAL[i%PAL.length],
       tip:`<b>${p.k}</b><br>Затраты: ${bn(p.c)}<br>Объём: ${nf(p.v)} т<br>Передел: ${nf(p.rate)} ₽/т<br>Машино-часы: ${nf(p.rc)}`})),bn,it=>setF('pl',it.k));
-    chH('#p2',H('#p2',250,0.52),byRs.slice(0,9).map(r=>({k:r.k,v:r.rc,c:CH.d6,pl:r.pl,
-      tip:`<b>${r.k}</b><br>Завод: ${r.pl}<br>Машино-часы: ${nf(r.rc)}<br>Объём: ${nf(r.v)} т<br>Часов на тонну: ${nf(r.rc/Math.max(r.v,1),3)}`})),
-      v=>nf(v)+' ч',it=>setF('pl',it.pl));
+
+    if(DS.hasCap && DS.capacity.length){
+      const topCap = DS.capacity.slice().sort((a,b)=>b.util-a.util).slice(0,10);
+      chH('#p2',H('#p2',250,0.52),topCap.map(c=>({
+        k: `${c.pl} · ${c.rsName}`,
+        v: c.util * 100,
+        c: c.util >= 1.0 ? CH.err : (c.util >= 0.90 ? CH.warn : CH.ok),
+        pl: c.pl,
+        tip: `<b>${c.rsName} (${c.rs})</b><br>Площадка: ${c.pl}<br>Норматив: ${nf(c.norm)} т<br>Загрузка плана: <b>${nf(c.load)} т</b><br>Утилизация: <b>${pc(c.util)}</b><br>Свободный резерв: ${nf(c.free)} т`
+      })), v=>nf(v,1)+'%', it=>setF('pl',it.pl));
+    } else {
+      chH('#p2',H('#p2',250,0.52),byRs.slice(0,9).map(r=>({k:r.k,v:r.rc,c:CH.d6,pl:r.pl,
+        tip:`<b>${r.k}</b><br>Завод: ${r.pl}<br>Машино-часы: ${nf(r.rc)}<br>Объём: ${nf(r.v)} т<br>Часов на тонну: ${nf(r.rc/Math.max(r.v,1),3)}`})),
+        v=>nf(v)+' ч',it=>setF('pl',it.pl));
+    }
+
     chBars('#p3',H('#p3',260,0.48),byRt.slice(0,10).map(r=>r.k.slice(0,14)),
       [{c:CH.d4,v:byRt.slice(0,10).map(r=>r.rate)}],v=>nf(v/1000,0)+'k',
       i=>`<b>${byRt[i].k}</b><br>Передел: ${nf(byRt[i].rate)} ₽/т<br>Продукт: ${byRt[i].pr}<br>Завод: ${byRt[i].pl}<br>Объём: ${nf(byRt[i].v)} т`,
       i=>setF('pl',byRt[i].pl),1);
     chLine('#p4',H('#p4',260,0.45),dep.map(d=>'Ур. '+d.k),[{c:CH.d1,v:dep.map(d=>d.c),fill:1}],v=>nf(v/1e6,0)+' млн',
       i=>`<b>Уровень ${dep[i].k}</b><br>Затраты: ${bn(dep[i].c)}<br>Объём: ${nf(dep[i].v)} т<br>Операций: ${dep[i].n}`,null);
+    
     const rr=byPl.slice(0,7).map(p=>p.k),cc=byPr.slice(0,8).map(p=>p.k);
     chHeat('#p5',H('#p5',270,0.5),rr,cc,rr.map(r=>cc.map(c=>S(O.filter(x=>x.pl===r&&x.pr===c),x=>x.cost))),bn,(r)=>setF('pl',r));
-    chH('#p6',H('#p6',260,0.55),byPr.slice(0,9).map(p=>({k:p.k,v:p.c,c:CH.d2,
-      tip:`<b>${p.k}</b><br>Затраты: ${bn(p.c)}<br>Объём: ${nf(p.v)} т<br>Удельно: ${nf(p.rate)} ₽/т`})),bn,null);
-    dtable('#p7',[
-      {k:'rt',t:'Рецепт или маршрут',left:1,flt:1},
-      {k:'pr',t:'Продукт',left:1,flt:1},
-      {k:'pl',t:'Завод',flt:1,left:1},
-      {k:'rs',t:'Ресурс',left:1,flt:1},
-      {k:'dp',t:'Уровень',num:1,flt:1},
-      {k:'v',t:'Тонн',num:1,f:v=>nf(v,1)},
-      {k:'r',t:'₽/т',num:1,f:v=>nf(v)},
-      {k:'cost',t:'Затраты, млн',num:1,f:v=>nf(v/1e6,1)},
-      {k:'rc',t:'Машино-часы',num:1,f:v=>v?nf(v,1):'—'}
-    ],O,{key:'pd_routes',sort:'cost',dir:'desc',h:350,csv:1,name:'production'});
+    
+    if(DS.hasCap && DS.capacity.length){
+      const grpCap = grp(DS.capacity, c=>c.pl, v=>({
+        avail: S(v, x=>x.avail),
+        load: S(v, x=>x.load)
+      })).slice(0,8);
+      chBars('#p6',H('#p6',260,0.45),grpCap.map(g=>g.k),
+        [{c:CH.d1,v:grpCap.map(g=>g.avail)},{c:CH.warn,v:grpCap.map(g=>g.load)}],
+        v=>nf(v/1000,0)+'k т',
+        i=>`<b>Площадка ${grpCap[i].k}</b><br>Доступно: ${nf(grpCap[i].avail)} т<br>Загрузка: ${nf(grpCap[i].load)} т<br>Утилизация: ${pc(grpCap[i].load/Math.max(grpCap[i].avail,1))}`,
+        null);
+    } else {
+      chH('#p6',H('#p6',260,0.55),byPr.slice(0,9).map(p=>({k:p.k,v:p.c,c:CH.d2,
+        tip:`<b>${p.k}</b><br>Затраты: ${bn(p.c)}<br>Объём: ${nf(p.v)} т<br>Удельно: ${nf(p.rate)} ₽/т`})),bn,null);
+    }
+
+    if(DS.hasCap && DS.capacity.length){
+      dtable('#p7',[
+        {k:'pl',t:'Завод / Площадка',left:1,flt:1},
+        {k:'rsName',t:'Ресурс',left:1,flt:1},
+        {k:'resType',t:'Вид ресурса',left:1,flt:1},
+        {k:'periodKey',t:'Период',left:1,flt:1},
+        {k:'norm',t:'Норматив, т',num:1,f:v=>nf(v)},
+        {k:'avail',t:'Доступно, т',num:1,f:v=>nf(v)},
+        {k:'load',t:'План загрузки, т',num:1,f:v=>nf(v)},
+        {k:'free',t:'Свободно, т',num:1,f:v=>nf(v),cls:v=>v===0?'neg':''},
+        {k:'util',t:'Загрузка %',num:1,f:v=>pc(v),cls:v=>v>=1.0?'neg':v>=0.9?'mid':'pos'}
+      ],DS.capacity,{key:'pd_capacity',sort:'util',dir:'desc',h:350,csv:1,name:'capacity_balance'});
+    } else {
+      dtable('#p7',[
+        {k:'rt',t:'Рецепт или маршрут',left:1,flt:1},
+        {k:'pr',t:'Продукт',left:1,flt:1},
+        {k:'pl',t:'Завод',flt:1,left:1},
+        {k:'rs',t:'Ресурс',left:1,flt:1},
+        {k:'dp',t:'Уровень',num:1,flt:1},
+        {k:'v',t:'Тонн',num:1,f:v=>nf(v,1)},
+        {k:'r',t:'₽/т',num:1,f:v=>nf(v)},
+        {k:'cost',t:'Затраты, млн',num:1,f:v=>nf(v/1e6,1)},
+        {k:'rc',t:'Машино-часы',num:1,f:v=>v?nf(v,1):'—'}
+      ],O,{key:'pd_routes',sort:'cost',dir:'desc',h:350,csv:1,name:'production'});
+    }
   },0);
   const maxRt=byRt[0]||{k:'—',rate:0,pr:'—',pl:'—'},topPl=byPl[0]||{k:'—',c:0};
   return html+summary('Резюме: производство',[
@@ -2158,11 +2558,17 @@ function tabDQ(){
     dup.length?'При суммировании объёма выпуска обязательна дедупликация по order_operation_id, иначе производство завышается кратно числу ресурсов.':'—');
 
   const hasRC=ops.some(r=>r.rc);
-  add('e','Отсутствуют мощности ресурсов',
-    hasRC?'Есть потреблённые машино-часы, но нет доступной мощности ресурсов по периодам.'
-      :'Нет ни потребления, ни мощности ресурсов.',
-    'Без мощности невозможно рассчитать утилизацию и найти узкие места — ключевую метрику производственного планирования. Добавить справочник «ресурс, период, доступные часы».');
-
+  if(DS.hasCap && DS.capacity.length){
+    const bnCount = DS.capacity.filter(c=>c.isBottleneck).length;
+    add('i','Баланс мощностей (capacity_view_sp)',
+      `Мощности ресурсов успешно загружены (${DS.capacity.length} записей). Рассчитана утилизация от норматива, выявлено ${bnCount} узких мест (≥90%).`,
+      '—');
+  } else {
+    add('e','Отсутствуют мощности ресурсов',
+      hasRC?'Есть потреблённые машино-часы, но нет доступной мощности ресурсов по периодам.'
+        :'Нет ни потребления, ни мощности ресурсов (лист capacity_view_sp не загружен).',
+      'Без мощности невозможно рассчитать утилизацию и найти узкие места. Добавьте лист capacity_view_sp в загружаемый XLSX.');
+  }
   const synth=uq(o,x=>x.dem).length===1;
   add(synth?'w':'i','Реалистичность спроса',
     synth?`Все заказы имеют одинаковый план спроса — ${nf(o[0].dem)} т. Это признак тестового набора.`
@@ -2355,6 +2761,7 @@ let TREE_METRIC_MODE='vol';
 let TREE_OP_TYPE_FILTER='all';
 let TREE_FOCUSED_KEY=null;
 let BOM_AGG_THRESHOLD_PCT=1.0;
+let RES_LAYOUT_MODE='plants'; // 'plants' | 'grid' | 'focus'
 
 function drawBox(x,bx,by,bw,bh,r){
   if(x.roundRect){x.beginPath();x.roundRect(bx,by,bw,bh,r)}
@@ -2420,15 +2827,41 @@ function drawTreeNodes(c,x,nodes,lineage,isCost){
     const part=lineage?lineage.activeNodes.has(key):false;
     const dim=lineage?!part:false;
     const col=n.color||CH.d1;
-    x.fillStyle=dim?'#fbfbfc':CH.surf;
+
+    // Определение наличия узкого места или блокировки для данного узла цепочки
+    let bnInfo = null;
+    if(DS && DS.hasCap && DS.capacity){
+      const matchCap = DS.capacity.find(cap => 
+        (n.rs && cap.rs.toLowerCase() === n.rs.toLowerCase()) ||
+        (n.pl && cap.pl && cap.pl.toLowerCase() === n.pl.toLowerCase() && (cap.isBottleneck || cap.isBlocked)) ||
+        (n.vd && cap.locFr && cap.locFr.toLowerCase() === n.vd.toLowerCase() && (cap.isBottleneck || cap.isBlocked))
+      );
+      if(matchCap && (matchCap.isBottleneck || matchCap.isBlocked)){
+        bnInfo = {
+          isBlocked: matchCap.isBlocked,
+          util: matchCap.util,
+          rsName: matchCap.rsName,
+          rs: matchCap.rs
+        };
+      }
+    }
+
+    x.fillStyle=dim?'#fbfbfc':(bnInfo && bnInfo.isBlocked ? rgba(CH.err,0.06) : CH.surf);
     drawBox(x,n.x,n.y,n.w,n.h,4);x.fill();
+    
     if(focus){x.strokeStyle=CH.brand;x.lineWidth=2.5}
+    else if(bnInfo && bnInfo.isBlocked){x.strokeStyle=CH.err;x.lineWidth=1.8}
+    else if(bnInfo && bnInfo.util>=0.90){x.strokeStyle=CH.warn;x.lineWidth=1.5}
     else if(part){x.strokeStyle=CH.accent||CH.brand;x.lineWidth=1.8}
     else{x.strokeStyle=dim?CH.dim:CH.line;x.lineWidth=1}
     x.stroke();
-    x.fillStyle=dim?CH.dim:col;x.fillRect(n.x,n.y+3,3.5,n.h-6);
+
+    x.fillStyle=dim?CH.dim:(bnInfo && bnInfo.isBlocked ? CH.err : col);
+    x.fillRect(n.x,n.y+3,3.5,n.h-6);
+
     const title=n.title||'Узел';
     const sub=n.sub||(isCost?mln(n.cost||0):`${nf(n.v,1)} т`);
+    
     if(n._inline){
       x.textBaseline='middle';const my=n.y+n.h/2;
       x.fillStyle=dim?CH.dimTxt:CH.txt;x.font='600 10px '+FNT;x.textAlign='left';
@@ -2437,12 +2870,48 @@ function drawTreeNodes(c,x,nodes,lineage,isCost){
       x.fillText(sub,n.x+n.w-7,my);
     }else{
       x.fillStyle=dim?CH.dimTxt:CH.txt;x.font='600 10.5px '+FNT;x.textAlign='left';x.textBaseline='top';
-      x.fillText(title.length>16?title.slice(0,15)+'…':title,n.x+9,n.y+5);
+      const maxTitleChars = bnInfo ? 11 : 16;
+      x.fillText(title.length>maxTitleChars?title.slice(0,maxTitleChars-1)+'…':title,n.x+9,n.y+5);
       x.fillStyle=dim?CH.dimTxt:(isCost?CH.d3:CH.sub);x.font=(isCost?'600 ':'')+'9.5px '+FNT;
       x.fillText(sub.length>20?sub.slice(0,19)+'…':sub,n.x+9,n.y+19);
     }
-    if(n.tip)reg(c,n.x,n.y,n.w,n.h,n.tip,()=>{
-      TREE_FOCUSED_KEY=(TREE_FOCUSED_KEY===key)?null:key;render()});
+
+    // Отрисовка интерактивного индикатора узкого места (Bottleneck Badge)
+    if(bnInfo && !dim){
+      const badgeW = bnInfo.isBlocked ? 28 : 34;
+      const badgeH = 14;
+      const bx = n.x + n.w - badgeW - 4;
+      const by = n.y + 4;
+      const bColor = bnInfo.isBlocked ? CH.err : (bnInfo.util >= 0.95 ? CH.err : CH.warn);
+
+      drawBox(x, bx, by, badgeW, badgeH, 3);
+      x.fillStyle = bColor;
+      x.fill();
+
+      x.fillStyle = '#ffffff';
+      x.font = '700 8.5px ' + FNT;
+      x.textAlign = 'center';
+      x.textBaseline = 'middle';
+      x.fillText(bnInfo.isBlocked ? '⛔ 0' : pc(bnInfo.util), bx + badgeW / 2, by + badgeH / 2 + 0.5);
+    }
+
+    let fullTip = n.tip || `<b>${title}</b>`;
+    if(bnInfo){
+      fullTip += `<br><span style="color:${bnInfo.isBlocked ? 'var(--scp-err)' : 'var(--scp-warn)'};font-weight:700">`
+        + `${bnInfo.isBlocked ? '⛔ Ограничение/Блокировка маршрута (const=0)' : `🛑 Узкое место мощности (${pc(bnInfo.util)})`}`
+        + `</span><br>Ресурс: <b>${bnInfo.rsName}</b>`
+        + `<br><span style="color:var(--scp-accent)">Клик: сфокусировать и открыть мощности цехов</span>`;
+    }
+
+    reg(c,n.x,n.y,n.w,n.h,fullTip,()=>{
+      if(bnInfo){
+        TREE_FOCUSED_KEY = bnInfo.rs;
+        TREE_VIEW_MODE = 'prod_res';
+      } else {
+        TREE_FOCUSED_KEY=(TREE_FOCUSED_KEY===key)?null:key;
+      }
+      render();
+    });
   });
 }
 function drawCostColumnTotals(x,h,colsMeta,totalCost){
@@ -2852,13 +3321,367 @@ function drawModeWaterfall(g,ops,ord){
   });
 }
 
+function drawModeResourceChain(g, ops, ord, isLogistics=false){
+  const {c,x,w,h}=g;
+  const targetOps = ops.filter(o => isLogistics ? (o.type==='movement'||o.type==='stock') : (o.type==='production'));
+
+  if(!targetOps.length && !isLogistics){
+    x.fillStyle=CH.axis;x.textAlign='center';x.font='13px '+FNT;
+    x.fillText('Нет производственных операций в заказе', w/2, h/2);
+    bind(c); return;
+  }
+
+  const chainNodes = [];
+  targetOps.forEach(op => {
+    const rsCandidates = isLogistics 
+      ? [op.rs, op.pl, op.fr, op.to].filter(Boolean) 
+      : [op.rs].filter(Boolean);
+    rsCandidates.forEach(rsId => {
+      const cap = CapacityRCA.getCap(rsId, op.pl, ord.p, ord.d) ||
+                  (isLogistics ? CapacityRCA.getLogLimit(rsId, op.fr, op.to, op.pr || ord.prod, ord.p, ord.d) : null);
+      const isLogRes = cap ? (cap.cat === 'warehouse' || cap.cat === 'loading' || cap.cat === 'unloading' || cap.cat === 'logistics' || cap.cat === 'route') : isLogistics;
+      if(isLogistics !== isLogRes) return;
+
+      const title = cap ? cap.rsName : (op.fr && op.to ? `${op.fr} → ${op.to}` : rsId);
+      const key = cap ? cap.rs : (op.fr && op.to ? `${op.fr}_${op.to}` : rsId);
+      if(chainNodes.some(n => n.key === key)) return;
+
+      const isBlocked = cap ? (cap.avail === 0 || cap.isBlocked) : false;
+      const hasExplicitLimit = Boolean(cap && (cap.avail > 0 || cap.isBlocked));
+      const avail = hasExplicitLimit ? cap.avail : null;
+      const load = cap && cap.load !== undefined ? cap.load : op.v;
+      
+      // Если лимита в res_loc_loc нет — маршрут не является узким местом
+      let util = 0;
+      let free = null;
+      if(isBlocked){
+        util = 1.0;
+        free = 0;
+      } else if(hasExplicitLimit && avail > 0){
+        util = Math.min(1.0, load / avail);
+        free = Math.max(0, avail - load);
+      } else {
+        util = 0.20; // Обычный открытый маршрут
+        free = null;
+      }
+
+      const pl = cap ? (cap.pl || (cap.locFr ? `${cap.locFr} → ${cap.locTo}` : op.pl)) : (op.fr && op.to ? `${op.fr} → ${op.to}` : (op.pl || 'Сеть'));
+      const resType = cap ? cap.resType : (isLogistics ? 'Логистическое плечо' : 'Производство');
+
+      chainNodes.push({
+        key,
+        rs: key,
+        title,
+        pl,
+        resType,
+        avail,
+        load,
+        free,
+        util,
+        hasExplicitLimit,
+        prodTarget: cap ? (cap.prodTarget || cap.prodRaw || op.pr || ord.prod) : (op.pr || ord.prod),
+        isBlocked,
+        isBottleneck: isBlocked || (hasExplicitLimit && util >= 0.90),
+        op
+      });
+    });
+  });
+
+  // Добавление всех релевантных лимитов и блокировок из res_loc_loc и capacity_view_sp
+  if(DS && DS.capacity){
+    const bomProducts = CapacityRCA.getOrderBOMProducts(ord);
+    const orderLocations = new Set([ord.loc, ...ops.flatMap(o => [o.pl, o.fr, o.to]).filter(Boolean)]);
+    const targetDate = normalizePeriodKey(ord.d);
+
+    const relatedLimits = DS.capacity.filter(c => {
+      if(isLogistics){
+        if(c.cat !== 'route' && c.cat !== 'logistics' && c.cat !== 'warehouse' && c.cat !== 'loading' && c.cat !== 'unloading') return false;
+      } else {
+        if(c.cat !== 'production') return false;
+      }
+
+      if(TREE_FOCUSED_KEY && (c.rs === TREE_FOCUSED_KEY || (c.rsName && c.rsName.includes(TREE_FOCUSED_KEY)))) return true;
+
+      const dateMatch = c.isGlobal || !targetDate || !c.periodKey || (c.periodKey === targetDate) || (ord.p !== undefined && c.p === Number(ord.p));
+      if(!dateMatch) return false;
+
+      const prodMatch = !c.prodList || c.prodList.includes('all') || c.prodList.some(p => bomProducts.has(p)) || (c.prodTarget && bomProducts.has(c.prodTarget));
+      const locMatch = !c.locToList || c.locToList.includes('all') || c.locToList.some(l => orderLocations.has(l)) ||
+                       (c.locFrList && c.locFrList.some(l => orderLocations.has(l))) ||
+                       (c.pl && orderLocations.has(c.pl));
+
+      return (prodMatch && locMatch) && (c.avail === 0 || c.isBlocked || c.util >= 0.85);
+    });
+
+    relatedLimits.forEach(cap => {
+      const key = cap.rs;
+      if(!chainNodes.some(n => n.key === key)){
+        const isBlocked = (cap.avail === 0 || cap.isBlocked);
+        chainNodes.push({
+          key,
+          rs: key,
+          title: cap.rsName || (cap.locFr && cap.locTo ? `${cap.locFr} → ${cap.locTo}` : cap.rs),
+          pl: cap.locFr ? `${cap.locFr} → ${cap.locTo}` : (cap.pl || ord.loc),
+          resType: cap.resType || (isBlocked ? 'Блокировка маршрута' : (isLogistics ? 'Лимит логистики' : 'Мощность цеха')),
+          avail: cap.avail,
+          load: cap.load,
+          free: isBlocked ? 0 : cap.free,
+          util: isBlocked ? 1.0 : cap.util,
+          prodTarget: cap.prodTarget || cap.prodRaw || ord.prod,
+          isBlocked,
+          isBottleneck: isBlocked || cap.util >= 0.90,
+          op: targetOps[0] || null
+        });
+      }
+    });
+  }
+
+  if(!chainNodes.length){
+    x.fillStyle=CH.axis;x.textAlign='center';x.font='13px '+FNT;
+    x.fillText(isLogistics ? 'Данные по логистическим лимитам и маршрутам не найдены' : 'Данные по мощностям производства не найдены', w/2, h/2);
+    bind(c); return;
+  }
+
+  // Отрисовка отдельной компактной адаптивной карточки
+  const drawResCard = (node, bx, by, bw, bh) => {
+    node.x = bx; node.y = by; node.w = bw; node.h = bh;
+    const isBn = node.isBottleneck || node.isBlocked;
+    const isHl = (TREE_FOCUSED_KEY === node.key);
+    const uColor = node.isBlocked ? CH.err : (node.util >= 0.90 ? CH.err : (node.util >= 0.75 ? CH.warn : CH.ok));
+
+    // Фон
+    x.fillStyle = isHl ? (CH.brandBg || '#f1e0ff') : (node.isBlocked ? rgba(CH.err, 0.05) : CH.surf);
+    drawBox(x, bx, by, bw, bh, 5);
+    x.fill();
+
+    // Обводка
+    x.strokeStyle = isHl ? CH.brand : (node.isBlocked ? CH.err : (isBn ? rgba(CH.err, 0.7) : CH.line));
+    x.lineWidth = isHl ? 2.2 : (node.isBlocked ? 1.5 : 1);
+    x.stroke();
+
+    // Индикатор слева
+    x.fillStyle = uColor;
+    x.fillRect(bx, by + 4, 3.5, bh - 8);
+
+    // Заголовок карточки
+    x.fillStyle = isHl ? CH.brand : (node.isBlocked ? CH.err : CH.txt);
+    x.font = '700 11px ' + FNT;
+    x.textAlign = 'left'; x.textBaseline = 'top';
+    const maxChars = Math.max(8, Math.floor((bw - 72) / 6.6));
+    const titleCrop = node.title.length > maxChars ? node.title.slice(0, maxChars - 1) + '…' : node.title;
+    x.fillText(titleCrop, bx + 9, by + 6);
+
+    // Статус / Процент
+    x.font = '700 11px ' + FNT;
+    x.fillStyle = node.hasExplicitLimit ? uColor : CH.ok;
+    x.textAlign = 'right';
+    x.fillText(node.isBlocked ? '⛔ БЛОК' : (node.hasExplicitLimit ? pc(node.util) : '✓ ОК'), bx + bw - 8, by + 6);
+
+    // Подзаголовок
+    x.fillStyle = CH.sub;
+    x.font = '9.5px ' + FNT;
+    x.textAlign = 'left';
+    const subTxt = node.prodTarget ? `${node.pl} · SKU: ${node.prodTarget}` : `${node.pl} · ${node.resType}`;
+    const maxSubChars = Math.max(10, Math.floor((bw - 18) / 6.2));
+    const subCrop = subTxt.length > maxSubChars ? subTxt.slice(0, maxSubChars - 1) + '…' : subTxt;
+    x.fillText(subCrop, bx + 9, by + 21);
+
+    // Шкала загрузки
+    const barX = bx + 9, barY = by + 36, barW = bw - 18, barH = 4.5;
+    x.fillStyle = CH.dim || '#dedce5';
+    drawBox(x, barX, barY, barW, barH, 2);
+    x.fill();
+
+    const fillW = node.isBlocked ? barW : (node.hasExplicitLimit ? Math.max(2, Math.min(barW, barW * node.util)) : barW);
+    x.fillStyle = node.hasExplicitLimit ? uColor : CH.ok;
+    drawBox(x, barX, barY, fillW, barH, 2);
+    x.fill();
+
+    // Значения
+    x.fillStyle = node.isBlocked ? CH.err : CH.sub;
+    x.font = '600 9px ' + FNT;
+    x.textAlign = 'left';
+    if(node.isBlocked){
+      x.fillText(`Лимит: 0 т (запрет)`, bx + 9, by + 44);
+    } else if(node.hasExplicitLimit){
+      x.fillText(`${nf(node.load)} из ${nf(node.avail)} т`, bx + 9, by + 44);
+    } else {
+      x.fillText(`Объём: ${nf(node.load)} т`, bx + 9, by + 44);
+    }
+
+    x.textAlign = 'right';
+    if(node.isBlocked){
+      x.fillStyle = CH.err;
+      x.fillText(`заблокировано`, bx + bw - 8, by + 44);
+    } else if(node.hasExplicitLimit && (node.util >= 0.995 || node.free <= 0)){
+      x.fillStyle = CH.err;
+      x.fillText(`резерв: 0 т`, bx + bw - 8, by + 44);
+    } else if(node.hasExplicitLimit && node.free > 0){
+      x.fillStyle = CH.ok;
+      x.fillText(`свободно ${nf(node.free)} т`, bx + bw - 8, by + 44);
+    } else {
+      x.fillStyle = CH.ok;
+      x.fillText(`без ограничений`, bx + bw - 8, by + 44);
+    }
+
+    const tipFreeTxt = node.isBlocked ? '0 т (заблокировано)' 
+      : (node.hasExplicitLimit ? (node.free <= 0 ? '0 т (резерв исчерпан)' : `${nf(node.free)} т`) : 'Не ограничено моделью');
+
+    const tipLimitTxt = node.isBlocked ? '0 т (заблокировано)' 
+      : (node.hasExplicitLimit ? `${nf(node.avail)} т` : 'Без ограничений (свободный маршрут)');
+
+    const tip = `<b>${node.title}</b>`
+      + `<br>Узел / Маршрут: <b>${node.pl}</b>`
+      + (node.prodTarget ? `<br>Продуктовая маска: <b>${node.prodTarget}</b>` : '')
+      + `<br>Вид ограничения: <b>${node.resType}</b>`
+      + `<br>Лимит (мощность): <b>${tipLimitTxt}</b>`
+      + `<br>Фактический объём перевозки: <b>${nf(node.load)} т</b>`
+      + `<br>Свободный остаток: <b>${tipFreeTxt}</b>`
+      + `<br>Статус: <b style="color:${node.hasExplicitLimit ? uColor : 'var(--scp-ok)'}">${node.isBlocked ? '100% (Блокировка)' : (node.hasExplicitLimit ? pc(node.util) : 'Маршрут открыт')}</b>`
+      + (node.isBlocked ? `<br><span style="color:var(--scp-err);font-weight:700">⛔ Направление полностью заблокировано (res_loc_loc const=0)</span>` 
+        : (node.isBottleneck ? `<br><span style="color:var(--scp-err);font-weight:700">🛑 Узкое место цепи (≥90%)</span>` : ''));
+
+    reg(c, bx, by, bw, bh, tip, () => {
+      TREE_FOCUSED_KEY = (TREE_FOCUSED_KEY === node.key) ? null : node.key;
+      render();
+    });
+  };
+
+  // ════════ РЕЖИМ 1: Группировка по площадкам (plants) ════════
+  if(RES_LAYOUT_MODE === 'plants'){
+    const p = {l: 16, r: 16, t: 20, b: 20};
+    const plantMap = new Map();
+    chainNodes.forEach(n => {
+      let plKey = n.pl || 'Сеть';
+      if(plKey.includes(' → ')){
+        const parts = plKey.split(' → ');
+        plKey = parts[0];
+      }
+      if(!plantMap.has(plKey)) plantMap.set(plKey, []);
+      plantMap.get(plKey).push(n);
+    });
+
+    const plantGroups = [...plantMap.entries()].map(([pl, items]) => ({
+      pl,
+      items,
+      hasBn: items.some(i => i.isBottleneck || i.isBlocked)
+    })).sort((a,b) => a.pl.localeCompare(b.pl));
+
+    const cardW = 230, cardH = 58, gap = 12;
+    const availW = w - p.l - p.r;
+    const maxCols = Math.max(1, Math.min(4, Math.floor((availW + gap) / (cardW + 16 + gap))));
+    const actualColW = (availW - (maxCols - 1) * gap) / maxCols;
+
+    let colHeights = new Array(maxCols).fill(p.t);
+
+    plantGroups.forEach((plant) => {
+      let targetCol = 0;
+      for(let ci = 1; ci < maxCols; ci++){
+        if(colHeights[ci] < colHeights[targetCol]) targetCol = ci;
+      }
+
+      const gx = p.l + targetCol * (actualColW + gap);
+      const gy = colHeights[targetCol];
+      const gH = plant.items.length * (cardH + 6) + 30;
+
+      x.fillStyle = plant.hasBn ? rgba(CH.err, 0.04) : CH.pane;
+      drawBox(x, gx, gy, actualColW, gH, 6);
+      x.fill();
+      x.strokeStyle = plant.hasBn ? rgba(CH.err, 0.3) : CH.line;
+      x.lineWidth = 1;
+      x.stroke();
+
+      x.fillStyle = plant.hasBn ? CH.err : CH.txt;
+      x.font = '700 11px ' + FNT;
+      x.textAlign = 'left'; x.textBaseline = 'top';
+      const grpIcon = plant.pl.startsWith('Vendor') ? '📦' : (plant.pl.startsWith('Port') ? '⚓' : (isLogistics ? '🚚' : '🏭'));
+      x.fillText(`${grpIcon} ${plant.pl} (${plant.items.length})`, gx + 8, gy + 7);
+
+      plant.items.forEach((node, rowIdx) => {
+        const by = gy + 24 + rowIdx * (cardH + 6);
+        drawResCard(node, gx + 6, by, actualColW - 12, cardH);
+      });
+
+      colHeights[targetCol] += gH + 10;
+    });
+  }
+
+// ════════ РЕЖИМ 3: Адаптивная матрица мощностей (grid) ════════
+  else if(RES_LAYOUT_MODE === 'grid'){
+    const p = {l: 16, r: 16, t: 16, b: 16};
+    const cardW = 230, cardH = 58, gap = 10;
+    const availW = w - p.l - p.r;
+    const numCols = Math.max(1, Math.min(5, Math.floor((availW + gap) / (cardW + gap))));
+    const actCardW = (availW - (numCols - 1) * gap) / numCols;
+
+    chainNodes.forEach((node, i) => {
+      const col = i % numCols;
+      const row = Math.floor(i / numCols);
+      const bx = p.l + col * (actCardW + gap);
+      const by = p.t + row * (cardH + gap);
+      drawResCard(node, bx, by, actCardW, cardH);
+    });
+  }
+
+  // ════════ РЕЖИМ 4: Фокус на узких местах и блокировках (focus) ════════
+  else if(RES_LAYOUT_MODE === 'focus'){
+    const p = {l: 20, r: 20, t: 16, b: 16};
+    const bnNodes = chainNodes.filter(n => n.isBottleneck || n.isBlocked);
+    const dispNodes = bnNodes.length ? bnNodes : chainNodes.slice().sort((a,b)=>b.util-a.util).slice(0, 4);
+
+    x.fillStyle = CH.sub;
+    x.font = '600 11px ' + FNT;
+    x.textAlign = 'left'; x.textBaseline = 'top';
+    x.fillText(`Сквозная цепочка: ${chainNodes.length} узлов/лимитов · Узких мест и блокировок: ${bnNodes.length}`, p.l, p.t);
+
+    const pipeY = p.t + 20, pipeW = w - p.l - p.r;
+    x.fillStyle = CH.pane;
+    drawBox(x, p.l, pipeY, pipeW, 14, 4);
+    x.fill();
+    x.strokeStyle = CH.line;
+    x.stroke();
+
+    const segW = pipeW / Math.max(chainNodes.length, 1);
+    chainNodes.forEach((node, idx) => {
+      const sx = p.l + idx * segW;
+      const uCol = node.isBlocked ? CH.err : (node.util >= 0.90 ? CH.err : (node.util >= 0.75 ? CH.warn : CH.ok));
+      x.fillStyle = uCol;
+      x.fillRect(sx + 1, pipeY + 2, Math.max(segW - 2, 2), 10);
+      reg(c, sx, pipeY, segW, 14, `<b>${node.title}</b> (${node.pl})<br>Статус: <b>${node.isBlocked ? 'Заблокировано (0)' : pc(node.util)}</b>`, () => {
+        TREE_FOCUSED_KEY = (TREE_FOCUSED_KEY === node.key) ? null : node.key;
+        render();
+      });
+    });
+
+    const cardH = 62;
+    const availW = w - p.l - p.r;
+    const numCols = Math.max(1, Math.min(dispNodes.length, 4));
+    const cardW = Math.min((availW - (numCols - 1) * 12) / numCols, 260);
+    const actGap = numCols > 1 ? (availW - numCols * cardW) / (numCols - 1) : 0;
+    const startY = pipeY + 30;
+
+    x.fillStyle = bnNodes.length ? CH.err : CH.ok;
+    x.font = '700 11.5px ' + FNT;
+    x.textAlign = 'left'; x.textBaseline = 'top';
+    x.fillText(bnNodes.length ? '🛑 Критические ограничения и блокировки маршрутов:' : '✓ Все логистические лимиты в норме:', p.l, startY);
+
+    dispNodes.forEach((node, i) => {
+      const bx = p.l + i * (cardW + actGap);
+      const by = startY + 20;
+      drawResCard(node, bx, by, cardW, cardH);
+    });
+  }
+
+  bind(c);
+}
+
 function tabTREE(){
   const orders=fOrders();
   if(!orders.length)return '<div class="empty">Нет доступных заказов под текущими фильтрами</div>';
   if(!SELECTED_ORDER_ID||!orders.some(o=>o.id===SELECTED_ORDER_ID))SELECTED_ORDER_ID=orders[0].id;
   const curOrd=orders.find(o=>o.id===SELECTED_ORDER_ID)||orders[0];
   const curOpsAll=DS.ops.filter(r=>r.o===curOrd.id);
-  const effF=(TREE_VIEW_MODE==='waterfall')?'all':TREE_OP_TYPE_FILTER;
+  const effF=(TREE_VIEW_MODE==='waterfall'||TREE_VIEW_MODE==='prod_res'||TREE_VIEW_MODE==='log_res')?'all':TREE_OP_TYPE_FILTER;
   const curOps=(effF==='all')?curOpsAll:curOpsAll.filter(r=>r.type===effF);
   const cMv=curOpsAll.filter(o=>o.type==='movement').length;
   const cPd=curOpsAll.filter(o=>o.type==='production').length;
@@ -2871,12 +3694,46 @@ function tabTREE(){
     ['Объём отгрузки',`${nf(curOrd.sal,1)} т`,`Спрос ${nf(curOrd.dem)} т, SL ${pc(curOrd.sal/curOrd.dem)}`,''],
     ['Себестоимость заказа',mln(curOrd.cost)+' ₽',`${nf(curOrd.cpt)} ₽/т`,''],
     ['Маржа заказа',mln(curOrd.mar)+' ₽',`Рентабельность ${pc(curOrd.mar/curOrd.rev)}`,''],
-    ['Режим',TREE_VIEW_MODE==='waterfall'?'Потоки и водопад':(TREE_METRIC_MODE==='cost'?'Себестоимость, ₽':'Физический объём, т'),`Операций: ${curOps.length}`,''],
+    ['Режим',TREE_VIEW_MODE==='prod_res'?'Мощности производства':TREE_VIEW_MODE==='log_res'?'Мощности логистики':(TREE_VIEW_MODE==='waterfall'?'Потоки и водопад':(TREE_METRIC_MODE==='cost'?'Себестоимость, ₽':'Физический объём, т')),`Операций: ${curOps.length}`,''],
     ['Выпускающих заводов',nf(uq(curOpsAll.filter(o=>o.type==='production'&&o.pr===curOrd.prod),o=>o.pl).length),'основной передел',''],
     ['Поставщиков сырья',nf(uq(curOpsAll.filter(o=>o.type==='procurement'),o=>o.vd).length),'внешние закупки','']
   ];
-  let tableOps=[...curOps],focusTitle=null;
-  if(TREE_FOCUSED_KEY){
+  const isCustomMode = (TREE_VIEW_MODE==='prod_res' || TREE_VIEW_MODE==='log_res');
+  let tableOps=[...curOps], focusTitle=null;
+  let capacityTableRows = [];
+
+  if(isCustomMode && DS && DS.capacity){
+    const isLog = (TREE_VIEW_MODE==='log_res');
+    const bomProducts = CapacityRCA.getOrderBOMProducts(curOrd);
+    const orderLocations = new Set([curOrd.loc, ...curOpsAll.flatMap(o => [o.pl, o.fr, o.to]).filter(Boolean)]);
+    const targetDate = normalizePeriodKey(curOrd.d);
+
+    capacityTableRows = DS.capacity.filter(c => {
+      if(isLog){
+        if(c.cat !== 'route' && c.cat !== 'logistics' && c.cat !== 'warehouse' && c.cat !== 'loading' && c.cat !== 'unloading') return false;
+      } else {
+        if(c.cat !== 'production') return false;
+      }
+
+      if(TREE_FOCUSED_KEY && (c.rs === TREE_FOCUSED_KEY || (c.rsName && c.rsName.includes(TREE_FOCUSED_KEY)))) return true;
+
+      const dateMatch = c.isGlobal || !targetDate || !c.periodKey || (c.periodKey === targetDate) || (curOrd.p !== undefined && c.p === Number(curOrd.p));
+      if(!dateMatch) return false;
+
+      const prodMatch = !c.prodList || c.prodList.includes('all') || c.prodList.some(p => bomProducts.has(p)) || (c.prodTarget && bomProducts.has(c.prodTarget));
+      const locMatch = !c.locToList || c.locToList.includes('all') || c.locToList.some(l => orderLocations.has(l)) ||
+                       (c.locFrList && c.locFrList.some(l => orderLocations.has(l))) ||
+                       (c.pl && orderLocations.has(c.pl));
+
+      return (prodMatch && locMatch);
+    });
+
+    if(TREE_FOCUSED_KEY){
+      const fk = TREE_FOCUSED_KEY;
+      const match = capacityTableRows.find(c => c.rs === fk || (c.rsName && c.rsName.includes(fk)));
+      focusTitle = match ? `${match.rsName} (${match.rs})` : fk;
+    }
+  } else if(TREE_FOCUSED_KEY){
     const fk=TREE_FOCUSED_KEY;
     if(fk.startsWith('VD_')||fk.startsWith('SW_VD_')){
       const vd=fk.replace(/^(VD_|SW_VD_)/,'');
@@ -2902,14 +3759,24 @@ function tabTREE(){
       const parts=fk.replace('SEMI_','').split('_');
       tableOps=curOps.filter(o=>o.pl===parts[0]&&o.pr===parts[1]);
       focusTitle=`Полуфабрикат: ${parts[0]} · ${parts[1]}`;
-    }else if(fk.includes('Plant_')){
-      const m=fk.match(/Plant_\d+/);
-      if(m){tableOps=curOps.filter(o=>o.pl===m[0]||o.fr===m[0]||o.to===m[0]);focusTitle='Площадка: '+m[0]}
+    }else if(curOps.some(o=>o.rs===fk)){
+      tableOps=curOps.filter(o=>o.rs===fk);
+      focusTitle='Ресурс: '+fk;
+    }else if(curOps.some(o=>o.pl===fk || o.fr===fk || o.to===fk)){
+      tableOps=curOps.filter(o=>o.pl===fk || o.fr===fk || o.to===fk);
+      focusTitle='Узел сети: '+fk;
+    }else if(fk.includes('Plant_') || fk.includes('Port_') || fk.includes('Dispatch_')){
+      const m=fk.match(/(Plant_\d+|Port_\d+|Dispatch_[A-Z0-9_]+)/i);
+      if(m){
+        tableOps=curOps.filter(o=>o.pl===m[0]||o.fr===m[0]||o.to===m[0]);
+        focusTitle='Узел: '+m[0];
+      }
     }else{
       const mo=curOps.filter(o=>o.oid&&(o.oid===fk||o.oid.startsWith(fk+'.')||fk.startsWith(o.oid+'.')));
       if(mo.length){tableOps=mo;focusTitle='Узел BOM: '+fk}
     }
   }
+
   const html=`
   <div class="card w" style="margin-bottom:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:14px 18px">
     <div style="font-weight:600;font-size:14px">Заказ спроса для разузлования цепочки</div>
@@ -2920,13 +3787,14 @@ function tabTREE(){
   <div class="card w">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">
       <div>
-        <h3>Сквозная цепочка пополнения заказа №${curOrd.id}</h3>
-        <div class="sub" style="margin-bottom:0">${TREE_METRIC_MODE==='cost'&&TREE_VIEW_MODE!=='waterfall'
+        <h3>${TREE_VIEW_MODE==='prod_res'?'Цепочка производственных мощностей заказа №'+curOrd.id:TREE_VIEW_MODE==='log_res'?'Цепочка логистических мощностей заказа №'+curOrd.id:'Сквозная цепочка пополнения заказа №'+curOrd.id}</h3>
+        <div class="sub" style="margin-bottom:0">${isCustomMode?'Сквозная визуализация загрузки мощностей от норматива. Клик по ресурсу фильтрует реестр мощностей внизу.'
+          :(TREE_METRIC_MODE==='cost'&&TREE_VIEW_MODE!=='waterfall'
           ?'Режим себестоимости: на узлах отображены затраты в млн ₽ и доля в полной себестоимости заказа. Клик по узлу фильтрует таблицу внизу.'
-          :'Клик по узлу подсвечивает цепочку и фильтрует детальный реестр шагов внизу.'}</div>
+          :'Клик по узлу подсвечивает цепочку и фильтрует детальный реестр шагов внизу.')}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        ${TREE_VIEW_MODE!=='waterfall'?`
+        ${(!isCustomMode && TREE_VIEW_MODE!=='waterfall')?`
         <div class="seg">
           <button class="btn ${TREE_METRIC_MODE==='vol'?'p':''}" id="treeUnitVol">Тонны</button>
           <button class="btn ${TREE_METRIC_MODE==='cost'?'p':''}" id="treeUnitCost">Себестоимость</button>
@@ -2936,7 +3804,15 @@ function tabTREE(){
           <button class="btn ${TREE_VIEW_MODE==='swimlanes'?'p':''}" id="vmSwim">Дорожки заводов</button>
           <button class="btn ${TREE_VIEW_MODE==='bom'?'p':''}" id="vmBOM">Дерево BOM</button>
           <button class="btn ${TREE_VIEW_MODE==='waterfall'?'p':''}" id="vmWf">Потоки и водопад</button>
+          <button class="btn ${TREE_VIEW_MODE==='prod_res'?'p':''}" id="vmProdRes">🏭 Мощности цехов</button>
+          <button class="btn ${TREE_VIEW_MODE==='log_res'?'p':''}" id="vmLogRes">📦 Мощности складов</button>
         </div>
+        ${isCustomMode?`
+        <div class="seg" style="margin-left:4px">
+          <button class="btn ${RES_LAYOUT_MODE==='plants'?'p':''}" id="rlPlants" data-tip="По площадкам (группировка по заводам и складам)" style="font-size:12px;padding:5px 8px">🏭 Площадки</button>
+          <button class="btn ${RES_LAYOUT_MODE==='grid'?'p':''}" id="rlGrid" data-tip="Сетка карточек с автопереносом" style="font-size:12px;padding:5px 8px">⊞ Сетка</button>
+          <button class="btn ${RES_LAYOUT_MODE==='focus'?'p':''}" id="rlFocus" data-tip="Фокус на узких местах и блокировках (≥90% / const=0)" style="font-size:12px;padding:5px 8px">🛑 Фокус</button>
+        </div>`:''}
         ${TREE_VIEW_MODE==='bom'?`
         <div class="tbar">
           <span class="tbar-lbl">Свернуть до</span>
@@ -2951,7 +3827,7 @@ function tabTREE(){
         </div>`:''}
       </div>
     </div>
-    ${TREE_VIEW_MODE!=='waterfall'?`
+    ${(!isCustomMode && TREE_VIEW_MODE!=='waterfall')?`
     <div class="tbar" style="margin-bottom:12px">
       <span class="tbar-lbl">Тип операций</span>
       <button class="chip ${TREE_OP_TYPE_FILTER==='all'?'on':''}" id="fltOpAll">Все операции (${curOpsAll.length})</button>
@@ -2965,10 +3841,10 @@ function tabTREE(){
   <div class="card w" style="margin-top:12px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
       <div>
-        <h3>Детальный реестр шагов пополнения заказа №${curOrd.id}</h3>
-        <div class="sub">Показано строк: <b>${tableOps.length}</b>${focusTitle
-          ?` | <span style="color:var(--scp-accent);font-weight:600">Фильтр по узлу: ${focusTitle}</span>`
-          :` (тип: ${effF==='all'?'все':effF})`}</div>
+        <h3>${isCustomMode ? 'Реестр мощностей и ограничений заказа №'+curOrd.id : 'Детальный реестр шагов пополнения заказа №'+curOrd.id}</h3>
+        <div class="sub">Показано строк: <b>${isCustomMode ? capacityTableRows.length : tableOps.length}</b>${focusTitle
+          ?` | <span style="color:var(--scp-accent);font-weight:600">Фильтр по ресурсу: ${focusTitle}</span>`
+          :` (режим: ${isCustomMode ? (TREE_VIEW_MODE==='prod_res'?'Производственные мощности':'Логистические лимиты и маршруты') : (effF==='all'?'все':effF)})`}</div>
       </div>
       ${TREE_FOCUSED_KEY?`<button class="chip rm" id="tblResetFocus">Сбросить фильтр по узлу</button>`:''}
     </div>
@@ -2976,22 +3852,36 @@ function tabTREE(){
   </div>`;
 
   setTimeout(()=>{
-    dtable('#treeTbl',[
-      {k:'oid',t:'ID операции',left:1,flt:1,f:v=>v?`<code>${esc(v)}</code>`:'—'},
-      {k:'dp',t:'Уровень',num:1,flt:1,f:v=>`<span class="tag">Ур. ${v||1}</span>`},
-      {k:'type',t:'Тип',flt:1,left:1,f:v=>`<span style="color:${
-        v==='production'?CH.d3:v==='movement'?CH.d1:v==='procurement'?CH.d4:CH.d6
-      };font-weight:600">${v}</span>`},
-      {k:'pr',t:'Материал',left:1,flt:1,f:v=>`<b>${esc(v)}</b>`},
-      {k:'pl',t:'Площадка',left:1,flt:1},
-      {k:'rs',t:'Ресурс',left:1,flt:1},
-      {k:'route',t:'Маршрут',left:1,flt:1,v:r=>r.fr?`${r.fr} → ${r.to} (${r.tm||'плечо'})`:''},
-      {k:'vd',t:'Поставщик',left:1,flt:1},
-      {k:'v',t:'Объём, т',num:1,f:v=>nf(v,2)},
-      {k:'r',t:'Тариф ₽/т',num:1,f:(v,r0)=>r0.stub?'0 ₽':nf(v)},
-      {k:'cost',t:'Затраты',num:1,f:v=>v?`<b>${mln(v)} ₽</b>`:'—'},
-      {k:'share',t:'Доля в с/с',num:1,v:r=>curOrd.cost?(r.cost||0)/curOrd.cost:0,f:v=>v?pc(v):'—'}
-    ],tableOps,{key:'tree_ops',sort:'dp',dir:'desc',h:310,csv:1,name:'chain_'+curOrd.id});
+    if(isCustomMode){
+      dtable('#treeTbl',[
+        {k:'pl',t:'Локация / Направление',left:1,flt:1},
+        {k:'rsName',t:'Ресурс / Маршрут',left:1,flt:1},
+        {k:'resType',t:'Тип ограничения',left:1,flt:1},
+        {k:'prodTarget',t:'Маска продукта',left:1,flt:1,f:v=>v||'Все SKU'},
+        {k:'periodKey',t:'Период',left:1,flt:1,f:(v,r)=>r.isGlobal?'Глобальный':(v||'P'+r.p)},
+        {k:'avail',t:'Лимит (const)',num:1,f:(v,r)=>r.isBlocked?'0 т (заблокировано)':nf(v)+' т',cls:v=>v===0?'neg':''},
+        {k:'load',t:'План загрузки',num:1,f:v=>nf(v)+' т'},
+        {k:'free',t:'Свободный остаток',num:1,f:(v,r)=>r.isBlocked?'0 т':nf(v)+' т',cls:v=>v===0?'neg':'pos'},
+        {k:'util',t:'Загрузка %',num:1,f:(v,r)=>r.isBlocked?'⛔ 100%':pc(v),cls:(v,r)=>r.isBlocked||v>=1.0?'neg':v>=0.9?'mid':'pos'}
+      ],capacityTableRows,{key:'tree_cap_table',sort:'util',dir:'desc',h:310,csv:1,name:'order_limits_'+curOrd.id});
+    } else {
+      dtable('#treeTbl',[
+        {k:'oid',t:'ID операции',left:1,flt:1,f:v=>v?`<code>${esc(v)}</code>`:'—'},
+        {k:'dp',t:'Уровень',num:1,flt:1,f:v=>`<span class="tag">Ур. ${v||1}</span>`},
+        {k:'type',t:'Тип',flt:1,left:1,f:v=>`<span style="color:${
+          v==='production'?CH.d3:v==='movement'?CH.d1:v==='procurement'?CH.d4:CH.d6
+        };font-weight:600">${v}</span>`},
+        {k:'pr',t:'Материал',left:1,flt:1,f:v=>`<b>${esc(v)}</b>`},
+        {k:'pl',t:'Площадка',left:1,flt:1},
+        {k:'rs',t:'Ресурс',left:1,flt:1},
+        {k:'route',t:'Маршрут',left:1,flt:1,v:r=>r.fr?`${r.fr} → ${r.to} (${r.tm||'плечо'})`:''},
+        {k:'vd',t:'Поставщик',left:1,flt:1},
+        {k:'v',t:'Объём, т',num:1,f:v=>nf(v,2)},
+        {k:'r',t:'Тариф ₽/т',num:1,f:(v,r0)=>r0.stub?'0 ₽':nf(v)},
+        {k:'cost',t:'Затраты',num:1,f:v=>v?`<b>${mln(v)} ₽</b>`:'—'},
+        {k:'share',t:'Доля в с/с',num:1,v:r=>curOrd.cost?(r.cost||0)/curOrd.cost:0,f:v=>v?pc(v):'—'}
+      ],tableOps,{key:'tree_ops',sort:'dp',dir:'desc',h:310,csv:1,name:'chain_'+curOrd.id});
+    }
 
     $('#treeOrderSelect').onchange=e=>{SELECTED_ORDER_ID=+e.target.value;TREE_FOCUSED_KEY=null;render()};
     if($('#treeResetFocus'))$('#treeResetFocus').onclick=()=>{TREE_FOCUSED_KEY=null;render()};
@@ -3002,6 +3892,11 @@ function tabTREE(){
     $('#vmSwim').onclick=()=>{TREE_VIEW_MODE='swimlanes';TREE_FOCUSED_KEY=null;render()};
     $('#vmBOM').onclick=()=>{TREE_VIEW_MODE='bom';TREE_FOCUSED_KEY=null;render()};
     $('#vmWf').onclick=()=>{TREE_VIEW_MODE='waterfall';TREE_OP_TYPE_FILTER='all';TREE_FOCUSED_KEY=null;render()};
+    $('#vmProdRes').onclick=()=>{TREE_VIEW_MODE='prod_res';TREE_OP_TYPE_FILTER='all';TREE_FOCUSED_KEY=null;render()};
+    $('#vmLogRes').onclick=()=>{TREE_VIEW_MODE='log_res';TREE_OP_TYPE_FILTER='all';TREE_FOCUSED_KEY=null;render()};
+    if($('#rlPlants'))$('#rlPlants').onclick=()=>{RES_LAYOUT_MODE='plants';render()};
+    if($('#rlGrid'))$('#rlGrid').onclick=()=>{RES_LAYOUT_MODE='grid';render()};
+    if($('#rlFocus'))$('#rlFocus').onclick=()=>{RES_LAYOUT_MODE='focus';render()};
     const setOp=t=>{TREE_OP_TYPE_FILTER=t;TREE_FOCUSED_KEY=null;render()};
     if($('#fltOpAll'))$('#fltOpAll').onclick=()=>setOp('all');
     if($('#fltOpPd'))$('#fltOpPd').onclick=()=>setOp('production');
@@ -3017,17 +3912,46 @@ function tabTREE(){
         .forEach(([sel,v])=>{if($(sel))$(sel).onclick=()=>apply(v)});
     }
     let reqH=480;
-    if(TREE_VIEW_MODE==='swimlanes'||TREE_VIEW_MODE==='stages'){
+    if(TREE_VIEW_MODE==='prod_res'||TREE_VIEW_MODE==='log_res'){
+      const isLog = (TREE_VIEW_MODE==='log_res');
+      const targetOps = curOpsAll.filter(o => isLog ? (o.type==='movement'||o.type==='stock') : (o.type==='production'));
+      
+      let nRes = uq(targetOps, o=>o.rs||o.pl).length || 4;
+      if(isLog && DS && DS.capacity){
+        const orderProducts = new Set([curOrd.prod, ...curOpsAll.map(o => o.pr).filter(Boolean)]);
+        const orderLocations = new Set([curOrd.loc, ...curOpsAll.flatMap(o => [o.pl, o.fr, o.to]).filter(Boolean)]);
+        const addLimits = DS.capacity.filter(c => (c.cat==='route'||c.cat==='logistics') && 
+          (!c.prodList || c.prodList.includes('all') || c.prodList.some(p=>orderProducts.has(p))) &&
+          (!c.locToList || c.locToList.includes('all') || c.locToList.some(l=>orderLocations.has(l)))
+        );
+        nRes += addLimits.length;
+      }
+
+      if(RES_LAYOUT_MODE === 'grid'){
+        const cols = Math.max(1, Math.min(4, Math.floor(800 / 230)));
+        const rows = Math.ceil(nRes / cols);
+        reqH = Math.max(200, rows * 68 + 40);
+      } else if(RES_LAYOUT_MODE === 'plants'){
+        const cols = Math.max(1, Math.min(3, Math.floor(800 / 240)));
+        const groupsEstimate = Math.ceil(nRes / 1.8);
+        const rowsPerCol = Math.ceil(groupsEstimate / cols);
+        reqH = Math.max(220, rowsPerCol * 110 + 50);
+      } else {
+        reqH = 190;
+      }
+    }else if(TREE_VIEW_MODE==='swimlanes'||TREE_VIEW_MODE==='stages'){
       const nP=uq(curOpsAll.filter(o=>o.type==='production'),o=>o.pl).length;
       const nV=uq(curOpsAll.filter(o=>o.type==='procurement'),o=>o.vd).length;
       const nS=uq(curOpsAll.filter(o=>o.type==='production'&&o.pr!==curOrd.prod),o=>o.pr).length;
-      reqH=Math.max(480,Math.min(860,240+Math.max(nP,Math.min(nV,6),nS,5)*44));
+      reqH=Math.max(480,Math.min(920,240+Math.max(nP,Math.min(nV,6),nS,5)*44));
     }
-    const g=cv('#treeCanvas',H('#treeCanvas',reqH,0.48,440,860));
+    const g=cv('#treeCanvas',H('#treeCanvas',reqH,0.48,200,1200));
     if(g){
       if(TREE_VIEW_MODE==='stages')drawModeStages(g,curOpsAll,curOrd);
       else if(TREE_VIEW_MODE==='swimlanes')drawModeSwimlanes(g,curOpsAll,curOrd);
       else if(TREE_VIEW_MODE==='bom')drawModeBOMTree(g,curOpsAll,curOrd);
+      else if(TREE_VIEW_MODE==='prod_res')drawModeResourceChain(g,curOpsAll,curOrd,false);
+      else if(TREE_VIEW_MODE==='log_res')drawModeResourceChain(g,curOpsAll,curOrd,true);
       else drawModeWaterfall(g,curOpsAll,curOrd);
       bind(g.c);
     }
@@ -3094,7 +4018,7 @@ function parseRows(rows,fileName){
     const t=T2[str(pick(rw,COL.type)).toLowerCase()];if(!t)return;
     const oid=str(pick(rw,COL.oid)),rs=str(pick(rw,COL.rs));
     const key=id+'|'+oid+'|'+rs;if(seenOp.has(key))return;seenOp.add(key);
-    ops.push({o:id,p:num(pick(rw,COL.p)),t,
+    ops.push({o:id,p:num(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),t,
       pl:str(pick(rw,COL.pl)),pr:str(pick(rw,COL.oprod)),rs:(t==='mv'?'':rs),
       fr:str(pick(rw,COL.fr)),to:str(pick(rw,COL.to)),tm:str(pick(rw,COL.tm)),
       v:num(pick(rw,COL.v)),r:Math.abs(num(pick(rw,COL.r))),
@@ -3105,30 +4029,422 @@ function parseRows(rows,fileName){
   const nm=fileName.replace(/\.(xlsx|xls)$/i,'')+(runId?` | run ${runId}`:'')+(cfg?` | cfg ${cfg}`:'');
   return {name:nm,orders,ops};
 }
-function loadFile(file){
+
+/* ═══════════════ 16.1. ТОЧНЫЙ ПАРСЕР capacity_view_sp ═══════════════ */
+function normalizePeriodKey(val){
+  if(val === undefined || val === null || val === '') return '';
+  const s = String(val).trim();
+  // Формат YYYYMM (например, 202604 -> 2026-04)
+  const mYm = s.match(/^(\d{4})(\d{2})$/);
+  if(mYm) return `${mYm[1]}-${mYm[2]}`;
+  // Формат MM/DD/YYYY или DD/MM/YYYY
+  const mDate = s.match(/(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})/);
+  if(mDate){
+    const yr = mDate[3];
+    const mo = String(mDate[1]).padStart(2,'0');
+    return `${yr}-${mo}`;
+  }
+  // Формат YYYY-MM
+  const mIso = s.match(/^(\d{4})-(\d{2})/);
+  if(mIso) return mIso[0];
+  return s;
+}
+
+function parseCapacityRows(rawRows){
+  if(!rawRows || !rawRows.length) return [];
+
+  const cleanKey = k => String(k||'').toLowerCase().replace(/[\s_\-\.\(\)\/\\№,]/g, '');
+
+  return rawRows.map((rawObj, idx) => {
+    const normMap = new Map();
+    const rawKeys = Object.keys(rawObj);
+    rawKeys.forEach(k => normMap.set(cleanKey(k), rawObj[k]));
+
+    const pickExact = (patterns) => {
+      for(const p of patterns){
+        const cp = cleanKey(p);
+        if(normMap.has(cp)){
+          const v = normMap.get(cp);
+          if(v !== undefined && v !== null && v !== '') return v;
+        }
+      }
+      return '';
+    };
+
+    // 1. Идентификатор ресурса и локация
+    let rs = str(pickExact(['Ресурс: системный код', 'Resource: System Code', 'Resource_ID', 'Resource', 'WorkCenter', 'rs']));
+    if(!rs){
+      for(const k of rawKeys){
+        const sVal = str(rawObj[k]);
+        if(/RES_|Plant_.*_RES|Port_.*_RES/i.test(sVal)){ rs = sVal; break; }
+      }
+      if(!rs) rs = str(rawObj[rawKeys[0]] || `RES_${idx+1}`);
+    }
+
+    let pl = str(pickExact(['Локация: системный код', 'Plant_ID', 'Plant', 'Локация', 'Завод', 'pl']));
+    if(!pl){
+      const m = rs.match(/(Plant_\d+|Port_\d+)/i);
+      if(m) pl = m[0];
+    }
+
+    // 2. Тип ресурса и наименование
+    const resType = str(pickExact(['Вид ресурса: наименование', 'Вид ресурса', 'Resource_Type', 'Type'])) || 'Ресурс';
+    let rsName = str(pickExact(['Наименование ресурса', 'Resource_Name', 'WorkCenter_Name', 'Ресурс'])) || rs;
+
+    // Определение категории ресурса: Склад, Погрузка, Разгрузка или Производство
+    const rtLow = resType.toLowerCase();
+    let cat = 'production';
+    if(rtLow.includes('склад') || rtLow.includes('хране')) cat = 'warehouse';
+    else if(rtLow.includes('погруз')) cat = 'loading';
+    else if(rtLow.includes('разгруз')) cat = 'unloading';
+    else if(rtLow.includes('порт') || rtLow.includes('терминал') || rtLow.includes('транспорт')) cat = 'logistics';
+
+    // 3. Период (ключ YYYY-MM и исходный номер)
+    const rawPeriod = pickExact(['Период: наименование', 'Дата', 'Period', 'Date', 'Период', 'Ид периода', 'p']);
+    const periodKey = normalizePeriodKey(rawPeriod) || normalizePeriodKey(pickExact(['Дата', 'Date']));
+    const pNum = num(rawPeriod);
+
+    // 4. Мощности из capacity_view_sp:
+    let avail = num(pickExact(['Доступная мощность (итог)', 'Доступная мощность', 'Available_Capacity', 'ФРВ доступный (расчет)', 'Max_Capacity', 'avail']));
+    let norm = num(pickExact(['ФРВ Номинальный', 'ФРВ Календарный', 'Norm_Capacity', 'Standard_Capacity', 'norm'])) || avail;
+    if(!avail && norm) avail = norm;
+
+    // Загрузка
+    let load = num(pickExact([
+      'План загрузки мощности производства',
+      'План загрузки мощности склада',
+      'Общая плановая загрузка мощности',
+      'inipcapaplannedusage',
+      'Plan_Load',
+      'Used_Capacity',
+      'load'
+    ]));
+
+    // Точный расчет утилизации: математический приоритет load / avail
+    let util = 0;
+    if(avail > 0 && load > 0){
+      util = Math.min(1.0, load / avail);
+    } else if(avail > 0){
+      let rawUtilPct = pickExact(['Загрузка ресурса', 'Загрузка ресурса, %', 'Utilization', 'util']);
+      if(rawUtilPct !== '' && rawUtilPct !== undefined){
+        let uVal = num(rawUtilPct);
+        // Если в файле целые проценты (100 = 100%, 85 = 85%, 1 = 1%)
+        util = uVal > 1.0 ? (uVal / 100) : (uVal === 1 && load === 0 ? 0.01 : uVal);
+      }
+    } else if(load > 0 && avail === 0){
+      avail = load;
+      util = 1.0;
+    }
+    util = Math.min(1.0, Math.max(0, util));
+
+    // Синхронный расчет свободного остатка
+    let free = 0;
+    if(avail > 0){
+      free = Math.max(0, avail - load);
+    }
+
+    let grp = str(pickExact(['Группа ресурсов', 'Resource_Group', 'Group', 'grp']));
+
+    return {
+      pl,
+      rs,
+      rsName,
+      resType,
+      cat,
+      grp,
+      p: pNum,
+      periodKey,
+      norm,
+      avail,
+      load,
+      free,
+      util,
+      isBottleneck: util >= 0.90,
+      isCrit: util >= 0.999
+    };
+  }).filter(c => c.rs && (c.avail > 0 || c.load > 0 || c.rsName));
+}
+
+function parseResLocLocRows(rawRows){
+  if(!rawRows || !rawRows.length) return [];
+  const cleanKey = k => String(k||'').toLowerCase().replace(/[\s_\-\.\(\)\/\\№,]/g, '');
+
+  const parseList = (val) => {
+    if(!val) return [];
+    return String(val)
+      .replace(/[\(\)]/g, '')
+      .split(/[,;\n]/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  };
+
+  return rawRows.map(rawObj => {
+    const normMap = new Map();
+    Object.keys(rawObj).forEach(k => normMap.set(cleanKey(k), rawObj[k]));
+
+    const pickExact = (patterns) => {
+      for(const p of patterns){
+        const cp = cleanKey(p);
+        if(normMap.has(cp)){
+          const v = normMap.get(cp);
+          if(v !== undefined && v !== null && v !== '') return v;
+        }
+      }
+      return '';
+    };
+
+    const rs = str(pickExact(['resource', 'ресурс', 'Resource', 'rs']));
+    const locFrRaw = str(pickExact(['loc_fr', 'locfr', 'откуда', 'источник', 'from']));
+    const locToRaw = str(pickExact(['loc_to', 'locto', 'куда', 'назначение', 'to']));
+    const prodRaw = str(pickExact(['product', 'продукт', 'sku', 'материал']));
+    const tm = str(pickExact(['transport', 'транспорт', 'видтранспорта', 'tm']));
+
+    const limitRaw = pickExact(['const', 'ограничение', 'мощность', 'max_capacity', 'limit', 'value']);
+    const limit = limitRaw !== '' ? num(limitRaw) : 0;
+    const periodId = str(pickExact(['periodid', 'идпериода', 'период', 'period']));
+
+    let periodKey = '';
+    // Если periodid = 1 или пусто — это постоянное/глобальное ограничение модели
+    const isGlobal = (periodId === '1' || periodId === '0' || periodId === '' || !periodId);
+
+    if(!isGlobal){
+      // Точный поиск года 20XX и месяца 01..12 внутри ID периода (например, 420260401 -> 2026-04)
+      const m = periodId.match(/(20\d{2})(0[1-9]|1[0-2])/);
+      if(m) {
+        periodKey = `${m[1]}-${m[2]}`;
+      } else {
+        periodKey = normalizePeriodKey(periodId);
+      }
+    }
+
+    const pNum = !isGlobal && !periodKey && !isNaN(Number(periodId)) && Number(periodId) > 0 ? Number(periodId) : 0;
+
+    const locFrList = parseList(locFrRaw);
+    const locToList = parseList(locToRaw);
+    const prodList = parseList(prodRaw);
+
+    const locFrClean = locFrList.length === 1 ? locFrList[0] : locFrRaw;
+    const locToClean = locToList.length === 1 ? locToList[0] : locToRaw;
+
+    let rsName = rs;
+    if(locFrClean && locToClean){
+      rsName = `Лимит ${locFrClean} → ${locToClean}`;
+    } else if(rs){
+      rsName = rs;
+    }
+
+    return {
+      rs: rs || `${locFrClean}_${locToClean}`,
+      rsName,
+      locFr: locFrClean,
+      locTo: locToClean,
+      locFrList,
+      locToList,
+      prodList,
+      tm,
+      limit,
+      avail: limit,
+      norm: limit,
+      isBlocked: limit === 0,
+      isGlobal,
+      p: pNum,
+      periodId,
+      periodKey
+    };
+  }).filter(r => r.rs || (r.locFr && r.locTo));
+}
+
+/* ═══════════════ 16.2. УМНАЯ МУЛЬТИФАЙЛОВАЯ ЗАГРУЗКА XLSX ═══════════════ */
+async function loadFiles(fileList){
   if(typeof XLSX==='undefined'){
     alert('Парсер XLSX недоступен: нет доступа к CDN SheetJS.\n\nВарианты:\n1. Открыть страницу при наличии интернета.\n2. Скачать xlsx.full.min.js и подключить локально.');
     return;
   }
-  const fr=new FileReader();
-  $('#stat').innerHTML='Чтение файла';
-  fr.onload=e=>{
-    try{
-      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
-      const sh=wb.SheetNames.find(n=>/marking_demand/i.test(n))||wb.SheetNames[0];
-      const rows=XLSX.utils.sheet_to_json(wb.Sheets[sh],{defval:'',raw:true});
-      DS=build(parseRows(rows,file.name));
-      clearF();render();
-      $('#stat').innerHTML=`<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций | лист «${esc(sh)}»`;
-    }catch(err){
-      $('#stat').innerHTML=`<span class="neg">Ошибка: ${esc(err.message)}</span>`;
-      alert('Не удалось разобрать файл.\n\n'+err.message);
-    }
-  };
-  fr.onerror=()=>{$('#stat').innerHTML='<span class="neg">Ошибка чтения файла</span>'};
-  fr.readAsArrayBuffer(file);
-}
+  const files = Array.from(fileList);
+  if(!files.length) return;
 
+  $('#stat').innerHTML = `Чтение ${files.length} файл(ов)...`;
+
+  const readOne = file => new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+        resolve({file, wb});
+      } catch(err) {
+        reject(err);
+      }
+    };
+    fr.onerror = () => reject(new Error(`Ошибка чтения ${file.name}`));
+    fr.readAsArrayBuffer(file);
+  });
+
+  try {
+    const results = await Promise.all(files.map(readOne));
+    let parsedDemand = null;
+    let parsedCap = [];
+    let parsedResLoc = [];
+
+    for(const {file, wb} of results){
+      const sheetNames = wb.SheetNames;
+      const demandSheet = sheetNames.find(n=>/marking_demand/i.test(n) || /demand/i.test(n) || /заказ/i.test(n));
+      const capSheet = sheetNames.find(n=>/capacity_view_sp/i.test(n) || /capacity/i.test(n) || /мощност/i.test(n) || /баланс/i.test(n));
+      const resLocSheet = sheetNames.find(n=>/res_loc_loc/i.test(n) || /res_loc/i.test(n) || /ограничен/i.test(n));
+
+      if(resLocSheet){
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[resLocSheet],{defval:'',raw:true});
+        parsedResLoc = parsedResLoc.concat(parseResLocLocRows(rows));
+      }
+
+      if(capSheet){
+        const capRows = XLSX.utils.sheet_to_json(wb.Sheets[capSheet],{defval:'',raw:true});
+        parsedCap = parsedCap.concat(parseCapacityRows(capRows));
+      }
+
+      if(demandSheet){
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[demandSheet],{defval:'',raw:true});
+        parsedDemand = parseRows(rows, file.name);
+      } else if(!capSheet && !resLocSheet && !parsedDemand){
+        const firstSheet = sheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet],{defval:'',raw:true});
+        if(rows.length && (rows[0]['order_id'] !== undefined || rows[0]['План продаж'] !== undefined)){
+          parsedDemand = parseRows(rows, file.name);
+        } else if(rows.length && (rows[0]['const'] !== undefined || rows[0]['loc_fr'] !== undefined)){
+          parsedResLoc = parsedResLoc.concat(parseResLocLocRows(rows));
+        } else {
+          parsedCap = parsedCap.concat(parseCapacityRows(rows));
+        }
+      }
+    }
+
+    // Точная интеграция ограничений res_loc_loc со строгой фильтрацией по периодам, продуктам и плечам
+    if(parsedResLoc.length){
+      const opsPool = (parsedDemand ? parsedDemand.ops : (DS ? DS.ops : []));
+      
+      parsedResLoc.forEach(rl => {
+        const isBlocked = (rl.limit === 0 || rl.isBlocked);
+        
+        // Строгий подсчет факта по конкретному периоду, маске продукта, локациям и виду транспорта
+        const relevantOps = opsPool.filter(op => {
+          if(op.type !== 'movement') return false;
+
+          // 1. Фильтр по периоду
+          if(rl.periodKey){
+            const opDate = op.d ? normalizePeriodKey(op.d) : '';
+            if(opDate && opDate !== rl.periodKey) return false;
+          }
+          if(rl.p !== undefined && rl.p !== null && !isNaN(rl.p) && rl.p > 0){
+            if(op.p !== undefined && op.p !== rl.p) return false;
+          }
+
+          // 2. Фильтр по продукту
+          if(rl.prodList && rl.prodList.length && !rl.prodList.includes('all')){
+            const opProd = String(op.pr || '').trim();
+            if(!rl.prodList.some(p => p.toLowerCase() === opProd.toLowerCase())) return false;
+          }
+
+          // 3. Фильтр по виду транспорта
+          if(rl.tm && rl.tm !== 'all'){
+            if(String(op.tm || '').toLowerCase() !== rl.tm.toLowerCase()) return false;
+          }
+
+          // 4. Фильтр по системному ресурсу или локациям
+          if(op.rs && rl.rs && op.rs.toLowerCase() === rl.rs.toLowerCase()) return true;
+
+          const frMatch = !rl.locFrList || rl.locFrList.includes('all') || rl.locFrList.some(f => f.toLowerCase() === String(op.fr||'').toLowerCase());
+          const toMatch = !rl.locToList || rl.locToList.includes('all') || rl.locToList.some(t => t.toLowerCase() === String(op.to||'').toLowerCase());
+
+          return frMatch && toMatch;
+        });
+
+        const rawLoad = S(relevantOps, op => op.v);
+        // Факт загрузки не может физически превышать лимит модели
+        const actualLoad = isBlocked ? 0 : (rl.limit > 0 ? Math.min(rl.limit, rawLoad) : rawLoad);
+        const util = isBlocked ? 1.0 : (rl.limit > 0 ? Math.min(1.0, actualLoad / rl.limit) : 0);
+        const free = isBlocked ? 0 : Math.max(0, rl.limit - actualLoad);
+
+        // Проверяем наличие в capacity_view_sp
+        const existing = parsedCap.find(c => 
+          c.rs.toLowerCase() === rl.rs.toLowerCase() && 
+          (!rl.periodKey || !c.periodKey || c.periodKey === rl.periodKey)
+        );
+
+        const prodStr = (rl.prodList && rl.prodList.length && !rl.prodList.includes('all')) ? rl.prodList.join(', ') : '';
+
+        if(existing){
+          if(existing.avail <= 0 || isBlocked){
+            existing.avail = rl.limit;
+            existing.norm = rl.limit;
+            existing.load = actualLoad;
+            existing.util = util;
+            existing.free = free;
+            existing.isBlocked = isBlocked;
+            existing.isBottleneck = isBlocked || (util >= 0.90);
+          }
+          existing.locFr = rl.locFr;
+          existing.locTo = rl.locTo;
+          existing.locFrList = rl.locFrList;
+          existing.locToList = rl.locToList;
+          existing.prodList = rl.prodList;
+          existing.prodTarget = prodStr;
+        } else {
+          parsedCap.push({
+            pl: rl.locFr ? `${rl.locFr} → ${rl.locTo}` : (rl.locTo || 'Сеть'),
+            rs: rl.rs || `${rl.locFr}_${rl.locTo}`,
+            rsName: rl.rsName || (rl.locFr && rl.locTo ? `Лимит ${rl.locFr} → ${rl.locTo}` : rl.rs),
+            resType: isBlocked ? 'Блокировка маршрута' : 'Лимит направления (res_loc_loc)',
+            cat: 'route',
+            locFr: rl.locFr,
+            locTo: rl.locTo,
+            locFrList: rl.locFrList,
+            locToList: rl.locToList,
+            prodList: rl.prodList,
+            prodTarget: prodStr,
+            p: rl.p,
+            periodKey: rl.periodKey,
+            norm: rl.limit,
+            avail: rl.limit,
+            load: actualLoad,
+            free,
+            util,
+            isBlocked,
+            isBottleneck: isBlocked || (util >= 0.90),
+            isCrit: isBlocked || (util >= 0.999)
+          });
+        }
+      });
+    }
+
+    // Сборка финального набора данных
+    if(parsedDemand){
+      parsedDemand.capacity = parsedCap;
+      DS = build(parsedDemand);
+    } else if(parsedCap.length){
+      if(!DS) DS = build(SEED);
+      DS.capacity = parsedCap.map(c=>({
+        ...c,
+        pl: esc(c.pl),
+        rs: esc(c.rs),
+        rsName: esc(c.rsName || c.rs),
+        grp: esc(c.grp || '')
+      }));
+      DS.hasCap = true;
+    } else {
+      throw new Error('Не удалось распознать данные заказов или мощностей.');
+    }
+
+    clearF();
+    render();
+
+    const bnCount = DS.capacity.filter(c=>c.isBottleneck).length;
+    const blockCount = DS.capacity.filter(c=>c.isBlocked).length;
+    const capMsg = DS.hasCap ? ` | ⚡ Мощности и лимиты: ${DS.capacity.length} зап. (${bnCount} узких мест, ${blockCount} блокировок)` : '';
+    $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}`;
+  } catch(err){
+    $('#stat').innerHTML = `<span class="neg">Ошибка: ${esc(err.message)}</span>`;
+    alert('Ошибка загрузки файлов:\n\n' + err.message);
+  }
+}
 /* ═══════════════ 17. РЕНДЕР И ИНИЦИАЛИЗАЦИЯ ═══════════════ */
 function go(tab){TAB=tab;render()}
 function render(){
@@ -3163,7 +4479,7 @@ if(bTheme)bTheme.onclick=()=>{
   if(DS)render();
 };
 $('#bLoad').onclick=()=>$('#fIn').click();
-$('#fIn').onchange=e=>{if(e.target.files[0]){loadFile(e.target.files[0]);e.target.value=''}};
+$('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.target.files);e.target.value=''}};
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
 $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nСохранённые версии для сравнения останутся.'))return;
