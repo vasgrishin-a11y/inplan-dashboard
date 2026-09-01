@@ -875,10 +875,14 @@ const CapacityRCA = {
   },
 
   /**
-   * Точный поиск лимита res_loc_loc с учетом глобальных ограничений (periodid=1 / isGlobal) и BOM-масок
+   * Точный поиск лимита res_loc_loc с учетом глобальных ограничений (periodid=1 / isGlobal) и BOM-масок.
+   * Сопоставляются только настоящие лимиты направлений: строки из res_loc_loc (cat='route')
+   * либо записи с явно заданным направлением locFr → locTo. Складские мощности без масок
+   * сюда не попадают — иначе любое движение «находило» случайную складскую строку,
+   * и логистика всегда выглядела «В норме», даже когда лимиты не проверялись вовсе.
    */
   getLogLimit(rsId, locFr, locTo, prod, orderPeriod, orderDate){
-    if(!DS || !DS.capacity || !DS.capacity.length) return null;
+    if(!DS || !DS.capacity.length) return null;
     const rLower = rsId ? String(rsId).trim().toLowerCase() : '';
     const frLower = locFr ? String(locFr).trim().toLowerCase() : '';
     const toLower = locTo ? String(locTo).trim().toLowerCase() : '';
@@ -886,6 +890,10 @@ const CapacityRCA = {
     const targetDate = normalizePeriodKey(orderDate);
 
     return DS.capacity.find(c => {
+      // Только лимиты направлений с явными масками (res_loc_loc / merged route rows)
+      const isRouteLimit = (c.cat === 'route') || (c.locFr && c.locTo);
+      if(!isRouteLimit) return false;
+
       const isLogCat = (c.cat === 'route' || c.cat === 'logistics' || c.cat === 'warehouse' || c.cat === 'loading' || c.cat === 'unloading');
       if(!isLogCat) return false;
 
@@ -902,7 +910,6 @@ const CapacityRCA = {
       return frMatch && toMatch && prodMatch;
     }) || null;
   },
-
   /**
    * Сквозной сбор продуктов BOM для заказа (включая полуфабрикаты из аналогичных заказов при полном дефиците)
    */
@@ -943,7 +950,7 @@ const CapacityRCA = {
     prodOps.forEach((op, idx) => {
       const rsId = op.rs || `RES_${op.pl}_${idx}`;
       const cap = this.getCap(rsId, op.pl, order.p, order.d);
-      if(cap && cap.cat !== 'route' && cap.cat !== 'logistics' && cap.cat !== 'warehouse'){
+      if(cap && cap.cat !== 'route' && cap.cat !== 'logistics' && cap.cat !== 'warehouse' && cap.cat !== 'loading' && cap.cat !== 'unloading'){
         prodChain.push({
           rs: cap.rs,
           rsName: cap.rsName,
@@ -985,9 +992,9 @@ const CapacityRCA = {
     const logChain = [];
     logOps.forEach((op) => {
       const cap = this.getLogLimit(op.rs, op.fr, op.to, op.pr || order.prod, order.p, order.d) ||
-                  this.getCap(op.rs, null, order.p, order.d) ||
+                  (op.rs ? this.getCap(op.rs, null, order.p, order.d) : null) ||
                   (DS.capacity||[]).find(c => 
-                    (c.cat === 'route' || c.cat === 'logistics' || c.cat === 'warehouse' || c.cat === 'loading' || c.cat === 'unloading') &&
+                    (c.cat === 'route' || c.cat === 'loading' || c.cat === 'unloading') &&
                     ((op.rs && c.rs.toLowerCase() === op.rs.toLowerCase()) ||
                      (op.fr && op.to && c.locFr && c.locTo && c.locFr.toLowerCase() === op.fr.toLowerCase() && c.locTo.toLowerCase() === op.to.toLowerCase()))
                   );
@@ -1019,7 +1026,8 @@ const CapacityRCA = {
       const orderLocations = new Set([order.loc, ...ordOps.flatMap(o => [o.pl, o.fr, o.to]).filter(Boolean)]);
 
       const relevantLimits = DS.capacity.filter(c => {
-        if(c.cat !== 'route' && c.cat !== 'logistics' && c.cat !== 'warehouse') return false;
+        const isLogCat = (c.cat === 'route' || c.cat === 'logistics' || c.cat === 'warehouse' || c.cat === 'loading' || c.cat === 'unloading');
+        if(!isLogCat) return false;
         
         // Дата: совпадение по периоду или глобальный лимит
         const dateMatch = c.isGlobal || !targetDate || !c.periodKey || (c.periodKey === targetDate) || (order.p !== undefined && c.p === Number(order.p));
@@ -1082,6 +1090,8 @@ const CapacityRCA = {
       hasData: true,
       prodBottleneck,
       logBottleneck,
+      prodChain,
+      logChain,
       rootCause,
       isStarving: Boolean(prodBottleneck && prodChain.some(r => r !== prodBottleneck && r.util < 0.45))
     };
@@ -1918,11 +1928,16 @@ function tabDM(){
           const bn = res.logBottleneck;
           return bn.isBlocked ? `⛔ Блок: ${bn.rsName}` : `📦 ${bn.rsName} (${pc(bn.util)})`;
         }
-        return 'В норме';
+        // Различаем «проверено и свободно» и «лимиты маршрутов в модели не заданы»
+        return (res.logChain && res.logChain.length) ? 'В норме' : 'Лимиты не заданы';
       },f:(v,o)=>{
         const res = CapacityRCA.analyzeOrderChain(o);
         if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
-        if(!res.logBottleneck) return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
+        if(!res.logBottleneck){
+          return (res.logChain && res.logChain.length)
+            ? `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`
+            : `<span class="tag" style="color:var(--scp-text-3)" title="В res_loc / capacity_view_sp нет лимитов маршрутов, покрывающих плечи этого заказа">◌ Лимиты не заданы</span>`;
+        }
         const bn = res.logBottleneck;
         const icon = bn.isBlocked ? '⛔' : '📦';
         const txt = bn.isBlocked ? `Блок: ${bn.rsName}` : `${bn.rsName}: ${pc(bn.util)}`;
@@ -1956,7 +1971,6 @@ function tabDM(){
       `Проверить причины низкого покрытия: нет мощности, нет сырья или отсутствует разрешённый маршрут. Это три разных управленческих решения.`,
       `Для позиций с маржинальностью выше 90% валидировать корректность разузлования — такая маржа обычно означает недоучтённую себестоимость.`]}]);
 }
-
 /* ═══════════════ 10. БЛОК: ЛОГИСТИКА ═══════════════ */
 function tabLG(){
   const O=fOps().filter(r=>r.type==='movement');
@@ -4109,16 +4123,27 @@ function parseCapacityRows(rawRows){
     let norm = num(pickExact(['ФРВ Номинальный', 'ФРВ Календарный', 'Norm_Capacity', 'Standard_Capacity', 'norm'])) || avail;
     if(!avail && norm) avail = norm;
 
-    // Загрузка
-    let load = num(pickExact([
-      'План загрузки мощности производства',
-      'План загрузки мощности склада',
-      'Общая плановая загрузка мощности',
-      'inipcapaplannedusage',
-      'Plan_Load',
-      'Used_Capacity',
-      'load'
-    ]));
+    // Загрузка: приоритет колонок зависит от категории ресурса.
+    // Для производственных ресурсов — производственная колонка; для складов, погрузки,
+    // разгрузки и маршрутов — общая плановая загрузка и загрузка склада. Раньше производственная
+    // колонка (всегда 0 у Погрузки/Разгрузки) шла первой, и реальная загрузка, например
+    // 20 000 из 27 000 т у Plant_33_RES_174, терялась — ресурс показывался как 0%.
+    const loadCols = (cat === 'production')
+      ? ['План загрузки мощности производства',
+         'План загрузки мощности склада',
+         'Общая плановая загрузка мощности',
+         'inipcapaplannedusage',
+         'Plan_Load',
+         'Used_Capacity',
+         'load']
+      : ['Общая плановая загрузка мощности',
+         'План загрузки мощности склада',
+         'inipcapaplannedusage',
+         'План загрузки мощности производства',
+         'Plan_Load',
+         'Used_Capacity',
+         'load'];
+    let load = num(pickExact(loadCols));
 
     // Точный расчет утилизации: математический приоритет load / avail
     let util = 0;
@@ -4381,12 +4406,16 @@ async function loadFiles(fileList){
             existing.isBlocked = isBlocked;
             existing.isBottleneck = isBlocked || (util >= 0.90);
           }
+          // Ограничение res_loc_loc, наложенное на ресурс (в том числе на Погрузку/Разгрузку),
+          // — это лимит направления. Явно помечаем категорией 'route', иначе фильтры
+          // логистического анализа отсекали такие блокировки по категории 'loading'/'unloading'.
+          existing.cat = 'route';
           existing.locFr = rl.locFr;
           existing.locTo = rl.locTo;
           existing.locFrList = rl.locFrList;
           existing.locToList = rl.locToList;
           existing.prodList = rl.prodList;
-          existing.prodTarget = prodStr;
+          existing.prodTarget = prodStr || existing.prodTarget;
         } else {
           parsedCap.push({
             pl: rl.locFr ? `${rl.locFr} → ${rl.locTo}` : (rl.locTo || 'Сеть'),
