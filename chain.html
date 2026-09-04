@@ -9,7 +9,10 @@ try{document.documentElement.setAttribute('data-theme',localStorage.getItem('inp
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<!-- SheetJS вендорен локально: страница работает без доступа к CDN -->
+<script src="assets/xlsx.full.min.js"></script>
+<!-- Общие утилиты (esc, num, pnum, xstr, тема, полифилл roundRect) — общие с index.html -->
+<script src="assets/inplan-common.js"></script>
 <style>
 /* ═══════════════ ДИЗАЙН-СИСТЕМА In.Plan ═══════════════ */
 :root {
@@ -592,7 +595,7 @@ tbody tr:hover { background: var(--scp-accent-bg); }
 
 <!-- ═══════════════ ШАПКА ПАНЕЛИ ═══════════════ -->
 <header>
-  <button class="icon-btn" id="bHdrToggleSb" title="Свернуть / развернуть меню узлов сети">
+  <button class="icon-btn" id="bHdrToggleSb" title="Свернуть / развернуть меню узлов сети" aria-label="Свернуть или развернуть меню узлов сети">
     <svg viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
   </button>
   <div class="inplan-badge" id="bLogo" title="In.Plan SNP Model">
@@ -635,7 +638,7 @@ tbody tr:hover { background: var(--scp-accent-bg); }
       <button id="btnModeMatrix">Матрица</button>
     </div>
     
-    <button class="icon-btn" id="bTheme" title="Сменить тему"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+    <button class="icon-btn" id="bTheme" title="Сменить тему" aria-label="Сменить тему"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
     
     <button class="icon-btn p" id="bUpload" title="Загрузить файлы XLSX (sku, res, prodsource, tlane)">
       <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -715,20 +718,7 @@ tbody tr:hover { background: var(--scp-accent-bg); }
 
 <!-- ═══════════════ СКРИПТЫ МОДЕЛИ И ДВИЖКА ═══════════════ -->
 <script>
-/* Полифилл roundRect: в Safari < 16 его нет, и весь граф не отрисовывался */
-if(window.CanvasRenderingContext2D && !CanvasRenderingContext2D.prototype.roundRect){
-  CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){
-    r=Math.min(typeof r==='number'?r:4,w/2,h/2);
-    if(w<=0||h<=0){this.rect(x,y,w,h);return this}
-    this.moveTo(x+r,y);this.arcTo(x+w,y,x+w,y+h,r);this.arcTo(x+w,y+h,x,y+h,r);
-    this.arcTo(x,y+h,x,y,r);this.arcTo(x,y,x+w,y,r);this.closePath();return this;
-  };
-}
-
-/* Экранирование HTML: все значения из загруженных файлов проходят через esc()
-   перед вставкой в разметку (иначе кавычка/угловая скобка в SKU ломали страницу
-   и позволяли внедрить произвольный код) */
-const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* esc, sany, xstr, num, pnum и полифилл roundRect подключены из assets/inplan-common.js */
 
 /* ═══════════════ 1. СТРУКТУРА ДАННЫХ И ДЕМО-НАБОР ═══════════════ */
 const MODEL = {
@@ -802,39 +792,70 @@ function parseWorkbookSheets(wb) {
   const rawPds = getSheetData(['prodsource', 'pds', 'рецепт', 'спецификация']);
   const rawTlane = getSheetData(['tlane', 'transport', 'плечи', 'отношения']);
 
-  if (rawSku) MODEL.sku = rawSku.map(r => ({
-    item: r.item || r['Продукт'] || r['Материал'] || '',
-    loc: r.loc || r['Локация'] || r['Склад'] || '',
-    res: r['Ресурс: код'] || r.res || r['Ресурс'] || '',
-    minlotsize: parseFloat(r.minlotsize || r.min_lot || 0),
-    maxlotsize: parseFloat(r.maxlotsize || r.max_lot || 0)
-  })).filter(x => x.item && x.loc);
+  /* Доступ к колонкам без привязки к регистру, пробелам и подчёркиваниям:
+     «Item », «ITEM», «item», «Продукт» находятся одинаково (реальные экспорты
+     часто отличаются регистром и хвостовыми пробелами в заголовках). */
+  const col = (raw) => {
+    const nr = {};
+    Object.keys(raw).forEach(k => { nr[normalizeKey(k)] = raw[k]; });
+    return (...names) => {
+      for (const n of names) {
+        const v = nr[normalizeKey(n)];
+        if (v !== undefined && v !== null && v !== '') return v;
+      }
+      return undefined;
+    };
+  };
 
-  if (rawRes) MODEL.res = rawRes.map(r => ({
-    id: r['Ресурс'] || r.res || r.id || '',
-    loc: r['Локация: код'] || r.loc || '',
-    name: r['Ресурс: наименование'] || r.name || '',
-    type: String(r['Тип Ресурса'] || r.type || '1'),
-    capuom: r.capuom || 'H',
-    capacity: parseFloat(r.defaultbucketcapacity || r.capacity || 24)
-  })).filter(x => x.id);
+  if (rawSku) MODEL.sku = rawSku.map(raw => {
+    const g = col(raw);
+    return {
+      item: xstr(g('item', 'Продукт', 'Материал')),
+      loc: xstr(g('loc', 'Локация', 'Склад')),
+      res: xstr(g('Ресурс: код', 'res', 'Ресурс')),
+      minlotsize: num(g('minlotsize', 'min_lot')),
+      maxlotsize: num(g('maxlotsize', 'max_lot'))
+    };
+  }).filter(x => x.item && x.loc);
 
-  if (rawPds) MODEL.prodsource = rawPds.map(r => ({
-    prodsource: r.prodsource || r['Рецепт'] || r.id || '',
-    item: r.item || r['Продукт'] || '',
-    loc: r.loc || r['Локация'] || '',
-    prodver: r.prodver || r['Версия'] || '',
-    prio: parseInt(r.prodsourceprio || 1),
-    outputqty: parseFloat(r.outputqty || 1)
-  })).filter(x => x.item && x.loc);
+  if (rawRes) MODEL.res = rawRes.map(raw => {
+    const g = col(raw);
+    const cap = num(g('defaultbucketcapacity', 'capacity', 'Мощность'));
+    return {
+      id: xstr(g('Ресурс', 'res', 'id')),
+      loc: xstr(g('Локация: код', 'loc')),
+      name: xstr(g('Ресурс: наименование', 'name')),
+      type: xstr(g('Тип Ресурса', 'type')) || '1',
+      capuom: xstr(g('capuom')) || 'H',
+      capacity: cap > 0 ? cap : 24
+    };
+  }).filter(x => x.id);
 
-  if (rawTlane) MODEL.tlane = rawTlane.map(r => ({
-    item: r.item || r['Продукт'] || '',
-    locfr: r.locfr || r['Откуда'] || '',
-    locto: r.locto || r['Куда'] || '',
-    mot: r.mot || r['Вид транспорта'] || 'TRUCK',
-    leadtime: parseFloat(r.tleadtime || r.leadtime || 1)
-  })).filter(x => x.locfr && x.locto);
+  if (rawPds) MODEL.prodsource = rawPds.map(raw => {
+    const g = col(raw);
+    const prio = pnum(g('prodsourceprio', 'prio', 'Приоритет'));
+    const oq = num(g('outputqty', 'Норма'));
+    return {
+      prodsource: xstr(g('prodsource', 'Рецепт', 'id')),
+      item: xstr(g('item', 'Продукт')),
+      loc: xstr(g('loc', 'Локация')),
+      prodver: xstr(g('prodver', 'Версия')),
+      prio: prio > 0 ? prio : 1, // NaN/пусто -> 1; числовые значения (включая 0) сохраняются как есть в pnum, 0 нормализуем к 1
+      outputqty: oq > 0 ? oq : 1
+    };
+  }).filter(x => x.item && x.loc);
+
+  if (rawTlane) MODEL.tlane = rawTlane.map(raw => {
+    const g = col(raw);
+    const lt = num(g('tleadtime', 'leadtime', 'Срок'));
+    return {
+      item: xstr(g('item', 'Продукт')),
+      locfr: xstr(g('locfr', 'Откуда')),
+      locto: xstr(g('locto', 'Куда')),
+      mot: xstr(g('mot', 'Вид транспорта')) || 'TRUCK',
+      leadtime: lt > 0 ? lt : 1
+    };
+  }).filter(x => x.locfr && x.locto);
 
   FILTERS.items = [];
   FILTERS.pds = [];
@@ -1456,6 +1477,10 @@ document.getElementById('btnModeMatrix').onclick = () => {
 // Загрузка файлов
 document.getElementById('bUpload').onclick = () => document.getElementById('fInput').click();
 document.getElementById('fInput').onchange = (e) => {
+  if (typeof XLSX === 'undefined') {
+    alert('Парсер XLSX недоступен: не найден локальный файл assets/xlsx.full.min.js.\n\nВосстановите файл из репозитория либо временно подключите CDN-версию SheetJS.');
+    return;
+  }
   const files = Array.from(e.target.files);
   if (!files.length) return;
 
@@ -1499,8 +1524,7 @@ document.querySelectorAll('.bs-tab').forEach(btn => {
 // Тема
 document.getElementById('bTheme').onclick = () => {
   const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', cur);
-  localStorage.setItem('inplan_theme', cur);
+  ipSetTheme(cur);
   drawGraph();
 };
 
@@ -1693,11 +1717,10 @@ window.addEventListener('mousemove', (e) => {
   }
 });
 window.addEventListener('mouseup', () => isResizing = false);
-window.onresize = drawGraph;
+window.addEventListener('resize', ipDebounce(drawGraph, 120));
 
 // Инициализация
-const savedTheme = localStorage.getItem('inplan_theme') || 'light';
-document.documentElement.setAttribute('data-theme', savedTheme);
+document.documentElement.setAttribute('data-theme', ipGetTheme());
 
 MODEL.sku = [...SEED_DATA.sku];
 MODEL.res = [...SEED_DATA.res];

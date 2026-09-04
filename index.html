@@ -9,7 +9,10 @@ try{document.documentElement.setAttribute('data-theme',localStorage.getItem('inp
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<!-- SheetJS вендорен локально: дашборд работает без доступа к CDN (заводские сети, офлайн) -->
+<script src="assets/xlsx.full.min.js"></script>
+<!-- Общие утилиты (esc, sany, xstr, num, pnum, plural, nf, тема) — общие с chain.html -->
+<script src="assets/inplan-common.js"></script>
 <style>
 /* ═══════════════ ТОКЕНЫ In.Plan ═══════════════ */
 :root{
@@ -367,18 +370,18 @@ input[type=number]{font-family:'Open Sans',sans-serif}
       </div>
       <div class="stat" id="stat"></div>
       <div class="hdr-actions">
-        <button class="icon-btn" id="bThemeToggle" data-tip="Переключить тему (тёмная / светлая)">
+        <button class="icon-btn" id="bThemeToggle" data-tip="Переключить тему (тёмная / светлая)" aria-label="Переключить тему">
           <svg id="iconSun" viewBox="0 0 24 24" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           <svg id="iconMoon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <button class="icon-btn p" id="bLoad" data-tip="Загрузить XLSX (demand, capacity_view_sp, res_loc_loc)">
+        <button class="icon-btn p" id="bLoad" data-tip="Загрузить XLSX (demand, capacity_view_sp, res_loc_loc)" aria-label="Загрузить файлы XLSX">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </button>
         <input type="file" id="fIn" accept=".xlsx,.xls" multiple style="display:none">
-        <button class="icon-btn" id="bSave" data-tip="Сохранить версию для сравнения">
+        <button class="icon-btn" id="bSave" data-tip="Сохранить версию для сравнения" aria-label="Сохранить версию для сравнения">
           <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         </button>
-        <button class="icon-btn d" id="bReset" data-tip="Сбросить загруженные данные">
+        <button class="icon-btn d" id="bReset" data-tip="Сбросить загруженные данные" aria-label="Сбросить загруженные данные">
           <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </button>
       </div>
@@ -389,38 +392,38 @@ input[type=number]{font-family:'Open Sans',sans-serif}
       <span class="fbar-lbl">Фильтры</span>
       <div class="fbar-left">
         <div class="pop-wrap" id="pop_p">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Период:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Период:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Периоды</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_ch">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Канал:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Канал:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Каналы продаж</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_pi">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Приоритет:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Приоритет:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Приоритет заказа</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
       </div>
       <div class="fbar-divider"></div>
       <div class="fbar-mid">
         <div class="pop-wrap" id="pop_cl">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Клиент:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Клиент:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Клиенты</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_pr">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Продукт:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Продукт:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Продукты / SKU</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_pl">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Завод:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Завод:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Заводы и площадки</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_vd">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Поставщик:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Поставщик:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Поставщики сырья</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
         <div class="pop-wrap" id="pop_tm">
-          <button type="button" class="pill-btn"><span class="pill-lbl">Транспорт:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
+          <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Транспорт:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Виды транспорта</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
       </div>
@@ -607,7 +610,7 @@ const SEED={
  ]
 };
 /* ═══════════════ 2. СОСТОЯНИЕ ═══════════════ */
-let DS=null, TAB='ov';
+let DS=null, TAB='ov', STAT_PIN=false; // true — в #stat зафиксировано сообщение о загрузке
 const F={p:[],ch:[],cl:[],pr:[],pi:[],pl:[],vd:[],tm:[],nd:[]};
 const clearF=()=>Object.keys(F).forEach(k=>F[k]=[]);
 const LBL={p:'Период',ch:'Канал',cl:'Клиент',pr:'Продукт',pi:'Приоритет',pl:'Завод',vd:'Поставщик',tm:'Транспорт',nd:'Узел сети'};
@@ -624,22 +627,17 @@ let LG_FLOW_TM='all'; // 'all' | 'RAIL' | 'TRUCK' | 'SHIP' | ...
 
 /* ═══════════════ 3. УТИЛИТЫ ═══════════════ */
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
-const nf=(v,d=0)=>(isFinite(v)?v:0).toLocaleString('ru-RU',{minimumFractionDigits:d,maximumFractionDigits:d});
+/* nf, esc, sany, xstr, num, pnum, plural определены в assets/inplan-common.js (общие с chain.html) */
 const bn=v=>nf(v/1e9,2)+' млрд',mln=v=>nf(v/1e6,1)+' млн',pc=v=>nf((isFinite(v)?v:0)*100,1)+'%';
 const S=(a,f)=>a.reduce((s,o)=>s+(f(o)||0),0);
 const uq=(a,f)=>[...new Set(a.map(f).filter(x=>x!==''&&x!=null))].sort();
 function grp(a,k,ag){const m=new Map();a.forEach(o=>{const key=k(o);if(!m.has(key))m.set(key,[]);m.get(key).push(o)});
   return [...m].map(([key,rows])=>({k:key,n:rows.length,rows,...ag(rows)}))}
-const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-/* Санитизация входных данных из XLSX: срез угловых скобок, без порчи &, кавычек и текста.
-   HTML-экранирование выполняется только при выводе — см. esc(). */
-const sany=v=>String(v==null?'':v).replace(/[<>]/g,'');
-/* Русское склонение: plural(3,['вариант','варианта','вариантов']) */
-const plural=(n,f)=>{const a=Math.abs(n)%100,b=a%10;
-  if(a>10&&a<20)return f[2];if(b>1&&b<5)return f[1];if(b===1)return f[0];return f[2]};
+/* esc и sany — в assets/inplan-common.js */
+/* plural — в assets/inplan-common.js */
 
 /* ── Палитра графиков In.Plan: данные ≠ бренд ── */
-let THEME=localStorage.getItem('inplan_theme')||'light';
+let THEME=ipGetTheme();
 let PAL=['#2d3f8f','#3fa9c9','#22bb55','#ff9a3b','#f22a41','#7c5cd6','#0d9488','#c026a3','#8a8f98','#af35ff','#d899ff','#5a5a5c'];
 let CH={};
 
@@ -736,7 +734,7 @@ function dtable(sel,cols,rows,opts){
       </div>
       <div class="scr" style="max-height:${opts.h||340}px"><table><thead><tr>
         ${cols.map(c=>{const on=st.sort===c.k,fon=st.flt[c.k]&&st.flt[c.k].length;
-          return `<th class="dt-th${c.left?' l':''}"><span class="dt-t" data-sk="${c.k}">${esc(c.t)}
+          return `<th class="dt-th${c.left?' l':''}"${on?` aria-sort="${st.dir==='asc'?'ascending':'descending'}"`:''}><span class="dt-t" data-sk="${c.k}">${esc(c.t)}
             <span class="dt-ar">${on?(st.dir==='asc'?'▲':'▼'):'↕'}</span></span>${
             c.flt?`<span class="dt-fn${fon?' on':''}" data-fk="${c.k}">▾</span>`:''}</th>`}).join('')}
       </tr></thead><tbody>
@@ -766,8 +764,14 @@ function dtable(sel,cols,rows,opts){
     host.querySelectorAll('[data-pg]').forEach(e=>e.onclick=()=>{st.pg=+e.dataset.pg;draw()});
     const cb=host.querySelector('[data-csv]');
     if(cb)cb.onclick=()=>{
+      /* Числа — как есть (точка-разделитель, без неразрывных пробелов формата ru-RU),
+         текст — очищенный от разметки; кавычки удваиваются по RFC 4180 */
       const lines=[cols.map(c=>c.t).join(';')]
-        .concat(out.map(d=>cols.map(c=>`"${plain(c,d).replace(/"/g,'""')}"`).join(';')));
+        .concat(out.map(d=>cols.map(c=>{
+          const raw=d[c.k];
+          const v=(typeof raw==='number'&&isFinite(raw))?String(raw):plain(c,d).replace(/"/g,'""');
+          return `"${v}"`;
+        }).join(';')));
       const b=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
       const a=document.createElement('a');a.href=URL.createObjectURL(b);
       a.download=(opts.name||'table')+'_'+new Date().toISOString().slice(0,10)+'.csv';a.click()};
@@ -1166,6 +1170,7 @@ function fillSelects(){
     const all=list.map(String), sel=F[key];
 
     btn.classList.toggle('on',!!sel.length);
+    btn.setAttribute('aria-expanded',wrap.classList.contains('open')?'true':'false');
     const one=sel.length===1?fmt(sel[0]):'';
     valSpan.textContent=!sel.length?'Все'
       :(sel.length===1?(one.length>16?one.slice(0,15)+'…':one)
@@ -1205,6 +1210,7 @@ function fillSelects(){
       const was=wrap.classList.contains('open');
       $$('.pop-wrap').forEach(w=>w.classList.remove('open'));
       if(!was){wrap.classList.add('open');const qq=wrap.querySelector('.pop-q');if(qq)qq.focus()}
+      btn.setAttribute('aria-expanded',wrap.classList.contains('open')?'true':'false');
     };
 
     listEl.querySelectorAll('.pop-item').forEach(it=>{
@@ -2443,7 +2449,7 @@ function snap(ds){
   const m=(t)=>S(f(t),r=>r.cost);
   return {name:ds.name,ts:ds.ts,orders:o.length,
     rev:S(o,x=>x.rev),cost:S(o,x=>x.cost),mar:S(o,x=>x.mar),dem:S(o,x=>x.dem),sal:S(o,x=>x.sal),unm:S(o,x=>x.unm),
-    lm:S(o,x=>x.unm*x.mpt),full:o.filter(x=>!x.unm).length,
+    lm:S(o,x=>x.unm*x.mpt),full:o.filter(x=>!(x.unm>1e-9)).length,
     pd:m('production'),mv:m('movement'),pc:m('procurement'),st:m('stock'),
     opsN:ops.length,plants:uq(ops,r=>r.pl).length,vendors:uq(ops,r=>r.vd).length};
 }
@@ -4026,27 +4032,7 @@ const COL={
   rc:['resource_consumption_operation'],run:['run_id'],cfg:['config_id'],dsid:['dataset_id']
 };
 function pick(row,keys){for(const k of keys)if(row[k]!==undefined&&row[k]!==null&&row[k]!=='')return row[k];return undefined}
-/* Число из ячейки XLSX: пробелы (вкл. неразрывные) — разделители групп и удаляются.
-   Запятая — десятичный разделитель, только если она одна и после неё 1-2 цифры;
-   несколько запятых или 3+ цифры после запятой — разделители групп (1,234,567 -> 1234567). */
-const num=v=>{
-  if(v===undefined||v===null||v==='')return 0;
-  if(typeof v==='number')return isFinite(v)?v:0;
-  let s=String(v).trim().replace(/[\s\u00A0\u202F]/g,'');
-  if(!s)return 0;
-  const hasComma=s.includes(','),hasDot=s.includes('.');
-  if(hasComma&&hasDot){
-    // Оба разделителя: последний встреченный — десятичный
-    if(s.lastIndexOf(',')>s.lastIndexOf('.')){s=s.replace(/\./g,'').replace(',','.')}
-    else{s=s.replace(/,/g,'')}
-  }else if(hasComma){
-    const parts=s.split(',');
-    if(parts.length===2&&parts[1].length<=2){s=parts[0]+'.'+parts[1]}
-    else{s=s.replace(/,/g,'')}
-  }
-  const n=parseFloat(s);
-  return isFinite(n)?n:0;
-};
+/* num и pnum — в assets/inplan-common.js */
 const str=v=>v===undefined||v===null?'':String(v).trim();
 /* Ключ периода YYYY-MM из даты любого вида — единая точка разбора дат (fmtDate делегирует сюда).
    Русская выгрузка — DD.MM.YYYY (месяц — вторая группа), английская — MM/DD/YYYY (однозначно,
@@ -4082,7 +4068,7 @@ function parseRows(rows,fileName){
     throw new Error('Не найдены обязательные столбцы «order_id» и «План продаж». Проверьте, что выбран лист marking_demand.');
   const T2={movement:'mv',production:'pd',procurement:'pc',stock:'st'};
   const seenOrd=new Set(),orders=[],ops=[],seenOp=new Set();
-  let runId='',cfg='',dsid='';
+  let runId='',cfg='',dsid='',skippedOps=0;
   rows.forEach(rw=>{
     const id=num(pick(rw,COL.id));if(!id)return;
     runId=runId||str(pick(rw,COL.run));cfg=cfg||str(pick(rw,COL.cfg));dsid=dsid||str(pick(rw,COL.dsid));
@@ -4092,16 +4078,17 @@ function parseRows(rows,fileName){
       let rev=num(pick(rw,COL.rev));if(!rev)rev=sal*price;
       let cost=Math.abs(num(pick(rw,COL.cost)));
       let mar=num(pick(rw,COL.mar));if(!mar)mar=rev-cost;
-      orders.push({id,p:num(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),
+      orders.push({id,p:pnum(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),
         loc:str(pick(rw,COL.loc)),prod:str(pick(rw,COL.prod)),cl:str(pick(rw,COL.cl))||'—',
         dem:num(pick(rw,COL.dem)),sal,unm:num(pick(rw,COL.unm)),price,
         cpt:Math.abs(num(pick(rw,COL.cpt))),mpt:num(pick(rw,COL.mpt)),
         rev,cost,mar,pr:num(pick(rw,COL.prio))||2});
     }
-    const t=T2[str(pick(rw,COL.type)).toLowerCase()];if(!t)return;
+    const t=T2[str(pick(rw,COL.type)).toLowerCase()];
+    if(!t){skippedOps++;return} // неизвестный тип — строка не теряется молча, а попадёт в отчёт загрузки
     const oid=str(pick(rw,COL.oid)),rs=str(pick(rw,COL.rs));
     const key=id+'|'+oid+'|'+rs;if(seenOp.has(key))return;seenOp.add(key);
-    ops.push({o:id,p:num(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),t,
+    ops.push({o:id,p:pnum(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),t,
       pl:str(pick(rw,COL.pl)),pr:str(pick(rw,COL.oprod)),rs:(t==='mv'?'':rs),
       fr:str(pick(rw,COL.fr)),to:str(pick(rw,COL.to)),tm:str(pick(rw,COL.tm)),
       v:num(pick(rw,COL.v)),r:Math.abs(num(pick(rw,COL.r))),
@@ -4110,7 +4097,7 @@ function parseRows(rows,fileName){
   });
   if(!orders.length)throw new Error('Не удалось распознать ни одного заказа');
   const nm=fileName.replace(/\.(xlsx|xls)$/i,'')+(runId?` | run ${runId}`:'')+(cfg?` | cfg ${cfg}`:'');
-  return {name:nm,orders,ops};
+  return {name:nm,orders,ops,skippedOps};
 }
 
 /* ═══════════════ 16.1. ТОЧНЫЙ ПАРСЕР capacity_view_sp ═══════════════ */
@@ -4168,7 +4155,7 @@ function parseCapacityRows(rawRows){
     // 3. Период (ключ YYYY-MM и исходный номер)
     const rawPeriod = pickExact(['Период: наименование', 'Дата', 'Period', 'Date', 'Период', 'Ид периода', 'p']);
     const periodKey = normalizePeriodKey(rawPeriod) || normalizePeriodKey(pickExact(['Дата', 'Date']));
-    const pNum = num(rawPeriod);
+    const pNum = pnum(rawPeriod); // «P11» -> 11, а не 0
 
     // 4. Мощности из capacity_view_sp:
     let avail = num(pickExact(['Доступная мощность (итог)', 'Доступная мощность', 'Available_Capacity', 'ФРВ доступный (расчет)', 'Max_Capacity', 'avail']));
@@ -4334,7 +4321,7 @@ function parseResLocLocRows(rawRows){
 /* ═══════════════ 16.2. УМНАЯ МУЛЬТИФАЙЛОВАЯ ЗАГРУЗКА XLSX ═══════════════ */
 async function loadFiles(fileList){
   if(typeof XLSX==='undefined'){
-    alert('Парсер XLSX недоступен: нет доступа к CDN SheetJS.\n\nВарианты:\n1. Открыть страницу при наличии интернета.\n2. Скачать xlsx.full.min.js и подключить локально.');
+    alert('Парсер XLSX недоступен: не найден локальный файл assets/xlsx.full.min.js.\n\nВосстановите файл из репозитория либо временно подключите CDN-версию SheetJS.');
     return;
   }
   const files = Array.from(fileList);
@@ -4536,10 +4523,12 @@ async function loadFiles(fileList){
     const blockCount = DS.capacity.filter(c=>c.isBlocked).length;
     const capMsg = DS.hasCap ? ` | ⚡ Мощности и лимиты: ${DS.capacity.length} зап. (${bnCount} узких мест, ${blockCount} блокировок)` : '';
     const notes=[];
+    if(parsedDemand&&parsedDemand.skippedOps) notes.push(`пропущено ${nf(parsedDemand.skippedOps)} ${plural(parsedDemand.skippedOps,['строка','строки','строк'])} операций с неизвестным типом`);
     if(demandFiles.length>1) notes.push(`demand-лист найден в нескольких файлах (${demandFiles.join(', ')}), применён последний: ${demandFrom}`);
     if(failedFiles.length) notes.push(`не прочитаны: ${failedFiles.join('; ')}`);
     const noteMsg = notes.length ? `<br><span class="neg">Внимание: ${esc(notes.join(' · '))}</span>` : '';
     $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}${noteMsg}`;
+    STAT_PIN = true; // переживает переключения вкладок, пока не придёт новая загрузка или сброс
   } catch(err){
     $('#stat').innerHTML = `<span class="neg">Ошибка: ${esc(err.message)}</span>`;
     alert('Ошибка загрузки файлов:\n\n' + err.message);
@@ -4554,6 +4543,7 @@ function render(){
     $('#pgSub').textContent='';
     $('#main').innerHTML='<div class="empty"><h2>Данные не загружены</h2>'
       +'<p>Нажмите кнопку загрузки в шапке и выберите файл со структурой листа <code>marking_demand</code>.</p></div>';
+    STAT_PIN=false;
     $('#stat').innerHTML='Нет активного датасета';
     return;
   }
@@ -4568,13 +4558,13 @@ function render(){
   const V={ov:tabOV,dm:tabDM,tree:tabTREE,lg:tabLG,pd:tabPD,pc:tabPC,st:tabST,raw:tabRAW,vs:tabVS,dq:tabDQ};
   try{$('#main').innerHTML=(V[TAB]||tabOV)()}
   catch(err){$('#main').innerHTML=`<div class="empty"><h2 class="neg">Ошибка отрисовки блока</h2><p>${esc(err.message)}</p></div>`;console.error(err)}
-  if(!/Загружено/.test($('#stat').innerHTML))
+  if(!STAT_PIN)
     $('#stat').innerHTML=`${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций | периоды ${uq(DS.orders,o=>o.p).sort((a,b)=>a-b).join(', ')}`;
 }
 const bTheme=$('#bThemeToggle');
 if(bTheme)bTheme.onclick=()=>{
   THEME=(THEME==='light')?'dark':'light';
-  localStorage.setItem('inplan_theme',THEME);
+  ipSetTheme(THEME);
   syncThemeTokens();
   if(DS)render();
 };
@@ -4591,7 +4581,7 @@ $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.tar
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
 $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nСохранённые версии для сравнения останутся.'))return;
-  DS=null;TAB='ov';clearF();render();
+  DS=null;TAB='ov';STAT_PIN=false;clearF();render();
 };
 const toggleRail=()=>{
   const app=$('#app'),min=app.classList.toggle('min');
