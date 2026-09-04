@@ -2456,6 +2456,26 @@ function snap(ds){
 function getVers(){try{return JSON.parse(localStorage.getItem('sop_vers')||'[]')}catch(e){return []}}
 function saveVer(){const v=getVers();v.unshift(snap(DS));localStorage.setItem('sop_vers',JSON.stringify(v.slice(0,12)));
   alert('Версия сохранена: '+DS.name+'\nВсего версий: '+Math.min(v.length,12));if(TAB==='vs')render()}
+
+/* ── Автосохранение датасета: загруженные данные переживают перезагрузку страницы ──
+   DS — чистые данные (строки/числа, без Date), поэтому сериализуется целиком.
+   Формат версионируется (v:1): после смены структуры кода старая запись игнорируется. */
+const AUTOSAVE_KEY='sop_autosave_v1';
+function autosaveDS(){
+  if(!DS)return;
+  try{localStorage.setItem(AUTOSAVE_KEY,JSON.stringify({v:1,ts:new Date().toISOString(),name:DS.name,ds:DS}))}
+  catch(e){/* приватный режим / переполнение квоты (~5 МБ) — просто не сохраняем */
+    console.warn('Автосохранение не выполнено:',e)}
+}
+function restoreDS(){
+  try{
+    const raw=localStorage.getItem(AUTOSAVE_KEY);
+    if(!raw)return null;
+    const o=JSON.parse(raw);
+    if(!o||o.v!==1||!o.ds||!Array.isArray(o.ds.orders)||!Array.isArray(o.ds.ops))return null;
+    return o;
+  }catch(e){return null}
+}
 function fmtTs(ts){if(!ts)return '';const d=new Date(ts);const p=n=>String(n).padStart(2,'0');
   return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`}
 function tabVS(){
@@ -4529,6 +4549,7 @@ async function loadFiles(fileList){
     const noteMsg = notes.length ? `<br><span class="neg">Внимание: ${esc(notes.join(' · '))}</span>` : '';
     $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}${noteMsg}`;
     STAT_PIN = true; // переживает переключения вкладок, пока не придёт новая загрузка или сброс
+    autosaveDS(); // данные переживают перезагрузку страницы
   } catch(err){
     $('#stat').innerHTML = `<span class="neg">Ошибка: ${esc(err.message)}</span>`;
     alert('Ошибка загрузки файлов:\n\n' + err.message);
@@ -4580,7 +4601,8 @@ $('#bLoad').onclick=()=>$('#fIn').click();
 $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.target.files);e.target.value=''}};
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
 $('#bReset').onclick=()=>{
-  if(!confirm('Сбросить данные и обнулить все дашборды?\n\nСохранённые версии для сравнения останутся.'))return;
+  if(!confirm('Сбросить данные и обнулить все дашборды?\n\nАвтосохранение тоже будет удалено. Сохранённые версии для сравнения останутся.'))return;
+  try{localStorage.removeItem(AUTOSAVE_KEY)}catch(e){}
   DS=null;TAB='ov';STAT_PIN=false;clearF();render();
 };
 const toggleRail=()=>{
@@ -4609,9 +4631,14 @@ window.addEventListener('keydown',e=>{
   if(e.key==='Escape'){dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'))}
 });
 
-/* стартуем на демо-наборе */
-DS=build(SEED);
+/* стартуем с последнего автосохранения, иначе — на демо-наборе */
+const SAVED=restoreDS();
+DS=SAVED?SAVED.ds:build(SEED);
 render();
+if(SAVED){
+  $('#stat').innerHTML=`<span class="pos">Восстановлено автосохранение:</span> ${esc(SAVED.name||DS.name)}${SAVED.ts?' · '+fmtTs(SAVED.ts):''}<br>${DS.orders.length} заказов | ${DS.ops.length} операций`;
+  STAT_PIN=true;
+}
 </script>
 </body>
 </html>
