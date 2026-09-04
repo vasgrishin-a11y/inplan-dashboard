@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>S&OP Planning Result · In.Plan</title>
+<script>/* Ранняя установка темы — без мигания светлой темой при загрузке (FOUC) */
+try{document.documentElement.setAttribute('data-theme',localStorage.getItem('inplan_theme')||'light')}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -629,6 +631,9 @@ const uq=(a,f)=>[...new Set(a.map(f).filter(x=>x!==''&&x!=null))].sort();
 function grp(a,k,ag){const m=new Map();a.forEach(o=>{const key=k(o);if(!m.has(key))m.set(key,[]);m.get(key).push(o)});
   return [...m].map(([key,rows])=>({k:key,n:rows.length,rows,...ag(rows)}))}
 const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* Санитизация входных данных из XLSX: срез угловых скобок, без порчи &, кавычек и текста.
+   HTML-экранирование выполняется только при выводе — см. esc(). */
+const sany=v=>String(v==null?'':v).replace(/[<>]/g,'');
 /* Русское склонение: plural(3,['вариант','варианта','вариантов']) */
 const plural=(n,f)=>{const a=Math.abs(n)%100,b=a%10;
   if(a>10&&a<20)return f[2];if(b>1&&b<5)return f[1];if(b===1)return f[0];return f[2]};
@@ -651,13 +656,13 @@ function syncThemeTokens(){
   CH=isDark?{
     grid:'#2d2d3a',axis:'#8f92a4',lab:'#c4c6d4',txt:'#f1f2f6',sub:'#9a9cb0',
     surf:'#22222c',pane:'#292936',line:'#383849',dim:'#313142',dimTxt:'#6a6d80',
-    brand:'#a846ff',brandBg:'#3a195a',brandBd:'#6e2da8',
+    brand:'#a846ff',brandBg:'#3a195a',brandBd:'#6e2da8',accent:'#a846ff',
     ok:'#2dd468',warn:'#fb9e38',err:'#f84b5c',
     d1:'#647ae8',d2:'#38bdf8',d3:'#2dd468',d4:'#fb9e38',d5:'#f84b5c',d6:'#a78bfa'
   }:{
     grid:'#e8e7ee',axis:'#8c9096',lab:'#444647',txt:'#212529',sub:'#77787a',
     surf:'#ffffff',pane:'#f9f8fb',line:'#dedce5',dim:'#eaeaea',dimTxt:'#cfcfcf',
-    brand:'#9000ff',brandBg:'#f1e0ff',brandBd:'#e9ccff',
+    brand:'#9000ff',brandBg:'#f1e0ff',brandBd:'#e9ccff',accent:'#9000ff',
     ok:'#22bb55',warn:'#ff9a3b',err:'#f22a41',
     d1:'#2d3f8f',d2:'#1b98b8',d3:'#1ba84c',d4:'#ea8520',d5:'#e0243b',d6:'#7c5cd6'
   };
@@ -803,12 +808,17 @@ function dtable(sel,cols,rows,opts){
 
 /* ═══════════════ 4. ПОДГОТОВКА ДАТАСЕТА ═══════════════ */
 function build(src){
+  /* Данные хранятся «чистыми» — HTML-экранирование выполняется только в точках вывода
+     (dtable, дропдауны фильтров), иначе получаем двойное экранирование: «&amp;amp;» в таблицах,
+     испорченные CSV-экспорт, поиск и сортировку. От угловых скобок данные очищаются на входе,
+     чтобы значения из XLSX не могли сформировать теги в контекстах без экранирования
+     (тултипы canvas и т.п.). */
   const CLEAN=['loc','prod','cl'];
   const o=src.orders.map(r=>{const x={...r,chan:String(r.loc).startsWith('Sale_EX')?'EX':'RU'};
-    CLEAN.forEach(k=>x[k]=esc(x[k]));return x});
+    CLEAN.forEach(k=>x[k]=sany(x[k]));return x});
   const ops=src.ops.map(r=>{const x={...r,type:TMAP[r.t]||r.t,cost:(Math.abs(r.r)<=1?0:Math.abs(r.r)*r.v),
     stub:Math.abs(r.r)<=1,tclass:TCLASS[r.tm]||r.tm||'—'};
-    ['pl','pr','rs','fr','to','tm','vd','rt','oid'].forEach(k=>x[k]=esc(x[k]));return x});
+    ['pl','pr','rs','fr','to','tm','vd','rt','oid'].forEach(k=>x[k]=sany(x[k]));return x});
   const om=new Map(o.map(x=>[x.id,x]));
   ops.forEach(r=>{
     const x=om.get(r.o);
@@ -820,11 +830,11 @@ function build(src){
   
 const cap = (src.capacity || []).map(c=>({
   ...c,
-  pl: esc(c.pl),
-  rs: esc(c.rs),
-  rsName: esc(c.rsName || c.rs),
-  grp: esc(c.grp || ''),
-  altFor: esc(c.altFor || ''),
+  pl: sany(c.pl),
+  rs: sany(c.rs),
+  rsName: sany(c.rsName || c.rs),
+  grp: sany(c.grp || ''),
+  altFor: sany(c.altFor || ''),
   isBottleneck: c.isBottleneck !== undefined ? c.isBottleneck : (c.util >= 0.90),
   isCrit: c.isCrit !== undefined ? c.isCrit : (c.util >= 0.999)
 }));
@@ -1115,7 +1125,8 @@ function fOrders(excludeKey=null){
     if((excludeKey!=='pl' && F.pl.length) || (excludeKey!=='vd' && F.vd.length) ||
        (excludeKey!=='tm' && F.tm.length) || (excludeKey!=='nd' && F.nd.length)){
       const relOps = DS.ops.filter(r=>r.o===o.id);
-      if(excludeKey!=='pl' && F.pl.length && !relOps.some(r=>F.pl.includes(r.pl))) return false;
+      if(excludeKey!=='pl' && F.pl.length &&
+         !relOps.some(r=>F.pl.includes(r.pl)||F.pl.includes(r.fr)||F.pl.includes(r.to))) return false;
       if(excludeKey!=='vd' && F.vd.length && !relOps.some(r=>F.vd.includes(r.vd))) return false;
       if(excludeKey!=='tm' && F.tm.length && !relOps.some(r=>F.tm.includes(r.tm))) return false;
       if(excludeKey!=='nd' && F.nd.length &&
@@ -1129,7 +1140,8 @@ function fOps(excludeKey=null){
   const ids = new Set(ords.map(o=>o.id));
   return DS.ops.filter(r=>{
     if(!ids.has(r.o)) return false;
-    if(excludeKey!=='pl' && F.pl.length && !F.pl.includes(r.pl)) return false;
+    if(excludeKey!=='pl' && F.pl.length &&
+       !(F.pl.includes(r.pl)||(r.type==='movement'&&(F.pl.includes(r.fr)||F.pl.includes(r.to))))) return false;
     if(excludeKey!=='vd' && F.vd.length && !F.vd.includes(r.vd)) return false;
     if(excludeKey!=='tm' && F.tm.length && !F.tm.includes(r.tm)) return false;
     if(excludeKey!=='nd' && F.nd.length &&
@@ -1394,8 +1406,7 @@ function chPareto(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=
   const max=Math.max(...items.map(i=>i.v),1)*1.1;yAxis(x,w,h,p,max,fmt);
   const bw=(w-p.l-p.r)/Math.max(items.length,1);
   items.forEach((it,i)=>{const hh=(h-p.t-p.b)*it.v/max;
-    x.fillStyle=cums[i]<=.8?CH.d1:CH.n300||'#bfbfc1';
-    if(cums[i]>.8)x.fillStyle='#c9ccd1';
+    x.fillStyle=cums[i]<=.8?CH.d1:CH.dim;
     x.fillRect(p.l+bw*i+.5,h-p.b-hh,Math.max(bw-1.5,1),hh);
     reg(c,p.l+bw*i,p.t,bw,h-p.t-p.b,`<b>${it.k}</b><br>${fmt(it.v)}<br>Кумулятив: ${pc(cums[i])}`,cb?()=>cb(it):null)});
   x.save();x.beginPath();x.rect(p.l,p.t,w-p.l-p.r,h-p.t-p.b);x.clip();
@@ -1417,7 +1428,7 @@ function chHeat(id,h,rows,cols,mat,fmt,cb){const g=cv(id,h);if(!g)return;const{c
   rows.forEach((r,i)=>{x.fillStyle=CH.lab;x.textAlign='right';x.textBaseline='middle';x.font='11px '+FNT;
     x.fillText(String(r).slice(0,17),p.l-7,p.t+rh*(i+.5));
     cols.forEach((cl,j)=>{const v=mat[i][j],t=v/max;
-      x.fillStyle=v?rgba(CH.brand,.08+t*.80):'#fafbfc';
+      x.fillStyle=v?rgba(CH.brand,.08+t*.80):CH.pane;
       x.fillRect(p.l+cw*j+1,p.t+rh*i+1,cw-2,rh-2);
       x.strokeStyle=CH.grid;x.lineWidth=1;x.strokeRect(p.l+cw*j+1,p.t+rh*i+1,cw-2,rh-2);
       if(t>.30){x.fillStyle=t>.55?'#ffffff':CH.txt;x.textAlign='center';x.textBaseline='middle';
@@ -1679,7 +1690,7 @@ function chFlow(id,h,legsList,fmt,cb){
       x.restore();
     }
 
-    x.fillStyle=isSelected?(CH.brandBg||'#f1e0ff'):(isDim?'#fbfbfc':CH.surf);
+    x.fillStyle=isSelected?(CH.brandBg||'#f1e0ff'):(isDim?CH.pane:CH.surf);
     drawBox(x,n.x,n.y,n.w,n.h,4);x.fill();
 
     // Рамка карточки
@@ -1687,7 +1698,7 @@ function chFlow(id,h,legsList,fmt,cb){
       x.strokeStyle=CH.brand;
       x.lineWidth=2.4;
     }else if(isConnected&&activeSelectedNode){
-      x.strokeStyle=CH.accent||CH.brand;
+      x.strokeStyle=CH.accent;
       x.lineWidth=1.5;
     }else{
       x.strokeStyle=isDim?CH.dim:CH.line;
@@ -1814,6 +1825,8 @@ function tabOV(){
   const mptTrend=per.length>1?(per[per.length-1].mar/per[per.length-1].sal)/(per[0].mar/per[0].sal)-1:0;
   const top3=pr.sort((a,b)=>b.mar-a.mar).slice(0,3);
   const conc=S(top3,p=>p.mar)/mar;
+  const flatDemand=uq(D,o=>o.dem).length===1;
+  const flatPriceN=grp(D,o=>o.prod,v=>({u:uq(v,z=>z.price).length,p:uq(v,z=>z.p).length})).filter(x=>x.p>1&&x.u===1).length;
   return html+summary('Резюме: общий блок',[
     {t:'Выводы',i:[
       `Портфель даёт <span class="h">${bn(mar)}</span> валовой маржи при выручке ${bn(rev)} — маржинальность <span class="h">${pc(mar/rev)}</span>.`,
@@ -1822,9 +1835,13 @@ function tabOV(){
       `Маржа на тонну ${mptTrend<0?'снижается':'растёт'} на <span class="h">${pc(Math.abs(mptTrend))}</span> от первого к последнему периоду.`,
       `Структура затрат: ${byT.sort((a,b)=>b.c-a.c).map(t=>t.k+' '+pc(t.c/S(byT,z=>z.c))).join(' | ')}.`]},
     {t:'Аномалии и риски',i:[
-      `Цены реализации не индексируются по периодам, а закупочные тарифы растут — систематическое сжатие маржи, не связанное с операционной эффективностью.`,
+      flatPriceN
+        ?`Цены реализации не индексируются по периодам (${flatPriceN} ${plural(flatPriceN,['продукт','продукта','продуктов'])} с одинаковой ценой), а закупочные тарифы растут — систематическое сжатие маржи, не связанное с операционной эффективностью.`
+        :`Отпускные цены варьируются по периодам — признак ценовой индексации в модели.`,
       `Худшая позиция: <span class="h">#${worst.id} ${worst.prod}</span> — маржинальность ${pc(worst.mar/worst.rev)} при цене ${nf(worst.price)} ₽/т.`,
-      `Все заказы имеют План спроса ровно 10 000 т — признак синтетического набора; абсолютные значения не следует переносить в отчётность без проверки.`,
+      flatDemand
+        ?`Все заказы имеют одинаковый План спроса (${nf(D[0].dem)} т) — признак синтетического набора; абсолютные значения не следует переносить в отчётность без проверки.`
+        :`План спроса варьируется по заказам — набор не выглядит синтетическим.`,
       `Высокая концентрация маржи означает уязвимость: потеря одного продукта или клиента бьёт по результату непропорционально.`]},
     {t:'Рекомендации',i:[
       `Ввести индексацию отпускных цен хотя бы по инфляции закупок (8–12% в год) — иначе план систематически недооценивает маржу.`,
@@ -1860,6 +1877,12 @@ function tabDM(){
     .sort((a,b)=>b.mar-a.mar);
   const pr=grp(D,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/S(v,o=>o.sal),cpt:S(v,o=>o.cost)/S(v,o=>o.sal),
     mar:S(v,o=>o.mar),sal:S(v,o=>o.sal)})).sort((a,b)=>b.price-a.price);
+  /* Кэш сквозного анализа на время жизни вкладки: одна тяжёлая проверка на заказ,
+     а не на каждую перерисовку таблицы. Обнуляется вместе с перерендером вкладки
+     (смена фильтров/датасета пересоздаёт замыкание). */
+  const rcaCache=new Map();
+  const rcaFor=o=>{if(!rcaCache.has(o.id))rcaCache.set(o.id,CapacityRCA.analyzeOrderChain(o));return rcaCache.get(o.id)};
+
   const html=`
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
@@ -1894,10 +1917,17 @@ function tabDM(){
       v=>nf(v/1000,0)+'k ₽',it=>setF('pr',it.k));
     const rws=uq(D,o=>o.cl),cls=uq(D,o=>o.p).sort((a,b)=>a-b);
     chHeat('#d6',H('#d6',290,0.55),rws,cls.map(c=>'P'+c),rws.map(r=>cls.map(c=>S(D.filter(o=>o.cl===r&&o.p==c),o=>o.mar))),bn,
-      (r,c)=>{F.cl=[r];F.p=[String(c).slice(1)];render()});
+      (r,c)=>{const cl=String(r),p=String(c).slice(1);
+        const i=F.cl.indexOf(cl);i<0?F.cl.push(cl):F.cl.splice(i,1);
+        const j=F.p.indexOf(p);j<0?F.p.push(p):F.p.splice(j,1);
+        render()});
 
     dtable('#d7',[
-      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" onclick="event.stopPropagation();SELECTED_ORDER_ID=${o.id};TREE_FOCUSED_KEY=null;go('tree')">№${v} ↗</span>`},
+      /* Переходы — через data-атрибуты и делегирование (см. слушатель [data-goto-order] /
+         [data-rca-jump] внизу файла): без inline-JS, значения из файлов не попадают в код.
+         rcaFor кэширует analyzeOrderChain: раньше он вызывался дважды на строку при
+         каждой перерисовке таблицы (поиск, сортировка, фильтр) — до десятков тысяч вызовов. */
+      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}">№${v} ↗</span>`},
       {k:'loc',t:'Локация',left:1,flt:1},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
@@ -1907,22 +1937,18 @@ function tabDM(){
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:()=>'neg'},
       {k:'cov',t:'Покрытие',num:1,v:o=>o.dem?o.sal/o.dem:0,f:v=>pc(v),cls:v=>v>.5?'mid':'neg'},
       {k:'rca_prod',t:'Узкое место (пр-во)',left:1,flt:1,v:o=>{
-        const res = CapacityRCA.analyzeOrderChain(o);
+        const res = rcaFor(o);
         if(!res.hasData) return 'Базовый режим';
         return res.prodBottleneck ? `${res.prodBottleneck.rsName} (${pc(res.prodBottleneck.util)})` : 'В норме';
       },f:(v,o)=>{
-        const res = CapacityRCA.analyzeOrderChain(o);
+        const res = rcaFor(o);
         if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
         if(!res.prodBottleneck) return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
         const bn = res.prodBottleneck;
-        return `<span class="tag" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" 
-                      title="Клик: открыть цепочку производственных мощностей заказа" 
-                      onclick="event.stopPropagation();CapacityRCA.drillDownToOrder(${o.id}, '${bn.rs}', 'prod_res')">
-          🛑 ${bn.rsName}: ${pc(bn.util)} ↗
-        </span>`;
+        return `<span class="tag" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(bn.rs)}" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Клик: открыть цепочку производственных мощностей заказа">🛑 ${esc(bn.rsName)}: ${pc(bn.util)} ↗</span>`;
       }},
       {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{
-        const res = CapacityRCA.analyzeOrderChain(o);
+        const res = rcaFor(o);
         if(!res.hasData) return 'Базовый режим';
         if(res.logBottleneck){
           const bn = res.logBottleneck;
@@ -1931,7 +1957,7 @@ function tabDM(){
         // Различаем «проверено и свободно» и «лимиты маршрутов в модели не заданы»
         return (res.logChain && res.logChain.length) ? 'В норме' : 'Лимиты не заданы';
       },f:(v,o)=>{
-        const res = CapacityRCA.analyzeOrderChain(o);
+        const res = rcaFor(o);
         if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
         if(!res.logBottleneck){
           return (res.logChain && res.logChain.length)
@@ -1940,15 +1966,11 @@ function tabDM(){
         }
         const bn = res.logBottleneck;
         const icon = bn.isBlocked ? '⛔' : '📦';
-        const txt = bn.isBlocked ? `Блок: ${bn.rsName}` : `${bn.rsName}: ${pc(bn.util)}`;
-        const colStyle = bn.isBlocked 
-          ? 'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)' 
+        const txt = bn.isBlocked ? `Блок: ${esc(bn.rsName)}` : `${esc(bn.rsName)}: ${pc(bn.util)}`;
+        const colStyle = bn.isBlocked
+          ? 'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
           : 'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
-        return `<span class="tag" style="${colStyle};font-weight:600;cursor:pointer" 
-                      title="Клик: открыть цепочку логистических мощностей и ограничений маршрутов заказа" 
-                      onclick="event.stopPropagation();CapacityRCA.drillDownToOrder(${o.id}, '${bn.rs}', 'log_res')">
-          ${icon} ${txt} ↗
-        </span>`;
+        return `<span class="tag" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(bn.rs)}" style="${colStyle};font-weight:600;cursor:pointer" title="Клик: открыть цепочку логистических мощностей и ограничений маршрутов заказа">${icon} ${txt} ↗</span>`;
       }},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>o.unm*o.mpt,f:v=>mln(v),cls:()=>'neg'}
     ],D.filter(o=>o.unm>0),{key:'dm_def',sort:'lm',dir:'desc',h:340,csv:1,name:'deficits'});
@@ -1983,12 +2005,10 @@ function tabLG(){
 
   // Классификатор контура плеча
   const getLegLayer=l=>{
-    const isOut = l.to.startsWith('Sale_')||l.to.startsWith('Dispatch_')||l.fr.startsWith('Dispatch_')||l.fr.startsWith('Port_')||l.to.startsWith('Port_');
-    const isPlant = l.fr.startsWith('Plant_')&&l.to.startsWith('Plant_');
-    const isIn = l.fr.startsWith('Vendor_');
-    if(isOut)return 'distrib';
-    if(isPlant)return 'interplant';
-    if(isIn)return 'inbound';
+    // Порядок проверок важен: плечо «поставщик → порт» — снабжение сырьём,
+    // а не дистрибуция (раньше проверка Port перехватывала его в isOut)
+    if(l.fr.startsWith('Vendor_'))return 'inbound';
+    if(l.fr.startsWith('Plant_')&&l.to.startsWith('Plant_'))return 'interplant';
     return 'distrib';
   };
 
@@ -2257,12 +2277,16 @@ function tabPD(){
       `Глубина разузлования достигает <span class="h">${Math.max(...O.map(r=>r.dp||1))}</span> уровней — стоимость накапливается каскадно, локальная экономия на нижнем уровне мультиплицируется вверх.`,
       multi.length?`Продукты, выпускаемые на нескольких площадках: ${multi.slice(0,3).map(m=>m.k).join(' | ')} — есть база для сравнения себестоимости заводов.`:`Мультизаводского выпуска одного продукта под фильтром не выявлено.`]},
     {t:'Аномалии',i:[
-      `<span class="h">Мощности ресурсов отсутствуют в данных</span> — можно измерить только потреблённые машино-часы, но не загрузку. Узкие места формально не определяются.`,
+      DS.hasCap&&DS.capacity.length
+        ?`Мощности загружены (${DS.capacity.length} записей, узких мест ≥90%: ${DS.capacity.filter(c=>c.isBottleneck).length}). Сверяйте баланс по площадкам в реестре мощностей выше — строки с загрузкой 100%+ требуют расшивки.`
+        :`<span class="h">Мощности ресурсов отсутствуют в данных</span> — можно измерить только потреблённые машино-часы, но не загрузку. Узкие места формально не определяются.`,
       `Часть производственных операций имеет ставку 0 ₽/т (например, маршруты Scrap) — это либо безвозмездный возврат, либо пропуск данных; влияет на распределение себестоимости.`,
       `Мультиресурсные операции дублируют строку с тем же объёмом — при наивном суммировании объём производства завышается.`,
       `Поле «Источник поставки» фактически содержит идентификатор рецепта, а не поставщика — риск неверной интерпретации в отчётах.`]},
     {t:'Рекомендации',i:[
-      `Добавить в выгрузку <span class="h">доступную мощность ресурса</span> по периодам — это откроет процент утилизации, выявление узких мест и обоснование инвестиций.`,
+      DS.hasCap&&DS.capacity.length
+        ?`Держать <span class="h">capacity_view_sp актуальным</span>: пересчитывать узкие места при каждом прогоне и разбирать ресурсы с загрузкой ≥90% до согласования плана.`
+        :`Добавить в выгрузку <span class="h">доступную мощность ресурса</span> по периодам — это откроет процент утилизации, выявление узких мест и обоснование инвестиций.`,
       `Для продуктов с мультизаводским выпуском построить регулярное сравнение передела и перевести объём на площадку с меньшей полной себестоимостью с учётом логистики до клиента.`,
       `Провести аудит альтернативных рецептов одного продукта: разница в ₽/т между маршрутами — прямой резерв экономии без инвестиций.`,
       `Переименовать поля: «Источник поставки» в «Маршрут или рецепт», разделить «Ресурс» на производственный ресурс и локацию — это снизит ошибки аналитики.`]}]);
@@ -2684,7 +2708,9 @@ function tabDQ(){
       `Индекс качества данных — <span class="h">${score} из 100</span>: ${errs} критических нарушений, ${warns} предупреждений, ${oks} проверок пройдено.`,
       `Базовые финансовые инварианты (баланс спроса, выручка, маржа) ${bad1.length||bad2.length||bad3.length?'<span class="h">нарушены</span>. Использовать данные для принятия решений нельзя до исправления':'соблюдены. Агрегированные финансовые показатели можно считать достоверными'}.`,
       `Стоимостное покрытие операций: <span class="h">${pc(1-stubRate)}</span>. Остаток приходится на строки с тарифом-заглушкой, поэтому полная себестоимость цепочки занижена.`,
-      `Ключевой пробел для планирования — <span class="h">отсутствие мощностей ресурсов</span>. Без них производственный блок остаётся описательным, узкие места не выявляются.`]},
+      DS.hasCap&&DS.capacity.length
+        ?`Мощности и лимиты загружены (${DS.capacity.length} записей, узких мест: ${DS.capacity.filter(c=>c.isBottleneck).length}) — утилизация рассчитывается; следите, чтобы файл capacity_view_sp сопровождал каждый прогон.`
+        :`Ключевой пробел для планирования — <span class="h">отсутствие мощностей ресурсов</span>. Без них производственный блок остаётся описательным, узкие места не выявляются.`]},
     {t:'Приоритетные действия в порядке влияния',i:topRec.map((c,i)=>
       `<b>${i+1}. ${c.tag}</b> — ${c.rec}`)},
     {t:'Как улучшить процесс подготовки данных',i:[
@@ -2860,13 +2886,13 @@ function drawTreeNodes(c,x,nodes,lineage,isCost){
       }
     }
 
-    x.fillStyle=dim?'#fbfbfc':(bnInfo && bnInfo.isBlocked ? rgba(CH.err,0.06) : CH.surf);
+    x.fillStyle=dim?CH.pane:(bnInfo && bnInfo.isBlocked ? rgba(CH.err,0.06) : CH.surf);
     drawBox(x,n.x,n.y,n.w,n.h,4);x.fill();
     
     if(focus){x.strokeStyle=CH.brand;x.lineWidth=2.5}
     else if(bnInfo && bnInfo.isBlocked){x.strokeStyle=CH.err;x.lineWidth=1.8}
     else if(bnInfo && bnInfo.util>=0.90){x.strokeStyle=CH.warn;x.lineWidth=1.5}
-    else if(part){x.strokeStyle=CH.accent||CH.brand;x.lineWidth=1.8}
+    else if(part){x.strokeStyle=CH.accent;x.lineWidth=1.8}
     else{x.strokeStyle=dim?CH.dim:CH.line;x.lineWidth=1}
     x.stroke();
 
@@ -3701,7 +3727,11 @@ function tabTREE(){
   const cPd=curOpsAll.filter(o=>o.type==='production').length;
   const cPc=curOpsAll.filter(o=>o.type==='procurement').length;
   const cSt=curOpsAll.filter(o=>o.type==='stock').length;
-  const ordOptions=orders.slice(0,100).map(o=>
+  // Селект: первые 100 заказов + всегда выбранный (иначе drill-down на заказ вне топ-100
+  // показывал бы в селекте первый пункт, а KPI и граф — другой заказ)
+  const ordPool=orders.slice(0,100);
+  if(curOrd&&!ordPool.some(o=>o.id===curOrd.id))ordPool.push(curOrd);
+  const ordOptions=ordPool.slice().sort((a,b)=>a.id-b.id).map(o=>
     `<option value="${o.id}" ${o.id===curOrd.id?'selected':''}>Заказ №${o.id} | ${o.prod} | ${o.cl} | P${o.p} | маржа ${mln(o.mar)}</option>`).join('');
   const K=[
     ['Выбранный заказ',`№${curOrd.id} · ${curOrd.prod}`,curOrd.cl,''],
@@ -3996,16 +4026,55 @@ const COL={
   rc:['resource_consumption_operation'],run:['run_id'],cfg:['config_id'],dsid:['dataset_id']
 };
 function pick(row,keys){for(const k of keys)if(row[k]!==undefined&&row[k]!==null&&row[k]!=='')return row[k];return undefined}
-const num=v=>{if(v===undefined||v===null||v==='')return 0;
-  const n=typeof v==='number'?v:parseFloat(String(v).replace(/\s/g,'').replace(',','.'));return isFinite(n)?n:0};
+/* Число из ячейки XLSX: пробелы (вкл. неразрывные) — разделители групп и удаляются.
+   Запятая — десятичный разделитель, только если она одна и после неё 1-2 цифры;
+   несколько запятых или 3+ цифры после запятой — разделители групп (1,234,567 -> 1234567). */
+const num=v=>{
+  if(v===undefined||v===null||v==='')return 0;
+  if(typeof v==='number')return isFinite(v)?v:0;
+  let s=String(v).trim().replace(/[\s\u00A0\u202F]/g,'');
+  if(!s)return 0;
+  const hasComma=s.includes(','),hasDot=s.includes('.');
+  if(hasComma&&hasDot){
+    // Оба разделителя: последний встреченный — десятичный
+    if(s.lastIndexOf(',')>s.lastIndexOf('.')){s=s.replace(/\./g,'').replace(',','.')}
+    else{s=s.replace(/,/g,'')}
+  }else if(hasComma){
+    const parts=s.split(',');
+    if(parts.length===2&&parts[1].length<=2){s=parts[0]+'.'+parts[1]}
+    else{s=s.replace(/,/g,'')}
+  }
+  const n=parseFloat(s);
+  return isFinite(n)?n:0;
+};
 const str=v=>v===undefined||v===null?'':String(v).trim();
-function fmtDate(v){
-  if(v instanceof Date)return v.toISOString().slice(0,7);
-  if(typeof v==='number'){const d=new Date(Date.UTC(1899,11,30)+v*864e5);return d.toISOString().slice(0,7)}
-  const s=str(v),m=s.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/);
-  if(m)return m[3]+'-'+String(m[1]).padStart(2,'0');
-  const m2=s.match(/(\d{4})-(\d{2})/);return m2?m2[0]:s.slice(0,7);
+/* Ключ периода YYYY-MM из даты любого вида — единая точка разбора дат (fmtDate делегирует сюда).
+   Русская выгрузка — DD.MM.YYYY (месяц — вторая группа), английская — MM/DD/YYYY (однозначно,
+   когда вторая группа не может быть месяцем, >12), ISO — YYYY-MM-DD, Excel — серийный номер. */
+function normalizePeriodKey(val){
+  if(val===undefined||val===null||val==='')return '';
+  if(val instanceof Date)return val.getUTCFullYear()+'-'+String(val.getUTCMonth()+1).padStart(2,'0');
+  if(typeof val==='number'){
+    if(!isFinite(val))return '';
+    const d=new Date(Date.UTC(1899,11,30)+val*864e5);
+    return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0');
+  }
+  const s=String(val).trim();
+  if(!s)return '';
+  let m=s.match(/^(\d{4})-(\d{1,2})/);            // ISO: 2026-04 / 2026-04-15
+  if(m)return m[1]+'-'+m[2].padStart(2,'0');
+  m=s.match(/^(\d{4})(\d{2})$/);                  // 202604
+  if(m)return m[1]+'-'+m[2];
+  m=s.match(/^(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})/); // 01.04.2026 | 03/15/2026
+  if(m){
+    const a=+m[1],b=+m[2],y=m[3];
+    // Месяц — вторая группа (DD.MM.YYYY, русская традиция); переворот только если вторая > 12
+    const mo=b>12?a:b;
+    return y+'-'+String(mo).padStart(2,'0');
+  }
+  return s.slice(0,7);
 }
+function fmtDate(v){return normalizePeriodKey(v)||''}
 function parseRows(rows,fileName){
   if(!rows.length)throw new Error('Лист пуст');
   const first=rows[0];
@@ -4045,24 +4114,7 @@ function parseRows(rows,fileName){
 }
 
 /* ═══════════════ 16.1. ТОЧНЫЙ ПАРСЕР capacity_view_sp ═══════════════ */
-function normalizePeriodKey(val){
-  if(val === undefined || val === null || val === '') return '';
-  const s = String(val).trim();
-  // Формат YYYYMM (например, 202604 -> 2026-04)
-  const mYm = s.match(/^(\d{4})(\d{2})$/);
-  if(mYm) return `${mYm[1]}-${mYm[2]}`;
-  // Формат MM/DD/YYYY или DD/MM/YYYY
-  const mDate = s.match(/(\d{1,2})[\/\.](\d{1,2})[\/\.](\d{4})/);
-  if(mDate){
-    const yr = mDate[3];
-    const mo = String(mDate[1]).padStart(2,'0');
-    return `${yr}-${mo}`;
-  }
-  // Формат YYYY-MM
-  const mIso = s.match(/^(\d{4})-(\d{2})/);
-  if(mIso) return mIso[0];
-  return s;
-}
+/* normalizePeriodKey определён выше, у парсера marking_demand — единая точка разбора дат. */
 
 function parseCapacityRows(rawRows){
   if(!rawRows || !rawRows.length) return [];
@@ -4297,16 +4349,22 @@ async function loadFiles(fileList){
         const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
         resolve({file, wb});
       } catch(err) {
-        reject(err);
+        reject({file, reason: err});
       }
     };
-    fr.onerror = () => reject(new Error(`Ошибка чтения ${file.name}`));
+    fr.onerror = () => reject({file, reason: new Error('Ошибка чтения файла')});
     fr.readAsArrayBuffer(file);
   });
 
   try {
-    const results = await Promise.all(files.map(readOne));
+    // allSettled: ошибка одного файла не отменяет загрузку остальных
+    const settled = await Promise.allSettled(files.map(readOne));
+    const results = settled.filter(s=>s.status==='fulfilled').map(s=>s.value);
+    const failedFiles = settled.filter(s=>s.status==='rejected')
+      .map(s=>`${s.reason.file.name} — ${s.reason.reason && s.reason.reason.message || 'неизвестная ошибка'}`);
     let parsedDemand = null;
+    let demandFrom = '';
+    const demandFiles = [];
     let parsedCap = [];
     let parsedResLoc = [];
 
@@ -4328,12 +4386,16 @@ async function loadFiles(fileList){
 
       if(demandSheet){
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[demandSheet],{defval:'',raw:true});
+        demandFiles.push(file.name);
         parsedDemand = parseRows(rows, file.name);
+        demandFrom = file.name;
       } else if(!capSheet && !resLocSheet && !parsedDemand){
         const firstSheet = sheetNames[0];
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet],{defval:'',raw:true});
         if(rows.length && (rows[0]['order_id'] !== undefined || rows[0]['План продаж'] !== undefined)){
+          demandFiles.push(file.name);
           parsedDemand = parseRows(rows, file.name);
+          demandFrom = file.name;
         } else if(rows.length && (rows[0]['const'] !== undefined || rows[0]['loc_fr'] !== undefined)){
           parsedResLoc = parsedResLoc.concat(parseResLocLocRows(rows));
         } else {
@@ -4452,23 +4514,32 @@ async function loadFiles(fileList){
       if(!DS) DS = build(SEED);
       DS.capacity = parsedCap.map(c=>({
         ...c,
-        pl: esc(c.pl),
-        rs: esc(c.rs),
-        rsName: esc(c.rsName || c.rs),
-        grp: esc(c.grp || '')
+        pl: sany(c.pl),
+        rs: sany(c.rs),
+        rsName: sany(c.rsName || c.rs),
+        grp: sany(c.grp || '')
       }));
       DS.hasCap = true;
     } else {
-      throw new Error('Не удалось распознать данные заказов или мощностей.');
+      const why = failedFiles.length ? ` Причины: ${failedFiles.join('; ')}.` : '';
+      throw new Error('Не удалось распознать данные заказов или мощностей.'+why);
     }
 
+    // Новый датасет — старые фильтры/поиск/страницы таблиц невалидны: сбрасываем
+    Object.keys(TBL).forEach(k=>delete TBL[k]);
+    Object.keys(POPQ).forEach(k=>delete POPQ[k]);
+    SELECTED_ORDER_ID=null; TREE_FOCUSED_KEY=null;
     clearF();
     render();
 
     const bnCount = DS.capacity.filter(c=>c.isBottleneck).length;
     const blockCount = DS.capacity.filter(c=>c.isBlocked).length;
     const capMsg = DS.hasCap ? ` | ⚡ Мощности и лимиты: ${DS.capacity.length} зап. (${bnCount} узких мест, ${blockCount} блокировок)` : '';
-    $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}`;
+    const notes=[];
+    if(demandFiles.length>1) notes.push(`demand-лист найден в нескольких файлах (${demandFiles.join(', ')}), применён последний: ${demandFrom}`);
+    if(failedFiles.length) notes.push(`не прочитаны: ${failedFiles.join('; ')}`);
+    const noteMsg = notes.length ? `<br><span class="neg">Внимание: ${esc(notes.join(' · '))}</span>` : '';
+    $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}${noteMsg}`;
   } catch(err){
     $('#stat').innerHTML = `<span class="neg">Ошибка: ${esc(err.message)}</span>`;
     alert('Ошибка загрузки файлов:\n\n' + err.message);
@@ -4507,6 +4578,14 @@ if(bTheme)bTheme.onclick=()=>{
   syncThemeTokens();
   if(DS)render();
 };
+/* Делегированные переходы из таблиц: номера заказов и RCA-бейджи (data-атрибуты
+   вместо inline-onclick — значения из загруженных файлов не исполняются как код) */
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-goto-order]');
+  if(g){SELECTED_ORDER_ID=+g.dataset.gotoOrder;TREE_FOCUSED_KEY=null;go('tree');return}
+  const j=e.target.closest('[data-rca-jump]');
+  if(j){CapacityRCA.drillDownToOrder(+j.dataset.ord,j.dataset.rs,j.dataset.mode||'prod_res')}
+});
 $('#bLoad').onclick=()=>$('#fIn').click();
 $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.target.files);e.target.value=''}};
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
@@ -4536,7 +4615,8 @@ if(window.ResizeObserver){
   ro.observe(document.getElementById('main'));
 }
 window.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){dtpHide();clearF();if(DS)render()}
+  // Escape закрывает только всплывающие панели; сброс фильтров — отдельной кнопкой «Сбросить»
+  if(e.key==='Escape'){dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'))}
 });
 
 /* стартуем на демо-наборе */
