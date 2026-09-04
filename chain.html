@@ -4,10 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Визуализация сети поставок · In.Plan</title>
+<script>/* Ранняя установка темы — без мигания светлой темой при загрузке (FOUC) */
+try{document.documentElement.setAttribute('data-theme',localStorage.getItem('inplan_theme')||'light')}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<!-- SheetJS вендорен локально: страница работает без доступа к CDN -->
+<script src="assets/xlsx.full.min.js"></script>
+<!-- Общие утилиты (esc, num, pnum, xstr, тема, полифилл roundRect) — общие с index.html -->
+<script src="assets/inplan-common.js"></script>
 <style>
 /* ═══════════════ ДИЗАЙН-СИСТЕМА In.Plan ═══════════════ */
 :root {
@@ -590,7 +595,7 @@ tbody tr:hover { background: var(--scp-accent-bg); }
 
 <!-- ═══════════════ ШАПКА ПАНЕЛИ ═══════════════ -->
 <header>
-  <button class="icon-btn" id="bHdrToggleSb" title="Свернуть / развернуть меню узлов сети">
+  <button class="icon-btn" id="bHdrToggleSb" title="Свернуть / развернуть меню узлов сети" aria-label="Свернуть или развернуть меню узлов сети">
     <svg viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
   </button>
   <div class="inplan-badge" id="bLogo" title="In.Plan SNP Model">
@@ -633,7 +638,7 @@ tbody tr:hover { background: var(--scp-accent-bg); }
       <button id="btnModeMatrix">Матрица</button>
     </div>
     
-    <button class="icon-btn" id="bTheme" title="Сменить тему"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+    <button class="icon-btn" id="bTheme" title="Сменить тему" aria-label="Сменить тему"><svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
     
     <button class="icon-btn p" id="bUpload" title="Загрузить файлы XLSX (sku, res, prodsource, tlane)">
       <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -713,6 +718,8 @@ tbody tr:hover { background: var(--scp-accent-bg); }
 
 <!-- ═══════════════ СКРИПТЫ МОДЕЛИ И ДВИЖКА ═══════════════ -->
 <script>
+/* esc, sany, xstr, num, pnum и полифилл roundRect подключены из assets/inplan-common.js */
+
 /* ═══════════════ 1. СТРУКТУРА ДАННЫХ И ДЕМО-НАБОР ═══════════════ */
 const MODEL = {
   sku: [],
@@ -785,39 +792,70 @@ function parseWorkbookSheets(wb) {
   const rawPds = getSheetData(['prodsource', 'pds', 'рецепт', 'спецификация']);
   const rawTlane = getSheetData(['tlane', 'transport', 'плечи', 'отношения']);
 
-  if (rawSku) MODEL.sku = rawSku.map(r => ({
-    item: r.item || r['Продукт'] || r['Материал'] || '',
-    loc: r.loc || r['Локация'] || r['Склад'] || '',
-    res: r['Ресурс: код'] || r.res || r['Ресурс'] || '',
-    minlotsize: parseFloat(r.minlotsize || r.min_lot || 0),
-    maxlotsize: parseFloat(r.maxlotsize || r.max_lot || 0)
-  })).filter(x => x.item && x.loc);
+  /* Доступ к колонкам без привязки к регистру, пробелам и подчёркиваниям:
+     «Item », «ITEM», «item», «Продукт» находятся одинаково (реальные экспорты
+     часто отличаются регистром и хвостовыми пробелами в заголовках). */
+  const col = (raw) => {
+    const nr = {};
+    Object.keys(raw).forEach(k => { nr[normalizeKey(k)] = raw[k]; });
+    return (...names) => {
+      for (const n of names) {
+        const v = nr[normalizeKey(n)];
+        if (v !== undefined && v !== null && v !== '') return v;
+      }
+      return undefined;
+    };
+  };
 
-  if (rawRes) MODEL.res = rawRes.map(r => ({
-    id: r['Ресурс'] || r.res || r.id || '',
-    loc: r['Локация: код'] || r.loc || '',
-    name: r['Ресурс: наименование'] || r.name || '',
-    type: String(r['Тип Ресурса'] || r.type || '1'),
-    capuom: r.capuom || 'H',
-    capacity: parseFloat(r.defaultbucketcapacity || r.capacity || 24)
-  })).filter(x => x.id);
+  if (rawSku) MODEL.sku = rawSku.map(raw => {
+    const g = col(raw);
+    return {
+      item: xstr(g('item', 'Продукт', 'Материал')),
+      loc: xstr(g('loc', 'Локация', 'Склад')),
+      res: xstr(g('Ресурс: код', 'res', 'Ресурс')),
+      minlotsize: num(g('minlotsize', 'min_lot')),
+      maxlotsize: num(g('maxlotsize', 'max_lot'))
+    };
+  }).filter(x => x.item && x.loc);
 
-  if (rawPds) MODEL.prodsource = rawPds.map(r => ({
-    prodsource: r.prodsource || r['Рецепт'] || r.id || '',
-    item: r.item || r['Продукт'] || '',
-    loc: r.loc || r['Локация'] || '',
-    prodver: r.prodver || r['Версия'] || '',
-    prio: parseInt(r.prodsourceprio || 1),
-    outputqty: parseFloat(r.outputqty || 1)
-  })).filter(x => x.item && x.loc);
+  if (rawRes) MODEL.res = rawRes.map(raw => {
+    const g = col(raw);
+    const cap = num(g('defaultbucketcapacity', 'capacity', 'Мощность'));
+    return {
+      id: xstr(g('Ресурс', 'res', 'id')),
+      loc: xstr(g('Локация: код', 'loc')),
+      name: xstr(g('Ресурс: наименование', 'name')),
+      type: xstr(g('Тип Ресурса', 'type')) || '1',
+      capuom: xstr(g('capuom')) || 'H',
+      capacity: cap > 0 ? cap : 24
+    };
+  }).filter(x => x.id);
 
-  if (rawTlane) MODEL.tlane = rawTlane.map(r => ({
-    item: r.item || r['Продукт'] || '',
-    locfr: r.locfr || r['Откуда'] || '',
-    locto: r.locto || r['Куда'] || '',
-    mot: r.mot || r['Вид транспорта'] || 'TRUCK',
-    leadtime: parseFloat(r.tleadtime || r.leadtime || 1)
-  })).filter(x => x.locfr && x.locto);
+  if (rawPds) MODEL.prodsource = rawPds.map(raw => {
+    const g = col(raw);
+    const prio = pnum(g('prodsourceprio', 'prio', 'Приоритет'));
+    const oq = num(g('outputqty', 'Норма'));
+    return {
+      prodsource: xstr(g('prodsource', 'Рецепт', 'id')),
+      item: xstr(g('item', 'Продукт')),
+      loc: xstr(g('loc', 'Локация')),
+      prodver: xstr(g('prodver', 'Версия')),
+      prio: prio > 0 ? prio : 1, // NaN/пусто -> 1; числовые значения (включая 0) сохраняются как есть в pnum, 0 нормализуем к 1
+      outputqty: oq > 0 ? oq : 1
+    };
+  }).filter(x => x.item && x.loc);
+
+  if (rawTlane) MODEL.tlane = rawTlane.map(raw => {
+    const g = col(raw);
+    const lt = num(g('tleadtime', 'leadtime', 'Срок'));
+    return {
+      item: xstr(g('item', 'Продукт')),
+      locfr: xstr(g('locfr', 'Откуда')),
+      locto: xstr(g('locto', 'Куда')),
+      mot: xstr(g('mot', 'Вид транспорта')) || 'TRUCK',
+      leadtime: lt > 0 ? lt : 1
+    };
+  }).filter(x => x.locfr && x.locto);
 
   FILTERS.items = [];
   FILTERS.pds = [];
@@ -995,6 +1033,7 @@ function drawGraph() {
   const canvas = document.getElementById('graphCanvas');
   if (!canvas || VIEW_MODE !== 'graph') return;
   const ctx = canvas.getContext('2d');
+  if (!ctx) return; // нет 2D-контекста (например, среда без canvas) — не падаем
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
@@ -1177,16 +1216,16 @@ function renderMatrixView() {
   });
 
   let html = '<table class="matrix-tbl"><thead><tr><th>Откуда \\ Куда</th>';
-  toLocs.forEach(to => html += `<th>${to}</th>`);
+  toLocs.forEach(to => html += `<th>${esc(to)}</th>`);
   html += '</tr></thead><tbody>';
 
   fromLocs.forEach(fr => {
-    html += `<tr><td style="font-weight:600;background:var(--scp-surface-2);text-align:left">${fr}</td>`;
+    html += `<tr><td style="font-weight:600;background:var(--scp-surface-2);text-align:left">${esc(fr)}</td>`;
     toLocs.forEach(to => {
       const lanes = mat[`${fr}__${to}`];
       if (lanes && lanes.length) {
         const title = lanes.map(l => `${l.item} (${l.mot}) - ${l.leadtime}дн`).join('\n');
-        html += `<td class="matrix-cell-active" title="${title}">${lanes.length} плеч</td>`;
+        html += `<td class="matrix-cell-active" title="${esc(title)}">${lanes.length} плеч</td>`;
       } else {
         html += `<td style="color:var(--scp-text-dis)">—</td>`;
       }
@@ -1219,9 +1258,9 @@ function renderSidebarNodes() {
     groups[cat].forEach(n => {
       const isChecked = FILTERS.nodes.includes(n.id);
       html += `<label class="sb-item ${isChecked ? 'on' : ''}">
-        <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleFilterNode('${n.id}')">
+        <input type="checkbox" ${isChecked ? 'checked' : ''} data-node="${esc(n.id)}">
         <span class="sb-item-icon">${n.icon}</span>
-        <span>${n.id}</span>
+        <span>${esc(n.id)}</span>
       </label>`;
     });
   });
@@ -1239,8 +1278,8 @@ function renderFilterPills() {
   allItems.filter(it => !qI || it.toLowerCase().includes(qI)).forEach(it => {
     const on = FILTERS.items.includes(it);
     iHtml += `<label class="pop-item ${on ? 'on' : ''}">
-      <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleFilterItem('${it}')">
-      <span>${it}</span>
+      <input type="checkbox" ${on ? 'checked' : ''} data-item="${esc(it)}">
+      <span>${esc(it)}</span>
     </label>`;
   });
   listItemsEl.innerHTML = iHtml || '<div style="padding:8px;color:var(--scp-text-3)">Не найдено</div>';
@@ -1260,8 +1299,8 @@ function renderFilterPills() {
   allPds.filter(p => !qP || p.toLowerCase().includes(qP)).forEach(p => {
     const on = FILTERS.pds.includes(p);
     pHtml += `<label class="pop-item ${on ? 'on' : ''}">
-      <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleFilterPds('${p}')">
-      <span>${p}</span>
+      <input type="checkbox" ${on ? 'checked' : ''} data-pds="${esc(p)}">
+      <span>${esc(p)}</span>
     </label>`;
   });
   listPdsEl.innerHTML = pHtml || '<div style="padding:8px;color:var(--scp-text-3)">Не найдено</div>';
@@ -1269,7 +1308,7 @@ function renderFilterPills() {
   const bP = document.getElementById('badgePds');
   bP.textContent = FILTERS.pds.length;
   bP.classList.toggle('hide', !FILTERS.pds.length);
-  document.getElementById('lblCurPds').textContent = FILTERS.pds.length === 0 ? 'Спецификации: Все' : (FILTERS.pds.length === 1 ? FILTERS.pds[0].slice(0,12)+'…' : `Спецификации (${FILTERS.pds.length})`);
+  document.getElementById('lblCurPds').textContent = FILTERS.pds.length === 0 ? 'Спецификации: Все' : (FILTERS.pds.length === 1 ? esc(FILTERS.pds[0].slice(0,12))+'…' : `Спецификации (${FILTERS.pds.length})`);
   document.getElementById('bPdsPop').classList.toggle('on', !!FILTERS.pds.length);
 
   // Кнопка сброса
@@ -1291,31 +1330,31 @@ function renderBottomTable() {
   if (ACTIVE_TAB === 'sku') {
     html = `<table><thead><tr><th>Продукт (item)</th><th>Локация (loc)</th><th>Складской ресурс</th><th>Мин. партия</th><th>Макс. партия</th></tr></thead><tbody>`;
     sku.forEach(r => {
-      html += `<tr><td><b>${r.item}</b></td><td>${r.loc}</td><td>${r.res || '—'}</td><td>${r.minlotsize || '—'}</td><td>${r.maxlotsize || '—'}</td></tr>`;
+      html += `<tr><td><b>${esc(r.item)}</b></td><td>${esc(r.loc)}</td><td>${esc(r.res) || '—'}</td><td>${r.minlotsize || '—'}</td><td>${r.maxlotsize || '—'}</td></tr>`;
     });
     html += '</tbody></table>';
   } else if (ACTIVE_TAB === 'tlane') {
     html = `<table><thead><tr><th>Продукт</th><th>Откуда (locfr)</th><th>Куда (locto)</th><th>Транспорт (mot)</th><th>Срок доставки</th></tr></thead><tbody>`;
     tlane.forEach(r => {
-      html += `<tr><td><b>${r.item}</b></td><td>${r.locfr}</td><td>${r.locto}</td><td><span class="tag-ok">${r.mot}</span></td><td>${r.leadtime} дн.</td></tr>`;
+      html += `<tr><td><b>${esc(r.item)}</b></td><td>${esc(r.locfr)}</td><td>${esc(r.locto)}</td><td><span class="tag-ok">${esc(r.mot)}</span></td><td>${r.leadtime} дн.</td></tr>`;
     });
     html += '</tbody></table>';
   } else if (ACTIVE_TAB === 'res') {
     html = `<table><thead><tr><th>Код ресурса</th><th>Локация</th><th>Наименование / Передел</th><th>Тип</th><th>Ед. изм.</th><th>Мощность/сут</th></tr></thead><tbody>`;
     res.forEach(r => {
-      html += `<tr><td><b>${r.id}</b></td><td>${r.loc}</td><td>${r.name}</td><td>Ур. ${r.type}</td><td>${r.capuom}</td><td>${r.capacity}</td></tr>`;
+      html += `<tr><td><b>${esc(r.id)}</b></td><td>${esc(r.loc)}</td><td>${esc(r.name)}</td><td>Ур. ${esc(r.type)}</td><td>${esc(r.capuom)}</td><td>${r.capacity}</td></tr>`;
     });
     html += '</tbody></table>';
   } else if (ACTIVE_TAB === 'prodsource') {
     html = `<table><thead><tr><th>Рецепт / PDS</th><th>Выпускаемый продукт</th><th>Завод</th><th>Версия</th><th>Приоритет</th><th>Норма</th></tr></thead><tbody>`;
     pds.forEach(r => {
-      html += `<tr><td><code>${r.prodsource}</code></td><td><b>${r.item}</b></td><td>${r.loc}</td><td>${r.prodver}</td><td>${r.prio}</td><td>${r.outputqty}</td></tr>`;
+      html += `<tr><td><code>${esc(r.prodsource)}</code></td><td><b>${esc(r.item)}</b></td><td>${esc(r.loc)}</td><td>${esc(r.prodver)}</td><td>${r.prio}</td><td>${r.outputqty}</td></tr>`;
     });
     html += '</tbody></table>';
   } else if (ACTIVE_TAB === 'audit') {
     html = `<table><thead><tr><th>Уровень</th><th>Категория</th><th>Объект</th><th>Суть проверки</th></tr></thead><tbody>`;
     MODEL.audit.forEach(r => {
-      html += `<tr><td><span class="tag-${r.type}">${r.type === 'err' ? 'Критично' : 'Внимание'}</span></td><td>${r.cat}</td><td><b>${r.obj}</b></td><td>${r.msg}</td></tr>`;
+      html += `<tr><td><span class="tag-${r.type}">${r.type === 'err' ? 'Критично' : 'Внимание'}</span></td><td>${esc(r.cat)}</td><td><b>${esc(r.obj)}</b></td><td>${esc(r.msg)}</td></tr>`;
     });
     html += '</tbody></table>';
   }
@@ -1378,6 +1417,21 @@ document.addEventListener('click', () => {
 });
 document.querySelectorAll('.pop-menu').forEach(m => m.onclick = e => e.stopPropagation());
 
+// Делегированная обработка чекбоксов фильтров: значения из файлов читаются из data-атрибутов,
+// а не исполняются как код (раньше были inline onchange="toggleFilterNode('${id}')")
+document.getElementById('sbTree').addEventListener('change', e => {
+  const cb = e.target.closest('input[data-node]');
+  if (cb) toggleFilterNode(cb.dataset.node);
+});
+document.getElementById('listItems').addEventListener('change', e => {
+  const cb = e.target.closest('input[data-item]');
+  if (cb) toggleFilterItem(cb.dataset.item);
+});
+document.getElementById('listPds').addEventListener('change', e => {
+  const cb = e.target.closest('input[data-pds]');
+  if (cb) toggleFilterPds(cb.dataset.pds);
+});
+
 document.getElementById('btnItemAll').onclick = () => { FILTERS.items = [...new Set(MODEL.sku.map(s => s.item))]; refreshUI(); };
 document.getElementById('btnItemClr').onclick = () => { FILTERS.items = []; refreshUI(); };
 document.getElementById('btnPdsAll').onclick = () => { FILTERS.pds = [...new Set(MODEL.prodsource.map(p => p.prodsource))]; refreshUI(); };
@@ -1423,14 +1477,34 @@ document.getElementById('btnModeMatrix').onclick = () => {
 // Загрузка файлов
 document.getElementById('bUpload').onclick = () => document.getElementById('fInput').click();
 document.getElementById('fInput').onchange = (e) => {
+  if (typeof XLSX === 'undefined') {
+    alert('Парсер XLSX недоступен: не найден локальный файл assets/xlsx.full.min.js.\n\nВосстановите файл из репозитория либо временно подключите CDN-версию SheetJS.');
+    return;
+  }
   const files = Array.from(e.target.files);
   if (!files.length) return;
+
+  // Ошибки каждого файла собираются и показываются разом; битый файл не роняет остальные
+  const errors = [];
+  let pending = files.length;
+  const finish = () => {
+    if (errors.length) alert('Часть файлов не удалось обработать:\n\n' + errors.join('\n'));
+  };
 
   files.forEach(file => {
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const wb = XLSX.read(evt.target.result, { type: 'array' });
-      parseWorkbookSheets(wb);
+      try {
+        const wb = XLSX.read(evt.target.result, { type: 'array' });
+        parseWorkbookSheets(wb);
+      } catch (err) {
+        errors.push(file.name + ' — ' + ((err && err.message) || 'неизвестная ошибка'));
+      }
+      if (--pending === 0) finish();
+    };
+    reader.onerror = () => {
+      errors.push(file.name + ' — ошибка чтения файла');
+      if (--pending === 0) finish();
     };
     reader.readAsArrayBuffer(file);
   });
@@ -1450,8 +1524,7 @@ document.querySelectorAll('.bs-tab').forEach(btn => {
 // Тема
 document.getElementById('bTheme').onclick = () => {
   const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', cur);
-  localStorage.setItem('inplan_theme', cur);
+  ipSetTheme(cur);
   drawGraph();
 };
 
@@ -1540,10 +1613,95 @@ window.onmouseup = (e) => {
 
 canvas.onwheel = (e) => {
   e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
   const factor = e.deltaY < 0 ? 1.08 : 0.92;
-  GRAPH.zoom = Math.max(0.25, Math.min(2.5, GRAPH.zoom * factor));
+  const nz = Math.max(0.25, Math.min(2.5, GRAPH.zoom * factor));
+  const k = nz / GRAPH.zoom;
+  // Масштабируем вокруг точки под курсором, а не левого-верхнего угла
+  GRAPH.panX = mx - (mx - GRAPH.panX) * k;
+  GRAPH.panY = my - (my - GRAPH.panY) * k;
+  GRAPH.zoom = nz;
   drawGraph();
 };
+
+// Тач-жесты: пан одним пальцем, пинц-зум двумя, короткий тап — выбор узла
+canvas.style.touchAction = 'none';
+let touchPinch = null;
+let lastTouch = null;
+const touchDist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    clickStartTime = Date.now();
+    dragOccurred = false;
+    lastTouch = { x: t.clientX, y: t.clientY };
+    const rect = canvas.getBoundingClientRect();
+    const mx = (t.clientX - rect.left - GRAPH.panX) / GRAPH.zoom;
+    const my = (t.clientY - rect.top - GRAPH.panY) / GRAPH.zoom;
+    const hit = GRAPH.nodes.slice().reverse().find(n => mx >= n.x && mx <= n.x + n.w && my >= n.y && my <= n.y + n.h);
+    if (hit) { GRAPH.dragNode = hit; }
+    else { GRAPH.isDragging = true; GRAPH.startX = t.clientX - GRAPH.panX; GRAPH.startY = t.clientY - GRAPH.panY; }
+  } else if (e.touches.length === 2) {
+    GRAPH.dragNode = null; GRAPH.isDragging = false;
+    const rect = canvas.getBoundingClientRect();
+    touchPinch = {
+      d: touchDist(e.touches[0], e.touches[1]),
+      zoom: GRAPH.zoom,
+      cx: (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
+      cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top,
+      px: GRAPH.panX, py: GRAPH.panY
+    };
+  }
+}, { passive: true });
+
+canvas.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 1 && (GRAPH.dragNode || GRAPH.isDragging)) {
+    e.preventDefault();
+    const t = e.touches[0];
+    dragOccurred = true;
+    const dx = t.clientX - lastTouch.x, dy = t.clientY - lastTouch.y;
+    if (GRAPH.dragNode) {
+      GRAPH.dragNode.x += dx / GRAPH.zoom;
+      GRAPH.dragNode.y += dy / GRAPH.zoom;
+    } else {
+      GRAPH.panX += dx; GRAPH.panY += dy;
+    }
+    lastTouch = { x: t.clientX, y: t.clientY };
+    drawGraph();
+  } else if (e.touches.length === 2 && touchPinch) {
+    e.preventDefault();
+    const d = touchDist(e.touches[0], e.touches[1]);
+    if (d <= 0) return;
+    const nz = Math.max(0.25, Math.min(2.5, touchPinch.zoom * d / touchPinch.d));
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+    const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+    const k = nz / touchPinch.zoom;
+    GRAPH.zoom = nz;
+    GRAPH.panX = mx - (touchPinch.cx - touchPinch.px) * k;
+    GRAPH.panY = my - (touchPinch.cy - touchPinch.py) * k;
+    drawGraph();
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+  if (e.touches.length === 0) {
+    if (touchPinch) {
+      touchPinch = null; // после пинца не считаем это тапом
+    } else if (Date.now() - clickStartTime < 300 && !dragOccurred && e.changedTouches.length) {
+      const t = e.changedTouches[0];
+      const rect = canvas.getBoundingClientRect();
+      const mx = (t.clientX - rect.left - GRAPH.panX) / GRAPH.zoom;
+      const my = (t.clientY - rect.top - GRAPH.panY) / GRAPH.zoom;
+      const hit = GRAPH.nodes.slice().reverse().find(n => mx >= n.x && mx <= n.x + n.w && my >= n.y && my <= n.y + n.h);
+      FOCUS_NODE_ID = hit ? (FOCUS_NODE_ID === hit.id ? null : hit.id) : null;
+      refreshUI();
+    }
+    GRAPH.dragNode = null; GRAPH.isDragging = false;
+  }
+});
 
 // Ресайзер нижней панели
 const resizer = document.getElementById('bsResizer');
@@ -1559,11 +1717,10 @@ window.addEventListener('mousemove', (e) => {
   }
 });
 window.addEventListener('mouseup', () => isResizing = false);
-window.onresize = drawGraph;
+window.addEventListener('resize', ipDebounce(drawGraph, 120));
 
 // Инициализация
-const savedTheme = localStorage.getItem('inplan_theme') || 'light';
-document.documentElement.setAttribute('data-theme', savedTheme);
+document.documentElement.setAttribute('data-theme', ipGetTheme());
 
 MODEL.sku = [...SEED_DATA.sku];
 MODEL.res = [...SEED_DATA.res];
