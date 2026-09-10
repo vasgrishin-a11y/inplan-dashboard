@@ -2699,6 +2699,12 @@ function writeActiveDataset(ds,expiresAt){
 function clearSavedDataset(){
   try{localStorage.removeItem(AUTOSAVE_KEY);localStorage.removeItem(ACTIVE_DATASET_KEY)}catch(e){}
 }
+function expireActiveDatasetIfNeeded(){
+  if(DS && !DS._demo && !readActiveDataset()){
+    clearSavedDataset();
+    DS=build(SEED);DS._demo=true;TAB='ov';STAT_PIN=false;clearF();render();
+  }
+}
 function autosaveDS(){
   if(!DS)return;
   try{
@@ -5162,6 +5168,7 @@ if(!SAVED){clearSavedDataset()}
 DS=SAVED?SAVED.ds:build(SEED);
 if(!SAVED)DS._demo=true;
 render();
+setInterval(expireActiveDatasetIfNeeded,60000);
 if(SAVED){
   $('#stat').innerHTML=`<span class="pos">Восстановлено автосохранение:</span> ${esc(SAVED.name||DS.name)}${SAVED.ts?' · '+fmtTs(SAVED.ts):''}<br>${DS.orders.length} заказов | ${DS.ops.length} операций`;
   STAT_PIN=true;
