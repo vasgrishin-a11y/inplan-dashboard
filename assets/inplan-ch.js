@@ -10,6 +10,8 @@
 
 const LS_PROFILES = 'inplan_ch_profiles_v1';
 const LS_SCENARIO = 'inplan_ch_scenario_v1';
+const LS_SESSION = 'inplan_ch_session_v1';
+const SESSION_TTL_MS = 4 * 60 * 60 * 1000; // 4 часа с последней активности
 
 /* ─────────────── 1. КОНФИГУРАЦИЯ ─────────────── */
 const CHX = window.CHX = {
@@ -26,6 +28,53 @@ const CHX = window.CHX = {
   },
   versions:[]                    // [{id,label,src,isBase,agg,dims}]
 };
+
+/* ─────────────── 1.1. АВТОСЕССИЯ НА 4 ЧАСА ───────────────
+   Вариант 2: для автоматического переподключения после закрытия браузера
+   сохраняем также пароль. Это осознанный компромисс удобства и безопасности:
+   значение находится в localStorage и доступно JavaScript этого origin.
+   Сессия удаляется автоматически после 4 часов бездействия. */
+CHX.session = {
+  disabled:false,
+  read(){
+    try{
+      const raw = localStorage.getItem(LS_SESSION);
+      if(!raw) return null;
+      const rec = JSON.parse(raw);
+      if(!rec || rec.v !== 1 || !rec.cfg || !rec.expiresAt || rec.expiresAt <= Date.now()){
+        localStorage.removeItem(LS_SESSION);
+        return null;
+      }
+      return rec;
+    }catch(e){ return null }
+  },
+  save(){
+    if(this.disabled) return false;
+    const c = CHX.cfg, now = Date.now();
+    const rec = {
+      v:1,
+      savedAt:now,
+      expiresAt:now + SESSION_TTL_MS,
+      cfg:{
+        host:c.host, port:c.port, proto:c.proto, user:c.user, pass:c.pass,
+        useProxy:!!c.useProxy, proxyUrl:c.proxyUrl,
+        schemas:Array.isArray(c.schemas)?c.schemas.slice():[],
+        base:c.base, gran:c.gran, detailOrders:c.detailOrders
+      }
+    };
+    try{ localStorage.setItem(LS_SESSION, JSON.stringify(rec)); return true }
+    catch(e){ console.warn('Автосессия не сохранена:',e); return false }
+  },
+  touch(){ return this.save() },
+  enable(){ this.disabled=false },
+  clear(){ this.disabled=true; try{ localStorage.removeItem(LS_SESSION) }catch(e){} },
+  exists(){ return !!this.read() },
+  ttl(){
+    const rec=this.read();
+    return rec ? Math.max(0,rec.expiresAt-Date.now()) : 0;
+  }
+};
+CHX.forgetSession = ()=>CHX.session.clear();
 
 /* ─────────────── 2. РЕЕСТР ТАБЛИЦ ───────────────
    Добавление новой таблицы из ClickHouse = добавление одного объекта.
@@ -196,10 +245,64 @@ CHX.connect = async function(){
     if(!CHX.state.granOptions.some(o=>o.t===CHX.cfg.gran))
       CHX.cfg.gran = CHX.state.granOptions[0].t;
     CHX.state.connected = true;
+    CHX.session.enable();
+    // Успешное подключение продлевает автосессию ещё на 4 часа.
+    CHX.session.touch();
     return CHX.state.dbs;
   }catch(e){
     CHX.state.connected = false; CHX.state.lastError = e.message; throw e;
   }finally{ CHX.state.busy = false; }
+};
+
+/* ─────────────── 5.1. ВОССТАНОВЛЕНИЕ АВТОСЕССИИ ─────────────── */
+let sessionRestoreBusy = false;
+let lastSessionCheck = 0;
+function emitSessionStatus(type, extra){
+  if(typeof window.onCHSessionStatus === 'function')
+    window.onCHSessionStatus(Object.assign({type}, extra||{}));
+}
+CHX.restoreSession = async function(){
+  if(sessionRestoreBusy || CHX.state.busy) return false;
+  const rec = CHX.session.read();
+  if(!rec) return false;
+  sessionRestoreBusy = true;
+  lastSessionCheck = Date.now();
+  Object.assign(CHX.cfg, rec.cfg, {
+    schemas:Array.isArray(rec.cfg.schemas)?rec.cfg.schemas.slice():[],
+    pass:String(rec.cfg.pass||'')
+  });
+  emitSessionStatus('restoring', {expiresAt:rec.expiresAt});
+  try{
+    await CHX.connect();
+    emitSessionStatus('restored', {expiresAt:CHX.session.read()?.expiresAt||Date.now()+SESSION_TTL_MS});
+    return true;
+  }catch(e){
+    CHX.state.connected = false;
+    CHX.state.lastError = e.message;
+    emitSessionStatus('error', {error:e.message, expiresAt:rec.expiresAt});
+    return false;
+  }finally{ sessionRestoreBusy = false }
+};
+
+CHX.checkSession = async function(force){
+  const rec = CHX.session.read();
+  if(!rec) return false;
+  const now = Date.now();
+  if(!force && now-lastSessionCheck < 30000) return CHX.state.connected;
+  lastSessionCheck = now;
+  if(sessionRestoreBusy || CHX.state.busy) return CHX.state.connected;
+  if(CHX.state.connected){
+    try{
+      await chQuery('SELECT 1 AS ok');
+      CHX.session.touch();
+      emitSessionStatus('active', {expiresAt:CHX.session.read()?.expiresAt||Date.now()+SESSION_TTL_MS});
+      return true;
+    }catch(e){
+      CHX.state.connected = false;
+      CHX.state.lastError = e.message;
+    }
+  }
+  return CHX.restoreSession();
 };
 /* Пересчёт доступных гранулярностей по выбранной основной схеме:
    у разных версий планов набор periodtype может отличаться */
@@ -680,6 +783,8 @@ CHX.loadAll = async function(onProgress){
 
   window.DS = ds;
   if(typeof window.onCHDataset === 'function') window.onCHDataset(ds, CHX.versions);
+  // Сохраняем уже выбранные схемы и основную схему вместе с данными.
+  CHX.session.touch();
   const notes = aggs.flatMap(a=>a.notes.map(n=>a.db+' → '+n));
   return {ds, versions:CHX.versions, notes};
 };
@@ -714,7 +819,8 @@ function drawModal(){
     <span class="chm-x" id="chmX">✕</span></div>
   <div class="chm-note">Версия данных — это проект (база вида <code>data_public*</code>).
     После подключения выберите схемы: одна основная (полная детализация) и до нескольких для сравнения.
-    Логин и набор схем сохраняются в браузере, пароль — нет.</div>
+    <b>Автосессия на 4 часа включена:</b> параметры и пароль сохраняются в браузере для автоматического
+    восстановления после закрытия браузера. Кнопка «Забыть автосессию» удаляет сохранённые данные.</div>
 
   ${profs.length?`<div class="chm-row"><label>Профиль</label>
     <select id="chmProf"><option value="">— не выбран —</option>
@@ -747,6 +853,7 @@ function drawModal(){
   <div class="chm-act">
     <button class="btn p" id="chmConn">${st.connected?'Обновить список схем':'Подключиться'}</button>
     <button class="btn" id="chmSaveProf">Сохранить профиль</button>
+    ${CHX.session.exists()?`<button class="btn d" id="chmForgetSession">Забыть автосессию</button>`:''}
     <button class="btn" id="chmClose">Закрыть</button>
     <span id="chmStat" class="chm-stat">${st.lastError
       ?`<span class="neg">${esc(st.lastError)}</span>`
@@ -837,8 +944,16 @@ function drawModal(){
   if(g('chmProfDrop')) g('chmProfDrop').onclick = ()=>{
     const nm = g('chmProf').value; if(nm){ CHX.profiles.drop(nm); drawModal() }
   };
-  if(g('chmGran')) g('chmGran').onchange = e=>{ c.gran = num(e.target.value) };
-  if(g('chmDet'))  g('chmDet').onchange  = e=>{ c.detailOrders = Math.max(100,num(e.target.value)) };
+  if(g('chmForgetSession')) g('chmForgetSession').onclick = ()=>{
+    CHX.forgetSession();
+    drawModal();
+  };
+  if(g('chmGran')) g('chmGran').onchange = e=>{
+    c.gran = num(e.target.value); if(st.connected) CHX.session.touch();
+  };
+  if(g('chmDet'))  g('chmDet').onchange  = e=>{
+    c.detailOrders = Math.max(100,num(e.target.value)); if(st.connected) CHX.session.touch();
+  };
   /* Только чекбоксы, не строки: строка-див тоже несла data-db, и всплывшее
      событие change от чекбокса срабатывало на ней вторично — div.checked === undefined,
      и схема сразу же удалялась из выбора. Отсюда «галочки не ставятся». */
@@ -847,6 +962,7 @@ function drawModal(){
     if(cb.checked && i<0) c.schemas.push(db);
     if(!cb.checked && i>=0) c.schemas.splice(i,1);
     if(!c.schemas.includes(c.base)) c.base = c.schemas[0] || '';
+    if(st.connected) CHX.session.touch();
     drawModal();
   });
   m.querySelectorAll('[data-base]').forEach(rb=>rb.onchange = async ()=>{
@@ -855,6 +971,7 @@ function drawModal(){
     const stat = document.getElementById('chmStat');
     if(stat) stat.innerHTML = 'Обновляю гранулярность основной схемы…';
     await CHX.refreshGran(c.base);
+    if(st.connected) CHX.session.touch();
     drawModal();
   });
   /* Чип выбранной схемы: клик — убрать из выбора */
@@ -862,6 +979,7 @@ function drawModal(){
     const i = c.schemas.indexOf(ch.dataset.rmdb);
     if(i>=0) c.schemas.splice(i,1);
     if(c.base===ch.dataset.rmdb) c.base = c.schemas[0] || '';
+    if(st.connected) CHX.session.touch();
     drawModal();
   });
   /* Поиск по схемам: фильтруем строки списка на месте, без перерисовки модалки */
@@ -1197,4 +1315,18 @@ CHX.tabVS = function(){
   ]);
 };
 
+
+/* Восстанавливаем подключение после закрытия браузера и контролируем его
+   при возвращении на вкладку или после восстановления сети. */
+function installSessionLifecycle(){
+  CHX.restoreSession();
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible') CHX.checkSession(false);
+  });
+  window.addEventListener('online',()=>CHX.checkSession(true));
+  window.addEventListener('pageshow',()=>CHX.checkSession(false));
+}
+if(document.readyState==='loading')
+  document.addEventListener('DOMContentLoaded',installSessionLifecycle,{once:true});
+else installSessionLifecycle();
 })();
