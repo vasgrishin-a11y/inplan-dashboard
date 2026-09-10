@@ -13,6 +13,8 @@ try{document.documentElement.setAttribute('data-theme',localStorage.getItem('inp
 <script src="assets/xlsx.full.min.js"></script>
 <!-- Общие утилиты (esc, sany, xstr, num, pnum, plural, nf, тема) — общие с chain.html -->
 <script src="assets/inplan-common.js"></script>
+<!-- ClickHouse-коннектор: подключение, реестр таблиц, версии планов -->
+<script src="assets/inplan-ch.js" defer></script>
 <style>
 /* ═══════════════ ТОКЕНЫ In.Plan ═══════════════ */
 :root{
@@ -145,6 +147,7 @@ h1{font:600 28px/34px 'Open Sans',sans-serif;margin:0;color:var(--scp-text)}
 .icon-btn[data-tip]:hover::after{opacity:1}
 .stat{font-size:12px;line-height:16px;color:var(--scp-text-3);text-align:right;white-space:nowrap;
   align-self:center}
+.stat.session-status{white-space:normal;max-width:440px}
 
 /* ═══════════════ ПАНЕЛЬ ФИЛЬТРОВ ═══════════════ */
 .fpanel{background:var(--scp-surface);border-bottom:1px solid var(--scp-line-2);
@@ -212,6 +215,25 @@ canvas{width:100%;display:block;cursor:pointer}
 .lg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--scp-text-2);
   padding:2px 0 8px;justify-content:center}
 .lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:0}
+/* ── интерактивная легенда (как в Superset): клик скрывает/показывает ряд ── */
+.lg-i{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:4px;
+  cursor:pointer;user-select:none;transition:.12s}
+.lg-i:hover{background:var(--scp-b-50)}
+.lg-i.off{color:var(--scp-text-3);text-decoration:line-through}
+.lg-i.off i{background:var(--scp-n-300)!important}
+/* ── полноэкранный режим карточки с графиком ── */
+.card{position:relative}
+.card>h3{padding-right:32px}
+.card-fs{position:absolute;top:10px;right:10px;width:26px;height:26px;display:inline-flex;
+  align-items:center;justify-content:center;background:var(--scp-surface);
+  border:1px solid var(--scp-line-2);border-radius:var(--r-s);color:var(--scp-text-3);cursor:pointer;z-index:3}
+.card-fs:hover{border-color:var(--scp-accent);color:var(--scp-accent);background:var(--scp-b-50)}
+.card-fs svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.card-fs .i-out{display:none}.card.full .card-fs .i-out{display:block}.card.full .card-fs .i-in{display:none}
+.card.full{position:fixed;inset:14px;z-index:900;overflow:auto;box-shadow:0 12px 48px #00000059;
+  border-color:var(--scp-accent);padding:20px 24px 16px}
+body.has-full::after{content:'';position:fixed;inset:0;background:#00000059;z-index:850}
+body.has-full{overflow:hidden}
 
 /* ═══════════════ ТАБЛИЦЫ ═══════════════ */
 table{width:100%;border-collapse:collapse;font-size:14px}
@@ -302,7 +324,7 @@ input[type=number]{font-family:'Open Sans',sans-serif}
 .sec{font-size:11px;color:var(--scp-text-3);text-transform:uppercase;letter-spacing:.6px;
   font-weight:600;margin:14px 0 6px;border-bottom:1px solid var(--scp-line);padding-bottom:5px}
 #tip{position:fixed;pointer-events:none;background:var(--scp-n-900);color:#fff;
-  border-radius:var(--r-s);padding:8px 11px;font-size:12px;line-height:17px;z-index:700;
+  border-radius:var(--r-s);padding:8px 11px;font-size:12px;line-height:17px;z-index:950;
   display:none;max-width:300px;box-shadow:0 4px 15px #00000040}
 #tip b{color:var(--scp-accent-2)}
 #tip code{background:#333;padding:1px 4px;border-radius:3px;font-size:11px}
@@ -335,6 +357,41 @@ input[type=number]{font-family:'Open Sans',sans-serif}
   .rail-nav button{border-left:0;border-bottom:4px solid transparent}
   .rail-nav button.on{border-left:0;border-bottom-color:var(--scp-accent)}
 }
+/* ═══════════ Модалка подключения к ClickHouse ═══════════ */
+#chModal{display:none;position:fixed;inset:0;z-index:800}
+#chModal .chm-back{position:absolute;inset:0;background:#00000066}
+#chModal .chm-win{position:relative;margin:40px auto;max-width:620px;max-height:calc(100vh - 80px);
+  overflow-y:auto;background:var(--scp-surface);border:1px solid var(--scp-menu-bd);
+  border-radius:var(--r-l);box-shadow:0 8px 40px #00000040;padding:20px 24px}
+.chm-h{display:flex;justify-content:space-between;align-items:center;
+  font:600 17px/22px 'Open Sans',sans-serif;color:var(--scp-text);margin-bottom:8px}
+.chm-x{cursor:pointer;color:var(--scp-text-3);font-size:15px}
+.chm-x:hover{color:var(--scp-err)}
+.chm-note,.chm-foot{font-size:12px;line-height:17px;color:var(--scp-text-3);margin-bottom:14px}
+.chm-foot{margin:16px 0 0;padding-top:12px;border-top:1px solid var(--scp-line)}
+.chm-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.chm-row label{flex:0 0 104px;font-size:12.5px;color:var(--scp-text-2)}
+.chm-row input[type=text],.chm-row input[type=password],.chm-row input[type=number],
+.chm-row select{flex:1;min-width:0;background:var(--scp-surface);color:var(--scp-text);
+  border:1px solid var(--scp-ctrl);border-radius:var(--r-s);padding:7px 10px;
+  font:400 13px 'Open Sans',sans-serif}
+.chm-row input:focus,.chm-row select:focus{outline:none;border-color:var(--scp-accent)}
+.chm-hint{font-size:11px;color:var(--scp-text-3);flex:0 0 auto;max-width:230px}
+.chm-act{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0 4px}
+.chm-stat{font-size:12px;color:var(--scp-text-3)}
+.chm-sec{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--scp-text-3);margin:16px 0 7px;border-bottom:1px solid var(--scp-line);padding-bottom:5px}
+.chm-list{max-height:220px;overflow-y:auto;border:1px solid var(--scp-line);
+  border-radius:var(--r-s);padding:4px;margin-bottom:10px}
+.chm-item{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:var(--r-s);font-size:13px}
+.chm-item:hover{background:var(--scp-b-50)}
+.chm-item.on{background:var(--scp-accent-bg)}
+.chm-item input{accent-color:var(--scp-accent);margin:0;width:14px;height:14px;cursor:pointer}
+.chm-nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chm-nm code{font-size:11px;color:var(--scp-text-3)}
+.chm-meta{font-size:11px;color:var(--scp-text-3);white-space:nowrap}
+.chm-sel{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px;
+  padding:8px;background:var(--scp-b-50);border:1px solid var(--scp-accent-bd);border-radius:var(--r-s)}
 </style>
 </head>
 <body>
@@ -374,7 +431,11 @@ input[type=number]{font-family:'Open Sans',sans-serif}
           <svg id="iconSun" viewBox="0 0 24 24" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           <svg id="iconMoon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <button class="icon-btn p" id="bLoad" data-tip="Загрузить XLSX (demand, capacity_view_sp, res_loc_loc)" aria-label="Загрузить файлы XLSX">
+        <button class="icon-btn" id="bCH" data-tip="Подключение к ClickHouse" aria-label="ClickHouse">
+          <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>
+        </button>
+        <button class="icon-btn p" id="bLoad" data-tip="Загрузить XLSX (demand, capacity_view_sp, res_loc)" aria-label="Загрузить файлы XLSX">
           <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </button>
         <input type="file" id="fIn" accept=".xlsx,.xls" multiple style="display:none">
@@ -614,11 +675,17 @@ let DS=null, TAB='ov', STAT_PIN=false; // true — в #stat зафиксиров
 const F={p:[],ch:[],cl:[],pr:[],pi:[],pl:[],vd:[],tm:[],nd:[]};
 const clearF=()=>Object.keys(F).forEach(k=>F[k]=[]);
 const LBL={p:'Период',ch:'Канал',cl:'Клиент',pr:'Продукт',pi:'Приоритет',pl:'Завод',vd:'Поставщик',tm:'Транспорт',nd:'Узел сети'};
-const TABS=[['ov','Общий'],['dm','Спрос'],['tree','Цепочка заказа'],['lg','Логистика'],['pd','Производство'],['pc','Закупки'],['st','Запасы'],['raw','Данные'],['vs','Сравнение версий'],['dq','Качество данных']];
-const TSUB={ov:'Финансовый результат и структура портфеля',dm:'План спроса, продажи и дефициты',
+const TABS=[['ov','Общий'],['dm','Спрос и покрытие'],['tree','Цепочка заказа'],
+  ['lg','Логистика'],['pd','Производство'],['caps','Мощности'],['pc','Закупки'],['st','Запасы'],
+  ['cost','Экономика отказов'],['raw','Данные'],['vs','Сравнение версий'],['dq','Качество данных']];
+const TSUB={ov:'Финансовый результат и структура портфеля',
+  dm:'Водопад спроса: неограниченный → ограниченный → отгрузка → дефицит, RCA по заказам',
   tree:'Разузлование цепочки пополнения по заказу',lg:'Перемещения, плечи и тарифы',
   pd:'Переделы, ресурсы и рецепты',pc:'Закупки сырья и поставщики',st:'Хранение и пролёживание',
   raw:'Детальные таблицы заказов и операций',vs:'Сопоставление версий планов',dq:'Проверки инвариантов и полноты данных'};
+TSUB.caps='План и факт мощностей, ремонты, узкие места';
+TSUB.cost='Штрафы за непоставку и опоздание против упущенной маржи';
+TSUB.vs='Сопоставление версий планов из ClickHouse';
 const TMAP={mv:'movement',pd:'production',pc:'procurement',st:'stock'};
 const TCLASS={RAIL:'Транспорт',TRUCK:'Транспорт',SHIP:'Транспорт',SHIPCONTAN:'Транспорт',SUPTRAN:'Транспорт',
   INTERNAL:'Внутризаводское',PORTHANDL:'Терминал/перевалка',PLANTFCA:'Условие поставки',LASTMILE:'Последняя миля'};
@@ -1251,26 +1318,71 @@ function setF(k,v){
   render();
 }
 
-/* ═══════════════ 6. ГРАФИЧЕСКИЙ ДВИЖОК ═══════════════ */
+/* ═════════ 6. ГРАФИЧЕСКИЙ ДВИЖОК ═════════ */
 const TIP=$('#tip');
 const FNT='Open Sans, sans-serif';
+
+/* Реестр перерисовок и скрытых рядов легенды: id канваса → функция / Set индексов */
+const REDRAW={}, LEG_HIDDEN={};
+const hiddenOf=id=>LEG_HIDDEN[id]||(LEG_HIDDEN[id]=new Set());
+
+/* HTML интерактивной легенды: items=[[цвет,название],...]; индекс элемента = индекс ряда */
+function lg(id,items){
+  const hs=hiddenOf(id);
+  return `<div class="lg">`+items.map(([col,name],i)=>
+    `<span class="lg-i${hs.has(i)?' off':''}" data-lg-id="${id}" data-lg-i="${i}" title="Клик — скрыть / показать ряд">`
+    +`<i style="background:${col}"></i>${esc(name)}</span>`).join('')+`</div>`;
+}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-lg-id]');if(!t)return;
+  const id=t.dataset.lgId,i=+t.dataset.lgI,hs=hiddenOf(id);
+  hs.has(i)?hs.delete(i):hs.add(i);
+  t.classList.toggle('off',hs.has(i));
+  if(REDRAW[id])REDRAW[id]();
+});
+
+/* ── полноэкранный режим карточек с графиком ── */
+let FULL_ID=null;
+const FS_SVG=`<svg class="i-in" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+<svg class="i-out" viewBox="0 0 24 24"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
+function decorateCards(){
+  document.body.classList.remove('has-full');
+  $$('#main .card').forEach(card=>{
+    const cvs=card.querySelector('canvas');
+    if(!cvs||!cvs.id||card.querySelector('.card-fs'))return;
+    const b=document.createElement('button');
+    b.className='card-fs';b.dataset.fs=cvs.id;b.innerHTML=FS_SVG;
+    b.title='На весь экран / вернуть';
+    card.appendChild(b);
+    if(FULL_ID===cvs.id){card.classList.add('full');document.body.classList.add('has-full')}
+  });
+  if(FULL_ID&&!$('#'+FULL_ID))FULL_ID=null;
+}
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-fs]');if(!b)return;
+  FULL_ID=(FULL_ID===b.dataset.fs)?null:b.dataset.fs;
+  render();
+  if(FULL_ID)setTimeout(()=>{const c=$('#'+FULL_ID);if(c)c.closest('.card').scrollTop=0},0);
+});
+
 function cv(id,h){
   const c=$(id);if(!c)return null;
   const r=Math.max(1,Math.min(devicePixelRatio||1,3));
   const w=Math.max(c.clientWidth||(c.parentElement?c.parentElement.clientWidth-36:0)||600,260);
-  c.width=Math.round(w*r);
-  c.height=Math.round(h*r);
-  c.style.width='100%';
-  c.style.height=h+'px';
-  const x=c.getContext('2d');
-  x.setTransform(r,0,0,r,0,0);
-  x.clearRect(0,0,w,h);
-  x.font='12px '+FNT;
-  c._h=[];
+  c.width=Math.round(w*r);c.height=Math.round(h*r);
+  c.style.width='100%';c.style.height=h+'px';
+  const x=c.getContext('2d');x.setTransform(r,0,0,r,0,0);x.clearRect(0,0,w,h);
+  x.font='12px '+FNT;c._h=[];c._lab=[];
   return {c,x,w,h};
 }
+/* Высота графика; в полноэкранном режиме — по свободной высоте карточки */
 function H(id,base,ratio=0.52,min=180,max=430){
   const c=$(id);if(!c)return base;
+  const full=c.closest('.card.full');
+  if(full){
+    const top=c.getBoundingClientRect().top-full.getBoundingClientRect().top+full.scrollTop;
+    return Math.max(320,Math.floor(full.clientHeight-top-36));
+  }
   const w=c.clientWidth||(c.parentElement?c.parentElement.clientWidth-36:0)||600;
   return Math.round(Math.max(min,Math.min(max,Math.max(base,w*ratio))));
 }
@@ -1292,60 +1404,116 @@ function yAxis(x,w,h,p,max,fmt,n=5){x.strokeStyle=CH.grid;x.lineWidth=1;x.fillSt
   x.font='11px '+FNT;x.textAlign='right';x.textBaseline='middle';
   for(let i=0;i<=n;i++){const y=h-p.b-(h-p.t-p.b)*i/n;x.beginPath();x.moveTo(p.l,y);x.lineTo(w-p.r,y);x.stroke();
     x.fillText(fmt(max*i/n),p.l-7,y)}}
-function xAxis(x,w,h,p,labs,rot){x.fillStyle=CH.lab;x.font='11px '+FNT;
-  x.textAlign=rot?'right':'center';x.textBaseline='top';
-  const bw=(w-p.l-p.r)/labs.length;
-  labs.forEach((l,i)=>{const cx=p.l+bw*(i+.5),s=String(l).length>12?String(l).slice(0,11)+'…':l;
-    if(rot){x.save();x.translate(cx,h-p.b+7);x.rotate(-.72);x.fillText(s,0,0);x.restore()}else x.fillText(s,cx,h-p.b+7)})}
-/* Подпись значения над столбцом (числовая разметка, как в In.Plan) */
-function barLab(x,txt,cx,cy){x.fillStyle=CH.lab;x.font='600 10.5px '+FNT;
-  x.textAlign='center';x.textBaseline='bottom';x.fillText(txt,cx,cy)}
 
-function chBars(id,h,labs,ser,fmt,tips,cb,rot,showLab){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
-  const p={l:64,r:16,t:showLab?24:14,b:rot?56:32},max=Math.max(...ser.flatMap(s=>s.v),1)*1.14;
-  yAxis(x,w,h,p,max,fmt);xAxis(x,w,h,p,labs,rot);
+/* Решает, нужен ли поворот подписей X, и возвращает нужный нижний отступ */
+function fitX(x,labs,w,p,force){
+  x.font='11px '+FNT;
+  const bw=(w-p.l-p.r)/Math.max(labs.length,1);
+  const maxW=Math.max(0,...labs.map(l=>x.measureText(String(l)).width));
+  if(!force&&maxW<=bw-8)return {rot:0,b:32};
+  return {rot:1,b:Math.min(100,Math.round(Math.min(maxW,120)*0.72+18))};
+}
+/* Подписи X: без нагромождений — поворот 45°, прореживание, обрезка по доступному месту */
+function xAxis(x,w,h,p,labs,rot){
+  const bw=(w-p.l-p.r)/Math.max(labs.length,1);
+  x.font='11px '+FNT;x.fillStyle=CH.lab;
+  if(rot){
+    const step=Math.max(1,Math.ceil(14/bw)),maxLen=Math.max(5,Math.floor((p.b-16)/4.6));
+    x.textAlign='right';x.textBaseline='middle';
+    labs.forEach((l,i)=>{if(i%step)return;let s=String(l);if(s.length>maxLen)s=s.slice(0,maxLen-1)+'…';
+      x.save();x.translate(p.l+bw*(i+.5),h-p.b+9);x.rotate(-Math.PI/4);x.fillText(s,0,0);x.restore()});
+  }else{
+    const maxW=Math.max(0,...labs.map(l=>x.measureText(String(l)).width));
+    const step=Math.max(1,Math.ceil((maxW+10)/bw));
+    x.textAlign='center';x.textBaseline='top';
+    labs.forEach((l,i)=>{if(i%step)return;x.fillText(String(l),p.l+bw*(i+.5),h-p.b+7)});
+  }
+}
+/* Подпись значения с контролем пересечений: возвращает false, если места нет */
+function barLab(c,x,txt,cx,cy){
+  x.font='600 10.5px '+FNT;const tw=x.measureText(txt).width;
+  const r={x:cx-tw/2,y:cy-13,w:tw,h:13};
+  if((c._lab||[]).some(o=>r.x<o.x+o.w+4&&r.x+r.w+4>o.x&&r.y<o.y+o.h+2&&r.y+r.h+2>o.y))return false;
+  c._lab.push(r);
+  x.fillStyle=CH.lab;x.textAlign='center';x.textBaseline='bottom';x.fillText(txt,cx,cy);return true;
+}
+function chBars(id,h,labs,ser,fmt,tips,cb,rot,showLab){
+  REDRAW[id]=()=>chBars(id,h,labs,ser,fmt,tips,cb,rot,showLab);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  const hs=hiddenOf(id),vis=ser.filter((s,i)=>!hs.has(i));
+  const p={l:64,r:16,t:showLab?26:14,b:32};const fx=fitX(x,labs,w,p,rot);p.b=fx.b;
+  const ph=h-p.t-p.b,max=Math.max(...vis.flatMap(s=>s.v),1)*1.14;
+  yAxis(x,w,h,p,max,fmt);xAxis(x,w,h,p,labs,fx.rot);
   const bw=(w-p.l-p.r)/labs.length,iw=Math.max(bw*.72/ser.length,3);
-  const lab=showLab&&labs.length<=9&&ser.length<=2;
-  labs.forEach((l,i)=>{ser.forEach((s,si)=>{const hh=(h-p.t-p.b)*s.v[i]/max,bx=p.l+bw*i+bw*.14+iw*si;
-    x.fillStyle=s.c;x.fillRect(bx,h-p.b-hh,iw-3,hh);
-    if(lab&&s.v[i]>0)barLab(x,fmt(s.v[i]),bx+(iw-3)/2,h-p.b-hh-3)});
-    reg(c,p.l+bw*i,p.t,bw,h-p.t-p.b,tips(i),cb?()=>cb(i):null)});
+  const lab=showLab&&labs.length<=12&&vis.length<=2;
+  labs.forEach((l,i)=>{ser.forEach((s,si)=>{const hid=hs.has(si);
+      const hh=Math.min(ph,ph*s.v[i]/max),bx=p.l+bw*i+bw*.14+iw*si;
+      x.fillStyle=hid?rgba(CH.axis,.15):s.c;x.fillRect(bx,h-p.b-hh,iw-3,hh);
+      if(lab&&!hid&&s.v[i]>0)barLab(c,x,fmt(s.v[i]),bx+(iw-3)/2,h-p.b-hh-3)});
+    reg(c,p.l+bw*i,p.t,bw,ph,tips(i),cb?()=>cb(i):null)});
   bind(c)}
 
-function chStackLine(id,h,labs,st,ln,fmtL,tips,cb,rot){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
-  const auto=rot||labs.some(l=>String(l).length>6);
-  const p={l:64,r:52,t:22,b:auto?56:32},tot=labs.map((_,i)=>S(st,s=>s.v[i])),max=Math.max(...tot,1)*1.18;
-  yAxis(x,w,h,p,max,fmtL);xAxis(x,w,h,p,labs,auto?1:0);
-  const bw=(w-p.l-p.r)/labs.length,iw=bw*.48;
-  const lab=labs.length<=9;
-  labs.forEach((_,i)=>{let b=0;st.forEach(s=>{const hh=(h-p.t-p.b)*s.v[i]/max;x.fillStyle=s.c;
-    x.fillRect(p.l+bw*i+(bw-iw)/2,h-p.b-b-hh,iw,hh);b+=hh});
-    if(lab&&tot[i]>0)barLab(x,fmtL(tot[i]),p.l+bw*i+bw/2,h-p.b-b-4);
-    reg(c,p.l+bw*i,p.t,bw,h-p.t-p.b,tips(i),cb?()=>cb(i):null)});
-  x.save();x.beginPath();x.rect(p.l,p.t,w-p.l-p.r,h-p.t-p.b);x.clip();
-  x.strokeStyle=ln.c;x.lineWidth=2;x.beginPath();
-  ln.v.forEach((v,i)=>{const X=p.l+bw*(i+.5),Y=h-p.b-(h-p.t-p.b)*Math.min(v,1);i?x.lineTo(X,Y):x.moveTo(X,Y)});x.stroke();
-  ln.v.forEach((v,i)=>{const X=p.l+bw*(i+.5),Y=h-p.b-(h-p.t-p.b)*Math.min(v,1);
-    x.fillStyle=ln.c;x.beginPath();x.arc(X,Y,3.5,0,7);x.fill()});x.restore();
-  x.fillStyle=CH.axis;x.font='11px '+FNT;x.textAlign='left';x.textBaseline='middle';
-  [0,.5,1].forEach(f=>x.fillText(nf(f*100)+'%',w-p.r+6,h-p.b-(h-p.t-p.b)*f));
+/* Стек + линия (правая ось 0–100%). Индексы легенды: 0..st.length-1 — столбцы, st.length — линия */
+function chStackLine(id,h,labs,st,ln,fmtL,tips,cb,rot){
+  REDRAW[id]=()=>chStackLine(id,h,labs,st,ln,fmtL,tips,cb,rot);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  const hs=hiddenOf(id),lnHid=hs.has(st.length);
+  const p={l:64,r:lnHid?18:52,t:26,b:32};const fx=fitX(x,labs,w,p,rot);p.b=fx.b;
+  const ph=h-p.t-p.b;
+  const tot=labs.map((_,i)=>S(st.filter((s,si)=>!hs.has(si)),s=>s.v[i])),max=Math.max(...tot,1)*1.2;
+  yAxis(x,w,h,p,max,fmtL);xAxis(x,w,h,p,labs,fx.rot);
+  const bw=(w-p.l-p.r)/labs.length,iw=Math.min(bw*.55,90);
+  const tops=[],topCol=[];
+  labs.forEach((_,i)=>{let b=0,col=CH.d1;st.forEach((s,si)=>{if(hs.has(si)||!(s.v[i]>0))return;
+      const hh=ph*s.v[i]/max;x.fillStyle=s.c;x.fillRect(p.l+bw*i+(bw-iw)/2,h-p.b-b-hh,iw,hh);b+=hh;col=s.c});
+    tops.push(h-p.b-b);topCol.push(col);
+    reg(c,p.l+bw*i,p.t,bw,ph,tips(i),cb?()=>cb(i):null)});
+  const lx=i=>p.l+bw*(i+.5),ly=v=>h-p.b-ph*Math.min(Math.max(v||0,0),1);
+  const lineAt=px=>{const f0=(px-p.l)/bw-.5,i0=Math.max(0,Math.min(labs.length-1,Math.floor(f0))),
+    i1=Math.min(labs.length-1,i0+1),f=Math.min(1,Math.max(0,f0-i0));return ly(ln.v[i0]*(1-f)+ln.v[i1]*f)};
+  if(!lnHid){
+    x.save();x.beginPath();x.rect(p.l,p.t,w-p.l-p.r,ph);x.clip();
+    x.strokeStyle=ln.c;x.lineWidth=2;x.beginPath();
+    ln.v.forEach((v,i)=>i?x.lineTo(lx(i),ly(v)):x.moveTo(lx(i),ly(v)));x.stroke();
+    const dotR=labs.length>30?2:3.5;
+    ln.v.forEach((v,i)=>{x.fillStyle=ln.c;x.beginPath();x.arc(lx(i),ly(v),dotR,0,7);x.fill()});x.restore();
+    x.fillStyle=CH.axis;x.font='11px '+FNT;x.textAlign='left';x.textBaseline='middle';
+    [0,.5,1].forEach(f=>x.fillText(nf(f*100)+'%',w-p.r+6,h-p.b-ph*f));
+  }
+  /* подписи итогов — только там, где не пересекают линию; иначе внутрь столбца или пропуск */
+  if(labs.length<=12)labs.forEach((_,i)=>{if(!(tot[i]>0))return;
+    const txt=fmtL(tot[i]),cx=lx(i),y=tops[i]-4;
+    x.font='600 10.5px '+FNT;const tw=x.measureText(txt).width;
+    let clash=false;
+    if(!lnHid)for(let px=cx-tw/2;px<=cx+tw/2;px+=6){const yy=lineAt(px);if(yy>y-16&&yy<y+4){clash=true;break}}
+    if(!clash){barLab(c,x,txt,cx,y);return}
+    const hh=h-p.b-tops[i];
+    if(hh>22&&tw<iw-4){x.fillStyle=onFill(topCol[i]);x.textAlign='center';x.textBaseline='top';x.fillText(txt,cx,tops[i]+4)}
+  });
   bind(c)}
 
-function chLine(id,h,labs,ser,fmt,tips,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
-  const p={l:68,r:18,t:24,b:32},all=ser.flatMap(s=>s.v),max=Math.max(...all,1)*1.2;
-  yAxis(x,w,h,p,max,fmt);xAxis(x,w,h,p,labs);
-  const sx=i=>p.l+(w-p.l-p.r)*(labs.length>1?i/(labs.length-1):.5),sy=v=>h-p.b-(h-p.t-p.b)*v/max;
-  x.save();x.beginPath();x.rect(p.l-2,p.t-2,w-p.l-p.r+4,h-p.t-p.b+4);x.clip();
-  ser.forEach(s=>{if(s.fill){const gr=x.createLinearGradient(0,p.t,0,h-p.b);
+function chLine(id,h,labs,ser,fmt,tips,cb){
+  REDRAW[id]=()=>chLine(id,h,labs,ser,fmt,tips,cb);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  const hs=hiddenOf(id),vis=ser.filter((s,i)=>!hs.has(i));
+  const p={l:68,r:18,t:26,b:32};const fx=fitX(x,labs,w,p,0);p.b=fx.b;
+  const ph=h-p.t-p.b,max=Math.max(...vis.flatMap(s=>s.v),1)*1.2;
+  yAxis(x,w,h,p,max,fmt);xAxis(x,w,h,p,labs,fx.rot);
+  const sx=i=>p.l+(w-p.l-p.r)*(labs.length>1?i/(labs.length-1):.5),sy=v=>h-p.b-ph*Math.min(v,max)/max;
+  x.save();x.beginPath();x.rect(p.l-2,p.t-2,w-p.l-p.r+4,ph+4);x.clip();
+  ser.forEach((s,si)=>{if(hs.has(si))return;
+    if(s.fill){const gr=x.createLinearGradient(0,p.t,0,h-p.b);
       gr.addColorStop(0,rgba(s.c,.20));gr.addColorStop(1,rgba(s.c,0));x.beginPath();
       s.v.forEach((v,i)=>i?x.lineTo(sx(i),sy(v)):x.moveTo(sx(i),sy(v)));
       x.lineTo(sx(s.v.length-1),h-p.b);x.lineTo(sx(0),h-p.b);x.closePath();x.fillStyle=gr;x.fill()}
     x.beginPath();s.v.forEach((v,i)=>i?x.lineTo(sx(i),sy(v)):x.moveTo(sx(i),sy(v)));
     x.strokeStyle=s.c;x.lineWidth=2.2;if(s.dash)x.setLineDash([5,4]);x.stroke();x.setLineDash([]);
-    s.v.forEach((v,i)=>{x.fillStyle=s.c;x.beginPath();x.arc(sx(i),sy(v),3.4,0,7);x.fill()})});
+    const dotR=labs.length>30?2:3.4;
+    s.v.forEach((v,i)=>{x.fillStyle=s.c;x.beginPath();x.arc(sx(i),sy(v),dotR,0,7);x.fill()})});
   x.restore();
-  if(labs.length<=9&&ser.length===1)ser[0].v.forEach((v,i)=>barLab(x,fmt(v),sx(i),sy(v)-8));
-  labs.forEach((_,i)=>reg(c,sx(i)-15,p.t,30,h-p.t-p.b,tips(i),cb?()=>cb(i):null));
+  if(vis.length===1){const s=vis[0],step=Math.max(1,Math.ceil(labs.length/10));
+    s.v.forEach((v,i)=>{if(i%step)return;barLab(c,x,fmt(v),sx(i),sy(v)-8)})}
+  labs.forEach((_,i)=>reg(c,sx(i)-Math.min(15,(w-p.l-p.r)/labs.length/2),p.t,Math.min(30,(w-p.l-p.r)/labs.length),ph,tips(i),cb?()=>cb(i):null));
   bind(c)}
 
 function chH(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
@@ -1358,33 +1526,30 @@ function chH(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
     reg(c,0,y,w,row,it.tip||`<b>${it.k}</b><br>${fmt(it.v)}`,cb?()=>cb(it):null)});
   bind(c)}
 
-function chDonut(id,h,parts,title,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
-  const narrow=w<360;
-  const lgW=narrow?0:Math.min(180,w*0.38);
-  const area=w-lgW;
-  const cx=narrow?w/2:area/2+8;
-  const cy=narrow?(h-parts.length*18)/2:h/2;
-  const R=Math.min(area*.40,(narrow?h-parts.length*18:h)*.42);
-  const r0=R*.62,tot=S(parts,p=>p.v)||1;let a=-Math.PI/2;
-  parts.forEach((pt,i)=>{const col=pt.c||PAL[i%PAL.length];const sw=2*Math.PI*pt.v/tot;
-    x.beginPath();x.arc(cx,cy,R,a,a+sw);x.arc(cx,cy,r0,a+sw,a,true);x.closePath();
-    x.fillStyle=col;x.fill();
+/* Кольцевая: легенда на канвасе кликабельна, скрытые сегменты исключаются из 100% */
+function chDonut(id,h,parts,title,fmt,cb){
+  REDRAW[id]=()=>chDonut(id,h,parts,title,fmt,cb);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  const hs=hiddenOf(id),key=pt=>'k:'+pt.k,vis=parts.filter(pt=>!hs.has(key(pt)));
+  const narrow=w<360,lgW=narrow?0:Math.min(190,w*0.40),area=w-lgW;
+  const cx=narrow?w/2:area/2+8,cy=narrow?(h-parts.length*18)/2:h/2;
+  const R=Math.min(area*.40,(narrow?h-parts.length*18:h)*.42),r0=R*.62,tot=S(vis,p=>p.v)||1;let a=-Math.PI/2;
+  vis.forEach(pt=>{const i=parts.indexOf(pt),col=pt.c||PAL[i%PAL.length],sw=2*Math.PI*pt.v/tot;
+    x.beginPath();x.arc(cx,cy,R,a,a+sw);x.arc(cx,cy,r0,a+sw,a,true);x.closePath();x.fillStyle=col;x.fill();
     if(sw>.32){const m=a+sw/2,tr=(R+r0)/2;x.fillStyle=onFill(col);x.textAlign='center';x.textBaseline='middle';
       x.font='600 10.5px '+FNT;x.fillText(pc(pt.v/tot),cx+Math.cos(m)*tr,cy+Math.sin(m)*tr)}
     const ma=a+sw/2;reg(c,cx+Math.cos(ma)*((R+r0)/2)-16,cy+Math.sin(ma)*((R+r0)/2)-12,32,24,
       `<b>${pt.k}</b><br>${fmt(pt.v)} · ${pc(pt.v/tot)}`,cb?()=>cb(pt):null);a+=sw});
-  x.fillStyle=CH.txt;x.textAlign='center';x.textBaseline='middle';x.font='600 12px '+FNT;
-  x.fillText(title,cx,cy);
+  x.fillStyle=CH.txt;x.textAlign='center';x.textBaseline='middle';x.font='600 12px '+FNT;x.fillText(title,cx,cy);
   x.font='11.5px '+FNT;x.textAlign='left';x.textBaseline='middle';
-  parts.forEach((pt,i)=>{
-    const lx=narrow?12:area+12;
-    const ly=narrow?(h-parts.length*18+9)+i*18:(cy-parts.length*10+i*20);
-    x.fillStyle=pt.c||PAL[i%PAL.length];
-    x.fillRect(lx,ly-4.5,9,9);
-    x.fillStyle=CH.lab;
-    x.fillText(String(pt.k).slice(0,narrow?22:16)+'  '+pc(pt.v/tot),lx+15,ly);
-    reg(c,lx,ly-9,narrow?w-lx-6:lgW,18,`<b>${pt.k}</b><br>${fmt(pt.v)} · ${pc(pt.v/tot)}`,cb?()=>cb(pt):null);
-  });
+  parts.forEach((pt,i)=>{const off=hs.has(key(pt));
+    const lx=narrow?12:area+12,ly=narrow?(h-parts.length*18+9)+i*18:(cy-parts.length*10+i*20);
+    x.fillStyle=off?CH.dim:(pt.c||PAL[i%PAL.length]);x.fillRect(lx,ly-4.5,9,9);
+    x.fillStyle=off?CH.dimTxt:CH.lab;
+    const nm=String(pt.k).slice(0,narrow?22:16);x.fillText(off?nm:nm+'  '+pc(pt.v/tot),lx+15,ly);
+    if(off){const tw=x.measureText(nm).width;x.strokeStyle=CH.dimTxt;x.lineWidth=1;x.beginPath();x.moveTo(lx+15,ly);x.lineTo(lx+15+tw,ly);x.stroke()}
+    reg(c,lx,ly-9,narrow?w-lx-6:lgW,18,`<b>${pt.k}</b><br>${fmt(pt.v)}<br><span style="color:var(--scp-accent)">Клик: ${off?'показать':'скрыть'} сегмент</span>`,
+      ()=>{off?hs.delete(key(pt)):hs.add(key(pt));REDRAW[id]()})});
   bind(c)}
 
 function chBubble(id,h,pts,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
@@ -1425,21 +1590,53 @@ function chPareto(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=
   x.fillText(`${cums.filter(v=>v<=.8).length+1} из ${items.length} формируют 80%`,w-p.r,p.t);
   bind(c)}
 
-function chHeat(id,h,rows,cols,mat,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
-  const p={l:118,r:14,t:28,b:14},cw=(w-p.l-p.r)/Math.max(cols.length,1),rh=(h-p.t-p.b)/Math.max(rows.length,1);
-  const max=Math.max(...mat.flat(),1);
-  x.fillStyle=CH.lab;x.textAlign='center';x.textBaseline='bottom';x.font='10px '+FNT;
-  cols.forEach((cl,j)=>{x.save();x.translate(p.l+cw*(j+.5),p.t-5);x.rotate(-.55);x.textAlign='left';
-    x.fillText(String(cl).slice(0,13),0,0);x.restore()});
+/* Тепловая карта: подписи строк/колонок по фактической ширине, число в ячейке — только если помещается */
+function chHeat(id,h,rows,cols,mat,fmt,cb,cellFmt){
+  REDRAW[id]=()=>chHeat(id,h,rows,cols,mat,fmt,cb,cellFmt);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  cellFmt=cellFmt||(v=>nf(v/1e6,0));
+  x.font='11px '+FNT;const rowW=Math.min(150,Math.max(40,...rows.map(r=>x.measureText(String(r)).width))+12);
+  x.font='10px '+FNT;const colW=Math.max(0,...cols.map(cl=>x.measureText(String(cl)).width));
+  const cwEst=(w-rowW-14)/Math.max(cols.length,1),rotC=colW>cwEst-6;
+  const p={l:rowW,r:14,t:rotC?Math.min(72,Math.round(colW*0.72+16)):24,b:12};
+  const cw=(w-p.l-p.r)/Math.max(cols.length,1),rh=(h-p.t-p.b)/Math.max(rows.length,1),max=Math.max(...mat.flat(),1);
+  x.fillStyle=CH.lab;x.font='10px '+FNT;
+  cols.forEach((cl,j)=>{const s=String(cl);
+    if(rotC){x.save();x.translate(p.l+cw*(j+.5),p.t-6);x.rotate(-Math.PI/4);x.textAlign='left';x.textBaseline='middle';
+      x.fillText(s.length>14?s.slice(0,13)+'…':s,0,0);x.restore()}
+    else{x.textAlign='center';x.textBaseline='bottom';x.fillText(s,p.l+cw*(j+.5),p.t-6)}});
   rows.forEach((r,i)=>{x.fillStyle=CH.lab;x.textAlign='right';x.textBaseline='middle';x.font='11px '+FNT;
-    x.fillText(String(r).slice(0,17),p.l-7,p.t+rh*(i+.5));
+    let s=String(r);while(s.length>3&&x.measureText(s).width>p.l-10)s=s.slice(0,-2)+'…';
+    x.fillText(s,p.l-7,p.t+rh*(i+.5));
     cols.forEach((cl,j)=>{const v=mat[i][j],t=v/max;
-      x.fillStyle=v?rgba(CH.brand,.08+t*.80):CH.pane;
-      x.fillRect(p.l+cw*j+1,p.t+rh*i+1,cw-2,rh-2);
+      x.fillStyle=v?rgba(CH.brand,.08+t*.80):CH.pane;x.fillRect(p.l+cw*j+1,p.t+rh*i+1,cw-2,rh-2);
       x.strokeStyle=CH.grid;x.lineWidth=1;x.strokeRect(p.l+cw*j+1,p.t+rh*i+1,cw-2,rh-2);
-      if(t>.30){x.fillStyle=t>.55?'#ffffff':CH.txt;x.textAlign='center';x.textBaseline='middle';
-        x.font='600 10px '+FNT;x.fillText(nf(v/1e6,0),p.l+cw*(j+.5),p.t+rh*(i+.5))}
+      if(t>.30&&rh>=14){x.font='600 10px '+FNT;let txt=cellFmt(v),tw=x.measureText(txt).width;
+        if(tw>cw-6){txt=txt.replace(/\s.*$/,'');tw=x.measureText(txt).width}
+        if(tw<=cw-6){x.fillStyle=t>.55?'#ffffff':CH.txt;x.textAlign='center';x.textBaseline='middle';
+          x.fillText(txt,p.l+cw*(j+.5),p.t+rh*(i+.5))}}
       reg(c,p.l+cw*j,p.t+rh*i,cw,rh,`<b>${r} → ${cl}</b><br>${fmt(v)}`,cb&&v?()=>cb(r,cl):null)})});
+  bind(c)}
+
+/* Бизнес-водопад: items=[{k,v,type:'total'|'delta',c}] — total задаёт уровень, delta сдвигает */
+function chWaterfall(id,h,items,fmt,tips,cb){
+  REDRAW[id]=()=>chWaterfall(id,h,items,fmt,tips,cb);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  const p={l:70,r:20,t:30,b:32};const fx=fitX(x,items.map(i=>i.k),w,p,0);p.b=fx.b;
+  let lvl=0;const bars=items.map(it=>{
+    if(it.type==='total'){lvl=it.v;return {...it,y0:0,y1:it.v,after:it.v}}
+    const y0=lvl;lvl+=it.v;return {...it,y0:Math.min(y0,lvl),y1:Math.max(y0,lvl),after:lvl}});
+  const max=Math.max(...bars.map(b=>b.y1),1)*1.15,ph=h-p.t-p.b;
+  yAxis(x,w,h,p,max,fmt);xAxis(x,w,h,p,items.map(i=>i.k),fx.rot);
+  const bw=(w-p.l-p.r)/items.length,iw=Math.min(bw*.6,120),Y=v=>h-p.b-ph*v/max;
+  bars.forEach((b,i)=>{const bx=p.l+bw*i+(bw-iw)/2,top=Y(b.y1),bot=Y(b.y0);
+    const col=b.type==='total'?(b.c||CH.d1):(b.v<0?CH.err:CH.ok);
+    x.fillStyle=col;x.fillRect(bx,top,iw,Math.max(bot-top,b.v?2:0));
+    if(i<bars.length-1){const cy=Y(b.after);x.strokeStyle=CH.axis;x.lineWidth=1;x.setLineDash([3,3]);
+      x.beginPath();x.moveTo(bx+iw,cy);x.lineTo(bx+bw+(bw-iw)/2,cy);x.stroke();x.setLineDash([])}
+    const txt=b.type==='total'?fmt(b.v):(b.v<0?'−':'+')+fmt(Math.abs(b.v));
+    barLab(c,x,txt,bx+iw/2,top-4);
+    reg(c,p.l+bw*i,p.t,bw,ph,tips?tips(i):`<b>${b.k}</b><br>${fmt(Math.abs(b.v))}`,cb?()=>cb(i):null)});
   bind(c)}
 
 const TM_ICONS={
@@ -1782,10 +1979,10 @@ function tabOV(){
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
     <div class="card"><h3>Выручка, себестоимость и маржа по периодам</h3><div class="sub">Клик по периоду — фильтр. Значения в млрд ₽</div>
-      <div class="lg"><span><i style="background:${CH.d1}"></i>Выручка</span><span><i style="background:${CH.d5}"></i>Себестоимость</span><span><i style="background:${CH.d3}"></i>Маржа</span></div>
+      ${lg('#o1',[[CH.d1,'Выручка'],[CH.d5,'Себестоимость'],[CH.d3,'Маржа']])}
       <canvas id="o1"></canvas></div>
     <div class="card"><h3>Маржа на тонну по периодам</h3><div class="sub">Цены фиксированы, закупочные тарифы растут</div>
-      <div class="lg"><span><i style="background:${CH.d3}"></i>Маржа, ₽/т</span></div><canvas id="o2"></canvas></div>
+      ${lg('#o2',[[CH.d3,'Маржа, ₽/т']])}<canvas id="o2"></canvas></div>
     <div class="card"><h3>Структура затрат по типам операций</h3><div class="sub">Клик по сегменту — переход к соответствующему блоку</div><canvas id="o3"></canvas></div>
     <div class="card"><h3>Маржа на тонну и объём</h3><div class="sub">Размер пузыря — валовая маржа. Верх справа — ядро бизнеса</div><canvas id="o4"></canvas></div>
     <div class="card"><h3>Топ продуктов по марже</h3><div class="sub">Клик — фильтр по продукту</div><canvas id="o5"></canvas></div>
@@ -1856,148 +2053,159 @@ function tabOV(){
       `Ввести регулярное сравнение версий планов для контроля, что изменения в сети улучшают маржу, а не только объём.`]}]);
 }
 
-/* ═══════════════ 9. БЛОК: СПРОС ═══════════════ */
+/* ═════════ 9. БЛОК: СПРОС И ПОКРЫТИЕ ═══════════ */
 function tabDM(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
-  const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
-  const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU');
-  const p1=D.filter(o=>o.pr==1);
-  const lmTotal=S(D,o=>o.unm*o.mpt);
-  const defOrders=D.filter(o=>o.unm>0);
+  const agg=DS.agg||{},T0=agg.totals||{},covT=T0.cov||{};
+  const hasDC=!!(((agg.dims||{}).coverage||[]).length);
+  const fActive=Object.values(F).some(a=>a.length);
+  /* Неограниченный спрос известен только из demand_coverage (агрегат по всей схеме) — под фильтрами не применяем */
+  const useUnc=hasDC&&!fActive;
 
-  const K=[
-    ['План спроса', nf(dem)+' т', D.length+' '+plural(D.length,['заказ','заказа','заказов']), ''],
-    ['План отгрузки', nf(sal)+' т', `Покрытие: ${pc(sal/dem)} (дефицит ${nf(unm)} т)`, sal/dem>=0.95?'pos':sal/dem>=0.8?'mid':'neg'],
-    ['Упущенная маржа (Lost Margin)', bn(lmTotal), `${defOrders.length} ${plural(defOrders.length,['заказ','заказа','заказов'])} с дефицитом`, 'neg'],
-    ['Маржинальность продаж', pc(mar/rev), `Выручка ${bn(rev)} | Маржа ${bn(mar)}`, 'pos'],
-    ['Средняя цена реализации', nf(rev/sal)+' ₽/т', 'взвешенно по продажам', ''],
-    ['Средняя себестоимость', nf(cost/sal)+' ₽/т', 'полный цикл цепочки', ''],
-    ['Экспортный контур (EX)', pc(S(ex,o=>o.mar)/mar), `Объем: ${nf(S(ex,o=>o.sal))} т (${pc(S(ex,o=>o.sal)/sal)})`, ''],
-    ['Надежность исполнения (OTIF)', pc(D.filter(o=>o.unm===0).length / D.length), `${D.filter(o=>o.unm===0).length} из ${D.length} заказов без дефицита`, D.filter(o=>o.unm===0).length / D.length >= 0.85 ? 'pos' : 'mid']
-  ];
+  const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
+  const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU'),p1=D.filter(o=>o.pr==1);
+  const defOrders=D.filter(o=>o.unm>0),full=D.length-defOrders.length;
+  const lm=S(defOrders,o=>o.unm*o.mpt),lostRev=S(defOrders,o=>o.unm*o.price);
+  const demUnc=useUnc?(num(covT.demUnc)||(num(covT.ff)+num(covT.uf))):dem;
+  const notPlanned=Math.max(0,demUnc-dem),late=useUnc?num(covT.late):0,inTime=Math.max(0,sal-late);
+  const sl=dem?sal/dem:0;
 
   const per=grp(D,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)})).sort((a,b)=>a.k-b.k);
-  const def=grp(D.filter(o=>o.unm>0),o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt),prod:v[0].prod}))
-    .sort((a,b)=>b.v-a.v).slice(0,8);
+  const def=grp(defOrders,o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt),prod:v[0].prod}))
+    .sort((a,b)=>b.lm-a.lm).slice(0,8);
+  const prDef=grp(defOrders,o=>o.prod,v=>({unm:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt)})).sort((a,b)=>b.unm-a.unm);
   const cl=grp(D,o=>o.cl,v=>({mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem),unm:S(v,o=>o.unm),rev:S(v,o=>o.rev)}))
     .sort((a,b)=>b.mar-a.mar);
-  const pr=grp(D,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/S(v,o=>o.sal),cpt:S(v,o=>o.cost)/S(v,o=>o.sal),
+  const pr=grp(D,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/Math.max(S(v,o=>o.sal),1),cpt:S(v,o=>o.cost)/Math.max(S(v,o=>o.sal),1),
     mar:S(v,o=>o.mar),sal:S(v,o=>o.sal)})).sort((a,b)=>b.price-a.price);
-  /* Кэш сквозного анализа на время жизни вкладки: одна тяжёлая проверка на заказ,
-     а не на каждую перерисовку таблицы. Обнуляется вместе с перерендером вкладки
-     (смена фильтров/датасета пересоздаёт замыкание). */
   const rcaCache=new Map();
   const rcaFor=o=>{if(!rcaCache.has(o.id))rcaCache.set(o.id,CapacityRCA.analyzeOrderChain(o));return rcaCache.get(o.id)};
 
+  /* ── бизнес-водопад ── */
+  const wf=[];
+  if(useUnc)wf.push({k:'Неограниченный спрос',v:demUnc,type:'total',c:CH.d1},{k:'Не принято в план',v:-notPlanned,type:'delta'});
+  wf.push({k:'Ограниченный спрос',v:dem,type:'total',c:CH.d2},{k:'Дефицит',v:-unm,type:'delta'},{k:'Отгружено',v:sal,type:'total',c:CH.d3});
+  if(useUnc)wf.push({k:'С опозданием',v:-late,type:'delta'},{k:'В срок',v:inTime,type:'total',c:CH.ok});
+
+  const K=[
+    ['Неограниченный спрос',useUnc?nf(demUnc)+' т':'—',useUnc?'demand_coverage, вся схема':(hasDC?'снимите фильтры, чтобы увидеть':'demand_coverage не загружен'),''],
+    ['Ограниченный спрос (план)',nf(dem)+' т',D.length+' '+plural(D.length,['заказ','заказа','заказов']),''],
+    ['Отгружено',nf(sal)+' т','Service Level '+pc(sl),sl>=.95?'pos':sl>=.8?'mid':'neg'],
+    ['Дефицит',nf(unm)+' т',defOrders.length+' '+plural(defOrders.length,['заказ','заказа','заказов'])+' с дефицитом',unm?'neg':'pos'],
+    ['Отгружено с опозданием',useUnc?nf(late)+' т':'—',useUnc?pc(sal?late/sal:0)+' отгруженного':'нужен demand_coverage',late&&late/Math.max(sal,1)>.05?'neg':late?'mid':''],
+    ['Упущенная маржа',bn(lm),'потерянная выручка '+bn(lostRev),'neg'],
+    ['Маржинальность продаж',pc(rev?mar/rev:0),`Выручка ${bn(rev)} | Маржа ${bn(mar)}`,'pos'],
+    ['Заказов без дефицита',pc(full/D.length),`${full} из ${D.length}`,full/D.length>=.85?'pos':'mid']
+  ];
+
   const html=`
+  <div class="dq ${useUnc?'i':'w'}" style="margin-bottom:14px"><span class="tag">Источник</span>
+    <div class="m">${useUnc?'Неограниченный спрос и опоздания — агрегаты <code>demand_coverage</code> по всей схеме; остальное — <code>marking_demand</code> под фильтрами.'
+      :hasDC?'Активны фильтры: неограниченный спрос (<code>demand_coverage</code>) не разрезается по фильтрам, водопад начинается с ограниченного спроса.'
+      :'Таблица <code>demand_coverage</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>.'}</div></div>
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
-    <div class="card"><h3>Спрос, продажи и дефицит</h3><div class="sub">Тыс. т и линия Service Level</div>
-      <div class="lg"><span><i style="background:${CH.d3}"></i>Продажи</span><span><i style="background:${CH.d5}"></i>Дефицит</span><span><i style="background:${CH.warn}"></i>Service Level</span></div>
-      <canvas id="d1"></canvas></div>
-    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Клик — фильтр по продукту</div><canvas id="d2"></canvas></div>
-    <div class="card"><h3>Доля каналов в марже</h3><div class="sub">Клик — фильтр по каналу</div><canvas id="d3"></canvas></div>
+    <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
+      <div class="sub">Тонны. Синие столбцы — уровни, красные — потери на каждом шаге. Клик по «Дефицит» — к таблице ниже</div><canvas id="d0"></canvas></div>
+    <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду</div>
+      ${lg('#d1',[[CH.d3,'Отгружено'],[CH.d5,'Дефицит'],[CH.warn,'Service Level']])}<canvas id="d1"></canvas></div>
+    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div><canvas id="d2"></canvas></div>
+    <div class="card"><h3>Доля каналов в марже</h3><div class="sub">Клик по сегменту — фильтр, по легенде — скрыть сегмент</div><canvas id="d3"></canvas></div>
     <div class="card"><h3>Клиенты: маржа и покрытие спроса</h3><div class="sub">Столбец — маржа, линия — Service Level</div>
-      <div class="lg"><span><i style="background:${CH.d1}"></i>Маржа</span><span><i style="background:${CH.warn}"></i>Service Level</span></div><canvas id="d4"></canvas></div>
+      ${lg('#d4',[[CH.d1,'Маржа'],[CH.warn,'Service Level']])}<canvas id="d4"></canvas></div>
     <div class="card"><h3>Цена и себестоимость по продуктам</h3><div class="sub">Синяя точка — цена, вторая — себестоимость. Длина отрезка равна марже</div><canvas id="d5"></canvas></div>
-    <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽</div><canvas id="d6"></canvas></div>
-    <div class="card w"><h3>Дефициты, упущенная маржа и корневые причины (RCA)</h3><div class="sub">Клик по бейджу узкого места открывает сквозную цепочку заказа с фокусом на лимите</div><div id="d7"></div></div>
+    <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽. Клик — фильтр клиент + период</div><canvas id="d6"></canvas></div>
+    <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту</div><canvas id="d8"></canvas></div>
+    <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита</div><canvas id="d9"></canvas></div>
+    <div class="card w"><h3>Дефициты, упущенная маржа и корневые причины (RCA)</h3>
+      <div class="sub">Единая таблица покрытия. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей с фокусом на лимите</div><div id="d7"></div></div>
   </div>`;
+
   setTimeout(()=>{
+    chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,v=>nf(v/1000,1)+'k т',
+      i=>{const b=wf[i];return `<b>${b.k}</b><br>${nf(Math.abs(b.v))} т`+(b.type==='delta'&&demUnc?`<br>${pc(Math.abs(b.v)/demUnc)} от неограниченного спроса`:'')},
+      i=>{if(wf[i].k==='Дефицит'){const el=$('#d7');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}});
     chStackLine('#d1',H('#d1',270,0.48),per.map(p=>'P'+p.k),
       [{c:CH.d3,v:per.map(p=>p.sal)},{c:CH.d5,v:per.map(p=>p.unm)}],
-      {c:CH.warn,v:per.map(p=>p.sal/p.dem)},v=>nf(v/1000,0)+'k',
-      i=>`<b>P${per[i].k}</b><br>Продажи: ${nf(per[i].sal)} т<br>Дефицит: ${nf(per[i].unm)} т<br>Service Level: ${pc(per[i].sal/per[i].dem)}`,
+      {c:CH.warn,v:per.map(p=>p.dem?p.sal/p.dem:0)},v=>nf(v/1000,0)+'k',
+      i=>`<b>P${per[i].k}</b><br>Ограниченный спрос: ${nf(per[i].dem)} т<br>Отгружено: ${nf(per[i].sal)} т<br>Дефицит: ${nf(per[i].unm)} т<br>Service Level: ${pc(per[i].dem?per[i].sal/per[i].dem:0)}`,
       i=>setF('p',per[i].k));
-    if(def.length)chH('#d2',H('#d2',270,0.55),def.map(d=>({k:d.k,v:d.v,c:CH.d5,prod:d.prod,
-      tip:`<b>${d.k}</b><br>Дефицит: ${nf(d.v)} т<br>Упущенная маржа: ${bn(d.lm)}`})),v=>nf(v)+' т',it=>setF('pr',it.prod));
-    else{const g=cv('#d2',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
-      g.x.fillText('Дефицитов под текущими фильтрами нет',g.w/2,100)}}
+    const noData=(id,msg)=>{const g=cv(id,200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;g.x.fillText(msg,g.w/2,100)}};
+    if(def.length)chH('#d2',H('#d2',270,0.55),def.map(d=>({k:d.k,v:d.lm,c:CH.d5,prod:d.prod,
+      tip:`<b>${d.k}</b><br>Дефицит: ${nf(d.v)} т<br>Упущенная маржа: ${bn(d.lm)}`})),bn,it=>setF('pr',it.prod));
+    else noData('#d2','Дефицитов под текущими фильтрами нет');
     chDonut('#d3',H('#d3',230,0.55),[{k:'RU внутренний',v:S(ru,o=>o.mar),c:CH.d1},{k:'EX экспорт',v:S(ex,o=>o.mar),c:CH.d2}],
       'Маржа',bn,pt=>setF('ch',pt.k.startsWith('RU')?'RU':'EX'));
-    chStackLine('#d4',H('#d4',230,0.45),cl.map(c=>c.k),[{c:CH.d1,v:cl.map(c=>c.mar)}],{c:CH.warn,v:cl.map(c=>c.sal/c.dem)},
-      v=>nf(v/1e9,1)+' млрд',i=>`<b>${cl[i].k}</b><br>Маржа: ${bn(cl[i].mar)}<br>Маржа на тонну: ${nf(cl[i].mar/cl[i].sal)} ₽<br>Service Level: ${pc(cl[i].sal/cl[i].dem)}<br>Дефицит: ${nf(cl[i].unm)} т`,
+    chStackLine('#d4',H('#d4',250,0.45),cl.map(c=>c.k),[{c:CH.d1,v:cl.map(c=>c.mar)}],{c:CH.warn,v:cl.map(c=>c.dem?c.sal/c.dem:0)},
+      v=>nf(v/1e9,1)+' млрд',i=>`<b>${cl[i].k}</b><br>Маржа: ${bn(cl[i].mar)}<br>Маржа на тонну: ${nf(cl[i].mar/Math.max(cl[i].sal,1))} ₽<br>Service Level: ${pc(cl[i].dem?cl[i].sal/cl[i].dem:0)}<br>Дефицит: ${nf(cl[i].unm)} т`,
       i=>setF('cl',cl[i].k));
     chDumbbell('#d5',H('#d5',290,0.6),pr.slice(0,9).map(p=>({k:p.k,a:p.price,b:p.cpt,
-      tip:`<b>${p.k}</b><br>Цена: ${nf(p.price)} ₽/т<br>Себестоимость: ${nf(p.cpt)} ₽/т<br>Маржа на тонну: ${nf(p.price-p.cpt)} ₽<br>Маржинальность: ${pc(1-p.cpt/p.price)}`})),
+      tip:`<b>${p.k}</b><br>Цена: ${nf(p.price)} ₽/т<br>Себестоимость: ${nf(p.cpt)} ₽/т<br>Маржа на тонну: ${nf(p.price-p.cpt)} ₽<br>Маржинальность: ${pc(1-p.cpt/Math.max(p.price,1))}`})),
       v=>nf(v/1000,0)+'k ₽',it=>setF('pr',it.k));
     const rws=uq(D,o=>o.cl),cls=uq(D,o=>o.p).sort((a,b)=>a-b);
     chHeat('#d6',H('#d6',290,0.55),rws,cls.map(c=>'P'+c),rws.map(r=>cls.map(c=>S(D.filter(o=>o.cl===r&&o.p==c),o=>o.mar))),bn,
-      (r,c)=>{const cl=String(r),p=String(c).slice(1);
-        const i=F.cl.indexOf(cl);i<0?F.cl.push(cl):F.cl.splice(i,1);
-        const j=F.p.indexOf(p);j<0?F.p.push(p):F.p.splice(j,1);
-        render()});
+      (r,c)=>{const k=String(r),p=String(c).slice(1);
+        const i=F.cl.indexOf(k);i<0?F.cl.push(k):F.cl.splice(i,1);
+        const j=F.p.indexOf(p);j<0?F.p.push(p):F.p.splice(j,1);render()});
+    const hr=prDef.slice(0,7).map(p=>p.k),hc=cls.map(c=>'P'+c);
+    if(hr.length)chHeat('#d8',H('#d8',290,0.5),hr,hc,hr.map(r=>hc.map(c=>S(D.filter(o=>o.prod===r&&('P'+o.p)===c),o=>o.unm))),
+      v=>nf(v)+' т',r=>setF('pr',r),v=>nf(v/1000,1)+'k');
+    else noData('#d8','Нет дефицитов для разреза «продукт × период»');
+    if(defOrders.length)chPareto('#d9',H('#d9',280,0.5),defOrders.slice().sort((a,b)=>b.unm-a.unm).slice(0,40).map(o=>({k:`#${o.id} ${o.prod}`,v:o.unm})),
+      v=>nf(v)+' т',it=>setF('pr',it.k.split(' ')[1]));
+    else noData('#d9','Дефицитов нет');
 
     dtable('#d7',[
-      /* Переходы — через data-атрибуты и делегирование (см. слушатель [data-goto-order] /
-         [data-rca-jump] внизу файла): без inline-JS, значения из файлов не попадают в код.
-         rcaFor кэширует analyzeOrderChain: раньше он вызывался дважды на строку при
-         каждой перерисовке таблицы (поиск, сортировка, фильтр) — до десятков тысяч вызовов. */
       {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}">№${v} ↗</span>`},
       {k:'loc',t:'Локация',left:1,flt:1},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
+      {k:'chan',t:'Канал',flt:1},
       {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
       {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
       {k:'sal',t:'Отгрузка',num:1,f:v=>nf(v,1)},
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:()=>'neg'},
       {k:'cov',t:'Покрытие',num:1,v:o=>o.dem?o.sal/o.dem:0,f:v=>pc(v),cls:v=>v>.5?'mid':'neg'},
-      {k:'rca_prod',t:'Узкое место (пр-во)',left:1,flt:1,v:o=>{
-        const res = rcaFor(o);
-        if(!res.hasData) return 'Базовый режим';
-        return res.prodBottleneck ? `${res.prodBottleneck.rsName} (${pc(res.prodBottleneck.util)})` : 'В норме';
-      },f:(v,o)=>{
-        const res = rcaFor(o);
-        if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
-        if(!res.prodBottleneck) return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
-        const bn = res.prodBottleneck;
-        return `<span class="tag" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(bn.rs)}" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Клик: открыть цепочку производственных мощностей заказа">🛑 ${esc(bn.rsName)}: ${pc(bn.util)} ↗</span>`;
-      }},
-      {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{
-        const res = rcaFor(o);
-        if(!res.hasData) return 'Базовый режим';
-        if(res.logBottleneck){
-          const bn = res.logBottleneck;
-          return bn.isBlocked ? `⛔ Блок: ${bn.rsName}` : `📦 ${bn.rsName} (${pc(bn.util)})`;
-        }
-        // Различаем «проверено и свободно» и «лимиты маршрутов в модели не заданы»
-        return (res.logChain && res.logChain.length) ? 'В норме' : 'Лимиты не заданы';
-      },f:(v,o)=>{
-        const res = rcaFor(o);
-        if(!res.hasData) return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
-        if(!res.logBottleneck){
-          return (res.logChain && res.logChain.length)
-            ? `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`
-            : `<span class="tag" style="color:var(--scp-text-3)" title="В res_loc / capacity_view_sp нет лимитов маршрутов, покрывающих плечи этого заказа">◌ Лимиты не заданы</span>`;
-        }
-        const bn = res.logBottleneck;
-        const icon = bn.isBlocked ? '⛔' : '📦';
-        const txt = bn.isBlocked ? `Блок: ${esc(bn.rsName)}` : `${esc(bn.rsName)}: ${pc(bn.util)}`;
-        const colStyle = bn.isBlocked
-          ? 'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
-          : 'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
-        return `<span class="tag" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(bn.rs)}" style="${colStyle};font-weight:600;cursor:pointer" title="Клик: открыть цепочку логистических мощностей и ограничений маршрутов заказа">${icon} ${txt} ↗</span>`;
-      }},
+      {k:'rca_prod',t:'Узкое место (пр-во)',left:1,flt:1,v:o=>{const r=rcaFor(o);
+        if(!r.hasData)return 'Базовый режим';return r.prodBottleneck?`${r.prodBottleneck.rsName} (${pc(r.prodBottleneck.util)})`:'В норме'},
+       f:(v,o)=>{const r=rcaFor(o);
+        if(!r.hasData)return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
+        if(!r.prodBottleneck)return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
+        const b=r.prodBottleneck;
+        return `<span class="tag" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Открыть цепочку производственных мощностей">🛑 ${esc(b.rsName)}: ${pc(b.util)} ↗</span>`}},
+      {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{const r=rcaFor(o);
+        if(!r.hasData)return 'Базовый режим';
+        if(r.logBottleneck){const b=r.logBottleneck;return b.isBlocked?`⛔ Блок: ${b.rsName}`:`📦 ${b.rsName} (${pc(b.util)})`}
+        return (r.logChain&&r.logChain.length)?'В норме':'Лимиты не заданы'},
+       f:(v,o)=>{const r=rcaFor(o);
+        if(!r.hasData)return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
+        if(!r.logBottleneck)return (r.logChain&&r.logChain.length)
+          ?`<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`
+          :`<span class="tag" style="color:var(--scp-text-3)" title="В res_loc / capacity_view_sp нет лимитов маршрутов для плеч этого заказа">◌ Лимиты не заданы</span>`;
+        const b=r.logBottleneck,icon=b.isBlocked?'⛔':'📦',txt=b.isBlocked?`Блок: ${esc(b.rsName)}`:`${esc(b.rsName)}: ${pc(b.util)}`;
+        const st=b.isBlocked?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)':'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
+        return `<span class="tag" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" style="${st};font-weight:600;cursor:pointer" title="Открыть цепочку логистических лимитов">${icon} ${txt} ↗</span>`}},
+      {k:'lostRev',t:'Потер. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v),cls:()=>'neg'},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>o.unm*o.mpt,f:v=>mln(v),cls:()=>'neg'}
-    ],D.filter(o=>o.unm>0),{key:'dm_def',sort:'lm',dir:'desc',h:340,csv:1,name:'deficits'});
+    ],defOrders,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
   },0);
+
   const topDef=def[0],hiMar=D.slice().sort((a,b)=>b.mpt-a.mpt)[0];
-  return html+summary('Резюме: спрос и продажи',[
-    {t:'Выводы',i:[
-      `Покрыто <span class="h">${pc(sal/dem)}</span> спроса. ${def.length?`Дефицит сконцентрирован: топ-позиция <span class="h">${topDef.k}</span> — ${nf(topDef.v)} т и ${bn(topDef.lm)} упущенной маржи`:'Дефицитов нет'}.`,
-      `Экспорт даёт ${pc(S(ex,o=>o.sal)/sal)} объёма и <span class="h">${pc(S(ex,o=>o.mar)/mar)}</span> маржи — ${S(ex,o=>o.mar)/Math.max(S(ex,o=>o.sal),1)>mar/sal?'канал маржинальнее среднего':'канал менее маржинален, чем внутренний'}.`,
-      `Самая маржинальная позиция на тонну: <span class="h">${hiMar.prod}</span>, ${nf(hiMar.mpt)} ₽/т, клиент ${hiMar.cl}.`,
-      `Клиентская концентрация: ${cl[0].k} формирует ${pc(cl[0].mar/mar)} маржи.`]},
+  return html+summary('Резюме: спрос и покрытие',[
+    {t:'Водопад',i:[
+      useUnc?`Неограниченный спрос <span class="h">${nf(demUnc)} т</span> → в план принято ${nf(dem)} т (${pc(demUnc?dem/demUnc:0)}), отгружено ${nf(sal)} т, из них в срок ${nf(inTime)} т.`
+        :`Ограниченный спрос <span class="h">${nf(dem)} т</span>, отгружено ${nf(sal)} т — Service Level ${pc(sl)}.`,
+      unm?`Дефицит <span class="h">${nf(unm)} т</span> = ${bn(lostRev)} потерянной выручки и ${bn(lm)} упущенной маржи (${pc(mar?lm/mar:0)} текущего результата).`:`Дефицита нет — ограниченный спрос покрыт полностью.`,
+      def.length?`Топ-позиция по упущенной марже: <span class="h">${topDef.k}</span> — ${nf(topDef.v)} т, ${bn(topDef.lm)}.`:'',
+      `Экспорт: ${pc(sal?S(ex,o=>o.sal)/sal:0)} объёма и <span class="h">${pc(mar?S(ex,o=>o.mar)/mar:0)}</span> маржи; самая маржинальная позиция — ${hiMar.prod} (${nf(hiMar.mpt)} ₽/т, ${hiMar.cl}).`].filter(Boolean)},
     {t:'Аномалии',i:[
-      p1.length&&S(p1,o=>o.sal)/S(p1,o=>o.dem)<.9?`<span class="h">Приоритет 1 не обслужен полностью</span>: Service Level ${pc(S(p1,o=>o.sal)/S(p1,o=>o.dem))}. Для высшего приоритета это нарушение логики планирования — проверить ограничения по мощности и правила аллокации.`:`Приоритет 1 обслужен полностью — правила аллокации работают.`,
-      def.length&&def[0].v/10000>.9?`Есть позиции с покрытием менее 10% спроса — фактически спрос игнорируется оптимизатором: вероятно, отсутствует доступный маршрут или мощность.`:`Критических нулевых покрытий не выявлено.`,
-      `Сегмент «Прочие» агрегирует разнородных клиентов — искажает клиентскую аналитику и переговорные приоритеты.`,
-      `Поле «Клиент» смешивает юрлица (Роснефть, Газпром) и географии (Вьетнам, Турция) — нужна нормализация в два измерения: клиент и рынок.`]},
+      p1.length&&S(p1,o=>o.sal)/Math.max(S(p1,o=>o.dem),1)<.9?`<span class="h">Приоритет 1 не обслужен полностью</span>: SL ${pc(S(p1,o=>o.sal)/S(p1,o=>o.dem))} — проверить правила аллокации и мощности.`:`Приоритет 1 обслужен полностью.`,
+      def.length&&defOrders.some(o=>o.sal/o.dem<.1)?`Есть заказы с покрытием менее 10% — спрос фактически игнорируется оптимизатором: нет маршрута, мощности или сырья.`:`Критически низких покрытий не выявлено.`,
+      `Поле «Клиент» смешивает юрлица и географии, сегмент «Прочие» агрегирует разнородных контрагентов — искажает клиентскую аналитику.`]},
     {t:'Рекомендации',i:[
-      `Приоритизировать расшивку по <span class="h">упущенной марже</span>, а не по тоннам дефицита — порядок позиций в таблице выше уже это отражает.`,
-      `Разделить справочник на «Клиент» и «Рынок или регион», распаковать «Прочие» минимум до топ-10 контрагентов.`,
-      `Проверить причины низкого покрытия: нет мощности, нет сырья или отсутствует разрешённый маршрут. Это три разных управленческих решения.`,
-      `Для позиций с маржинальностью выше 90% валидировать корректность разузлования — такая маржа обычно означает недоучтённую себестоимость.`]}]);
+      `Расшивать дефицит по <span class="h">упущенной марже</span>, а не по тоннам — таблица уже отсортирована так.`,
+      `По каждому дефицитному заказу смотреть колонки RCA: перегруз производства, блокировка маршрута и сырьё — три разных управленческих решения.`,
+      useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>demand_coverage</code>, чтобы водопад начинался с неограниченного спроса и включал опоздания.`]}]);
 }
 /* ═══════════════ 10. БЛОК: ЛОГИСТИКА ═══════════════ */
 function tabLG(){
@@ -2196,6 +2404,7 @@ function tabPD(){
     <div class="card"><h3>Затраты по заводам и продуктам</h3><div class="sub">Тепловая карта, млн ₽</div><canvas id="p5"></canvas></div>
     <div class="card"><h3>${DS.hasCap ? 'Баланс мощностей: занято vs доступно' : 'Топ полуфабрикатов по затратам'}</h3>
       <div class="sub">${DS.hasCap ? 'Загрузка основных групп оборудования' : 'Справочно, без фильтрации'}</div>
+      ${DS.hasCap?lg('#p6',[[CH.d1,'Доступно'],[CH.warn,'Загрузка']]):''}
       <canvas id="p6"></canvas>
     </div>
     <div class="card w"><h3>${DS.hasCap ? 'Реестр мощностей и узких мест (capacity_view_sp)' : 'Производственные маршруты'}</h3>
@@ -2515,8 +2724,8 @@ function tabVS(){
   </div>
   <div class="grid">
     <div class="card"><h3>Ключевые показатели: A и B</h3><div class="sub">Синяя точка — версия A, вторая точка — версия B</div><canvas id="v1"></canvas></div>
-    <div class="card"><h3>Структура затрат по блокам</h3><div class="sub">Сравнение состава себестоимости</div>
-      <div class="lg"><span><i style="background:${CH.d1}"></i>Версия A</span><span><i style="background:${CH.d4}"></i>Версия B</span></div><canvas id="v2"></canvas></div>
+    <div class="card"><h3>Структура затрат по блокам</h3><div class="sub">Сравнение состава себестоимости. Клик по легенде — скрыть версию</div>
+      ${lg('#v2',[[CH.d1,'Версия A'],[CH.d4,'Версия B']])}<canvas id="v2"></canvas></div>
     <div class="card w"><h3>Полная таблица отличий</h3><div class="sub">Зелёный — улучшение с точки зрения бизнеса. Сортировка и фильтр по оценке</div><div id="v3"></div></div>
   </div>`;
   setTimeout(()=>{
@@ -2820,7 +3029,225 @@ function tabRAW(){
   ]);
 }
 
-/* ═══════════════ 15.2. БЛОК: ЦЕПОЧКА ЗАКАЗА ═══════════════ */
+/* ═════════ 14.0b. БЛОК: МОЩНОСТИ ═══════════ */
+function tabCAPS(){
+  const cap=DS.capacity||[], plan=DS.capacityPlan||[];
+  const agg=DS.agg||{}, t=agg.totals||{};
+  /* ── Деградация: нет capacity_view_sp и rescapacity — показываем машино-часы из операций ── */
+  if(!cap.length && !plan.length){
+    const O=fOps().filter(r=>r.type==='production'&&r.rc>0);
+    if(!O.length) return '<div class="empty"><h2>Данных о мощностях нет</h2><p>Таблицы <code>capacity_view_sp</code> и <code>rescapacity</code> не загружены, машино-часы в операциях отсутствуют.</p></div>';
+    const byRs=grp(O,r=>r.rs||r.pl,v=>({rc:S(v,r=>r.rc),v:S(v,r=>r.v),pl:v[0].pl})).sort((a,b)=>b.rc-a.rc);
+    const K=[['Ресурсов с потреблением',nf(byRs.length),'машино-часы из операций','mid'],
+      ['Потреблено часов',nf(S(byRs,r=>r.rc)),'доступный фонд не задан — утилизация не считается','mid'],
+      ['Объём передела',nf(S(O,r=>r.v))+' т','производственные операции','']];
+    const html=`
+    <div class="dq w" style="margin-bottom:14px"><span class="tag">Источник</span>
+      <div class="m">Таблицы мощностей не загружены — показаны потреблённые машино-часы из <code>marking_demand</code>. Загрузите <code>capacity_view_sp</code>, чтобы открыть утилизацию и узкие места.</div></div>
+    <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
+    <div class="grid">
+      <div class="card"><h3>Топ ресурсов по машино-часам</h3><canvas id="cs1"></canvas></div>
+      <div class="card w"><h3>Нагрузка ресурсов (без лимитов)</h3><div id="cs5"></div></div>
+    </div>`;
+    setTimeout(()=>{
+      chH('#cs1',H('#cs1',260,0.52),byRs.slice(0,9).map((r,i)=>({k:(r.pl||'—')+' · '+r.k,v:r.rc,c:PAL[i%PAL.length],
+        tip:`<b>${r.k}</b><br>Площадка: ${r.pl||'—'}<br>Машино-часы: ${nf(r.rc)}<br>Объём: ${nf(r.v)} т`})),
+        v=>nf(v)+' ч',null);
+      dtable('#cs5',[
+        {k:'k',t:'Ресурс',left:1,flt:1},   /* grp() кладёт ключ группировки в поле k, не rs */
+        {k:'pl',t:'Площадка',left:1,flt:1},
+        {k:'rc',t:'Машино-часы',num:1,f:v=>nf(v,1)},
+        {k:'v',t:'Объём, т',num:1,f:v=>nf(v,1)},
+        {k:'rph',t:'Часов на тонну',num:1,v:r=>r.rc/Math.max(r.v,1),f:v=>nf(v,3)}
+      ],byRs,{key:'caps_hours',sort:'rc',dir:'desc',h:320,csv:1,name:'capacity_hours'});
+    },0);
+    return html+summary('Резюме: мощности',[{t:'Ограничение анализа',i:[
+      'Без capacity_view_sp узкие места не выявляются. Загрузите таблицу мощностей — это откроет баланс «доступно / загружено / свободно», ремонты и план ФРВ (rescapacity).']}]);
+  }
+  const avail=S(cap,c=>c.avail), load=S(cap,c=>c.load), maint=S(cap,c=>c.maint||0);
+  const free=Math.max(0,avail-load), util=avail?load/avail:0;
+  const bnL=cap.filter(c=>c.isBottleneck), critL=cap.filter(c=>c.isCrit);
+  const planAvail=S(plan,c=>c.avail)||num(t.planAvail);
+  const expansion=S(plan,c=>c.expansion||0)||num(t.expansion);
+  const byPer=grp(cap,c=>c.periodKey||'—',v=>({avail:S(v,c=>c.avail),load:S(v,c=>c.load)}))
+    .sort((a,b)=>String(a.k).localeCompare(String(b.k),'ru',{numeric:true}));
+  const byPl=grp(cap,c=>c.pl,v=>({avail:S(v,c=>c.avail),load:S(v,c=>c.load),bn:v.filter(x=>x.isBottleneck).length}))
+    .sort((a,b)=>b.load-a.load);
+  const planByRs=new Map(); plan.forEach(p=>planByRs.set(p.rs,(planByRs.get(p.rs)||0)+(p.avail||0)));
+  const joinRs=[...new Set([...cap.map(c=>c.rs),...plan.map(p=>p.rs)])].map(rs=>{
+    const f=cap.filter(c=>c.rs===rs), pa=planByRs.get(rs)||0, fa=S(f,c=>c.avail);
+    return {rs,pl:(f[0]||plan.find(p=>p.rs===rs)||{}).pl||'—',plan:pa,fact:fa,
+      tip:`<b>${rs}</b><br>План ФРВ (rescapacity): ${nf(pa)} ч<br>Факт доступно (capacity_view_sp): ${nf(fa)} ч<br>Расхождение: ${nf(fa-pa)} ч`};
+  }).filter(x=>x.plan>0||x.fact>0).sort((a,b)=>b.fact-a.fact).slice(0,10);
+  const K=[
+    ['Доступный фонд',nf(avail)+' ч',cap.length+' '+plural(cap.length,['ресурс-период','ресурс-периода','ресурс-периодов']),''],
+    ['План загрузки',nf(load)+' ч',pc(util)+' фонда',util>=.95?'neg':util>=.85?'mid':'pos'],
+    ['Средняя утилизация',pc(util),bnL.length?'узких мест: '+nf(bnL.length):'перегруза нет',util>=.9?'neg':util>=.75?'mid':'pos'],
+    ['Перегружены (100%+)',nf(critL.length)+' '+plural(critL.length,['ресурс','ресурса','ресурсов']),critL.slice(0,2).map(c=>c.rsName).join(', ')||'—',critL.length?'neg':'pos'],
+    ['Свободный резерв',nf(free)+' ч',pc(util?1-util:0)+' фонда не занято',free?'pos':'neg'],
+    ['Ремонты и простои',nf(maint)+' ч',pc(maint/Math.max(avail,1))+' фонда',maint/avail>.15?'mid':''],
+    ['План ФРВ (rescapacity)',planAvail?nf(planAvail)+' ч':'—',expansion?nf(expansion)+' ч расширения':'плановые мощности не загружены',planAvail?'':'mid'],
+    ['Расхождение план/факт',planAvail?pc(planAvail?Math.abs(avail-planAvail)/planAvail:0):'—',planAvail?(avail>=planAvail?'факт ≥ плана':'фонд меньше плана'):'нужен rescapacity',planAvail&&Math.abs(avail-planAvail)/planAvail>.1?'mid':'pos']
+  ];
+  const html=`
+  <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
+  <div class="grid">
+    <div class="card"><h3>Топ ресурсов по утилизации</h3><div class="sub">Загрузка от доступного фонда. Клик — фильтр по заводу</div><canvas id="cs1"></canvas></div>
+    <div class="card"><h3>Фонд и загрузка по периодам</h3><div class="sub">Доступно против плана загрузки, часы</div>
+      ${lg('#cs2',[[CH.d1,'Доступно'],[CH.warn,'Загрузка']])}<canvas id="cs2"></canvas></div>
+    <div class="card"><h3>Структура фонда мощности</h3><div class="sub">Загрузка, ремонты и свободный резерв</div><canvas id="cs3"></canvas></div>
+    <div class="card"><h3>${plan.length?'План ФРВ против факта по ресурсам':'Загрузка по площадкам'}</h3>
+      <div class="sub">${plan.length?'Синяя точка — план (rescapacity), вторая — факт (capacity_view_sp)':'Часы по площадкам, топ-8'}</div>
+      ${plan.length?'':lg('#cs4',[[CH.d1,'Доступно'],[CH.warn,'Загрузка']])}<canvas id="cs4"></canvas></div>
+    <div class="card w"><h3>Реестр мощностей и узких мест</h3><div class="sub">capacity_view_sp по ресурсам и периодам. Сортировка и мультифильтры</div><div id="cs5"></div></div>
+  </div>`;
+  setTimeout(()=>{
+    /* cap может быть пустым, если загрузился только rescapacity: chH требует массив,
+       иначе items.map падает и весь блок остаётся пустым */
+    const capTop=cap.slice().sort((a,b)=>b.util-a.util).slice(0,10);
+    if(capTop.length)
+      chH('#cs1',H('#cs1',280,0.52),capTop.map(c=>({
+        k:(c.pl||'—')+' · '+(c.rsName||c.rs),v:c.util*100,
+        c:c.util>=1?CH.err:c.util>=.9?CH.warn:c.util>=.5?CH.ok:CH.dim,pl:c.pl,
+        tip:`<b>${c.rsName||c.rs}</b><br>Площадка: ${c.pl||'—'}<br>Период: ${c.periodKey||'—'}<br>Доступно: ${nf(c.avail)} ч<br>Загрузка: <b>${nf(c.load)} ч</b> (${pc(c.util)})<br>Свободно: ${nf(c.free)} ч`})),
+        v=>nf(v,1)+'%',it=>setF('pl',it.k.split(' · ')[0]));
+    else{const g=cv('#cs1',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('capacity_view_sp не загружен — показан только план ФРВ',g.w/2,100)}}
+    if(byPer.length)
+      chBars('#cs2',H('#cs2',260,0.45),byPer.map(p=>String(p.k).slice(0,10)),
+        [{c:CH.d1,v:byPer.map(p=>p.avail)},{c:CH.warn,v:byPer.map(p=>p.load)}],
+        v=>nf(v/1000,0)+'k ч',
+        i=>`<b>${byPer[i].k}</b><br>Доступно: ${nf(byPer[i].avail)} ч<br>Загрузка: ${nf(byPer[i].load)} ч<br>Утилизация: ${pc(byPer[i].avail?byPer[i].load/byPer[i].avail:0)}`,null);
+    else{const g=cv('#cs2',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('Нет данных по периодам мощностей',g.w/2,100)}}
+    chDonut('#cs3',H('#cs3',240,0.55),[
+      {k:'План загрузки',v:load,c:CH.d1},
+      {k:'Ремонты и простои',v:maint,c:CH.warn},
+      {k:'Свободный резерв',v:Math.max(0,avail-load-maint),c:CH.dim}
+    ].filter(p=>p.v>0),'Фонд, ч',v=>nf(v,0)+' ч',null);
+    if(plan.length)
+      chDumbbell('#cs4',H('#cs4',270,0.55),joinRs.map(x=>({k:String(x.rs).slice(0,18),a:x.plan,b:x.fact,tip:x.tip})),
+        v=>nf(v/1000,0)+'k ч',null);
+    else
+      chBars('#cs4',H('#cs4',260,0.45),byPl.slice(0,8).map(p=>p.k),
+        [{c:CH.d1,v:byPl.slice(0,8).map(p=>p.avail)},{c:CH.warn,v:byPl.slice(0,8).map(p=>p.load)}],
+        v=>nf(v/1000,0)+'k ч',
+        i=>`<b>${byPl[i].k}</b><br>Доступно: ${nf(byPl[i].avail)} ч<br>Загрузка: ${nf(byPl[i].load)} ч<br>Узких мест: ${byPl[i].bn}`,null,1);
+    dtable('#cs5',[
+      {k:'pl',t:'Площадка',left:1,flt:1},
+      {k:'rsName',t:'Ресурс',left:1,flt:1},
+      {k:'resType',t:'Вид ресурса',left:1,flt:1},
+      {k:'periodKey',t:'Период',left:1,flt:1},
+      {k:'norm',t:'Норматив, ч',num:1,f:v=>nf(v)},
+      {k:'avail',t:'Доступно, ч',num:1,f:v=>nf(v)},
+      {k:'load',t:'Загрузка, ч',num:1,f:v=>nf(v)},
+      {k:'free',t:'Свободно, ч',num:1,f:v=>nf(v),cls:v=>v<=0?'neg':'pos'},
+      {k:'maint',t:'Ремонты, ч',num:1,f:v=>nf(v)},
+      {k:'util',t:'Загрузка %',num:1,f:v=>pc(v),cls:v=>v>=1?'neg':v>=.9?'mid':'pos'}
+    ],cap,{key:'caps_registry',sort:'util',dir:'desc',h:350,csv:1,name:'capacity_registry'});
+  },0);
+  return html+summary('Резюме: мощности',[
+    {t:'Выводы',i:[
+      `Средняя утилизация фонда — <span class="h">${pc(util)}</span>: загружено ${nf(load)} ч из ${nf(avail)} ч доступных.`,
+      bnL.length?`Узких мест (≥90%): <span class="h">${nf(bnL.length)}</span>, из них ${critL.length} перегружены на 100%+ — объём физически не размещается без расшивки.`:`Перегруженных ресурсов нет — план размещается в фонд.`,
+      maint?`Ремонты и простои занимают <span class="h">${nf(maint)} ч</span> (${pc(maint/Math.max(avail,1))} фонда).`:`Ремонты в данных не выделены.`,
+      planAvail?`Расхождение плана ФРВ (rescapacity) и факта — <span class="h">${pc(planAvail?Math.abs(avail-planAvail)/planAvail:0)}</span>: при отклонении свыше 10% проверить вход прогона.`:`Плановые мощности (rescapacity) не загружены — «план vs факт» недоступен.`]},
+    {t:'Рекомендации',i:[
+      critL.length?`Расшить перегруженные ресурсы: ${critL.slice(0,3).map(c=>c.rsName||c.rs).join(', ')} — перенос объёма на альтернативные мощности или сверхурочные.`:`Резерв фонда позволяет принять дополнительный спрос — проверьте упущенную маржу во вкладке «Покрытие спроса».`,
+      `Сверять план ФРВ с фактом по каждому прогону: расхождение — признак устаревшего rescapacity.`,
+      `Держать узкие места под контролем до согласования плана: загрузка ≥90% — кандидат на инвестиции или изменение маршрута.`]}]);
+}
+
+/* ═══════════ 14.0c. БЛОК: ЭКОНОМИКА ОТКАЗОВ ═════════ */
+function tabCOST(){
+  const agg=DS.agg||{}, t=agg.totals||{};
+  const pen=DS.penalty||[], penFlat=DS.penaltyFlat||[];
+  const D=fOrders();
+  const hasRates=pen.length>0||penFlat.length>0;
+  const lm=num(t.lm)||S(D,o=>o.unm*o.mpt);
+  const penNonDel=num(t.penaltyNonDel)||0, penLate=num(t.penaltyLate)||0;
+  const mar=num(t.mar)||S(D,o=>o.mar);
+  const defOrd=D.filter(o=>o.unm>0);
+  if(!hasRates && !defOrd.length)
+    return '<div class="empty"><h2>Экономика отказов неприменима</h2><p>Таблицы <code>demand_cost</code>/<code>demand_cost_ti</code> не загружены, а дефицитов в плане нет.</p></div>';
+  const rateSrc=pen.length?pen:penFlat;
+  const rates=rateSrc.slice().sort((a,b)=>(b.nonDel||0)-(a.nonDel||0)).slice(0,9);
+  const prLm=grp(defOrd,o=>o.prod,v=>({lm:S(v,o=>o.unm*o.mpt),unm:S(v,o=>o.unm)}))
+    .sort((a,b)=>b.lm-a.lm);
+  const K=[
+    ['Упущенная маржа',bn(lm),'неудовлетворённый спрос × маржа/т','neg'],
+    ['Штраф за непоставку',hasRates?bn(penNonDel):'нет ставок',hasRates?'ставка × дефицитный объём':'справочник demand_cost не загружен',hasRates&&penNonDel?'neg':'mid'],
+    ['Штраф за опоздание',hasRates?bn(penLate):'нет ставок',hasRates?'поздние отгрузки × ставка × периоды':'',hasRates&&penLate?'mid':''],
+    ['Суммарные потери',bn(lm+penNonDel+penLate),mar?pc((lm+penNonDel+penLate)/mar)+' валовой маржи':'','neg'],
+    ['Штрафы к упущенной марже',lm?pc((penNonDel+penLate)/lm):'—','во сколько раз штраф ниже ценности спроса',''],
+    ['Заказов с дефицитом',nf(defOrd.length)+' из '+D.length,pc(D.length?defOrd.length/D.length:0)+' портфеля',''],
+    ['Записей в справочнике ставок',nf(pen.length+penFlat.length),pen.length?'периодные перекрывают безпериодные':'только безпериодные (demand_cost_ti)',hasRates?'':'mid'],
+    ['Средняя ставка непоставки',hasRates?nf(S(rateSrc,r=>r.nonDel||0)/Math.max(rateSrc.length,1))+' ₽/т':'—','средняя по справочнику','']
+  ];
+  const html=`
+  <div class="dq ${hasRates?'i':'w'}" style="margin-bottom:14px"><span class="tag">Источник</span>
+    <div class="m">${hasRates
+      ?`Ставки: <code>${pen.length?'demand_cost (периодные)':'demand_cost_ti (безпериодные)'}</code>. Штрафы считаны как ставка × неудовлетворённый объём${pen.length&&penFlat.length?' (периодные ставки перекрывают безпериодные)':''}.`
+      :'Таблицы ставок не загружены — показана только упущенная маржа из заказов.'}</div></div>
+  <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
+  <div class="grid">
+    <div class="card"><h3>Структура потерь: маржа против штрафов</h3><div class="sub">Из чего складывается цена отказа</div><canvas id="ct1"></canvas></div>
+    <div class="card"><h3>Топ продуктов по упущенной марже</h3><div class="sub">Клик — фильтр по продукту</div><canvas id="ct2"></canvas></div>
+    <div class="card"><h3>Топ ставок штрафа за непоставку</h3><div class="sub">Товар × локация, ₽ за тонну дефицита</div><canvas id="ct3"></canvas></div>
+    <div class="card"><h3>Парето заказов по упущенной марже</h3><div class="sub">Тёмные столбцы формируют 80% потерь</div><canvas id="ct4"></canvas></div>
+    <div class="card w"><h3>Справочник ставок отказов</h3><div class="sub">Сортировка и мультифильтры по товару, локации и потоку</div><div id="ct5"></div></div>
+  </div>`;
+  setTimeout(()=>{
+    chBars('#ct1',H('#ct1',260,0.45),
+      ['Упущенная маржа','Штраф: непоставка','Штраф: опоздание'],
+      [{c:CH.d5,v:[lm,penNonDel,penLate]}],v=>bn(v),
+      i=>`<b>${['Упущенная маржа','Штраф за непоставку','Штраф за опоздание'][i]}</b><br>${bn([lm,penNonDel,penLate][i])}`,null,1,1);
+    if(prLm.length)
+      chH('#ct2',H('#ct2',270,0.52),prLm.slice(0,9).map((p,i)=>({k:p.k,v:p.lm,c:PAL[i%PAL.length],
+        tip:`<b>${p.k}</b><br>Упущенная маржа: ${bn(p.lm)}<br>Дефицит: ${nf(p.unm)} т`})),bn,it=>setF('pr',it.k));
+    else{const g=cv('#ct2',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('Дефицитов под текущими фильтрами нет',g.w/2,100)}}
+    if(rates.length)
+      chH('#ct3',H('#ct3',270,0.52),rates.map(r=>({k:[r.item,r.loc].filter(Boolean).join(' · ')||'—',
+        v:r.nonDel||0,c:CH.d4,
+        tip:`<b>${r.item||'—'} @ ${r.loc||'—'}</b><br>Поток: ${r.stream||'—'}<br>Ставка непоставки: ${nf(r.nonDel)} ₽/т<br>Ставка опоздания: ${nf(r.lateRate)} ₽/т × ${nf(r.latePeriods)} пер.`})),
+        v=>nf(v)+' ₽/т',null);
+    else{const g=cv('#ct3',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('Ставки не загружены',g.w/2,100)}}
+    if(defOrd.length)
+      chPareto('#ct4',H('#ct4',280,0.5),defOrd.sort((a,b)=>b.unm*b.mpt-a.unm*a.mpt)
+        .map(o=>({k:`#${o.id} ${o.prod}`,v:o.unm*o.mpt})),bn,null);
+    else{const g=cv('#ct4',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
+      g.x.fillText('Дефицитов нет — потери нулевые',g.w/2,100)}}
+    dtable('#ct5',[
+      {k:'item',t:'Товар',left:1,flt:1},
+      {k:'loc',t:'Локация',left:1,flt:1},
+      {k:'dt',t:'Тип спроса',num:1,flt:1},
+      {k:'stream',t:'Поток',left:1,flt:1},
+      {k:'nonDel',t:'Ставка непоставки, ₽/т',num:1,f:v=>nf(v)},
+      {k:'lateRate',t:'Ставка опоздания, ₽/т',num:1,f:v=>nf(v)},
+      {k:'latePeriods',t:'Периодов опоздания',num:1,f:v=>nf(v,1)},
+      {k:'priority',t:'Приоритет',num:1,flt:1,f:v=>v?nf(v):'—'},
+      {k:'quota',t:'Квота',num:1,f:v=>v?nf(v):'—'},
+      {k:'grain',t:'Источник',flt:1,f:v=>v==='period'?'demand_cost':'demand_cost_ti'}
+    ],rateSrc,{key:'cost_rates',sort:'nonDel',dir:'desc',h:330,csv:1,name:'penalty_rates'});
+  },0);
+  return html+summary('Резюме: экономика отказов',[
+    {t:'Выводы',i:[
+      `Суммарные потери плана — <span class="h">${bn(lm+penNonDel+penLate)}</span>, из них упущенная маржа ${bn(lm)}${mar?` (${pc(lm/Math.max(mar,1))} валовой маржи)`:''}.`,
+      hasRates?`Штрафы по справочнику — <span class="h">${bn(penNonDel+penLate)}</span>. ${lm>(penNonDel+penLate)*10?'Упущенная маржа многократно превышает штрафы: тарифы в модели занижены относительно реальной ценности спроса — оптимизатор «экономит» на обслуживании клиентов.':'Штрафы сопоставимы с упущенной маржей — тарифная настройка сбалансирована.'}`
+        :`Ставки не загружены: штрафы не оцениваются, решение о приемлемости дефицита принимается только по упущенной марже.`,
+      defOrd.length?`Дефицит затрагивает <span class="h">${nf(defOrd.length)}</span> из ${D.length} заказов; топ-позиция потерь — <span class="h">${(prLm[0]||{k:'—'}).k}</span>.`:`Дефицитов нет.`]},
+    {t:'Рекомендации',i:[
+      hasRates&&lm>(penNonDel+penLate)*3
+        ?`Пересмотреть ставки nondelcostrate: заниженный штраф заставляет оптимизатор отказывать маржинальному спросу. Ставка должна отражать упущенную маржу на тонну, а не договорную неустойку.`
+        :`Использовать справочник ставок как есть: текущая настройка согласована с ценностью спроса.`,
+      `Проверить, что ставки заданы для всех значимых товарно-локационных комбинаций: отсутствие ставки = нулевой штраф, и оптимизатор игнорирует такой спрос.`,
+      `Сверять упущенную маржу с разделом «Покрытие спроса»: расхождение указывает на разные основания расчёта (цена против маржи на тонну).`
+    ]}]);
+}
+
+/* ════════ 15.2. БЛОК: ЦЕПОЧКА ЗАКАЗА ═════════ */
 let SELECTED_ORDER_ID=null;
 let TREE_VIEW_MODE='stages';
 let TREE_METRIC_MODE='vol';
@@ -4535,6 +4962,7 @@ async function loadFiles(fileList){
     // Новый датасет — старые фильтры/поиск/страницы таблиц невалидны: сбрасываем
     Object.keys(TBL).forEach(k=>delete TBL[k]);
     Object.keys(POPQ).forEach(k=>delete POPQ[k]);
+    DS._demo=false; // реальная загрузка (Excel или ClickHouse) вытесняет демо-набор
     SELECTED_ORDER_ID=null; TREE_FOCUSED_KEY=null;
     clearF();
     render();
@@ -4576,8 +5004,10 @@ function render(){
   $('#pgTitle').textContent=cur[1];
   $('#pgSub').textContent=TSUB[TAB]||'';
   fillSelects();
-  const V={ov:tabOV,dm:tabDM,tree:tabTREE,lg:tabLG,pd:tabPD,pc:tabPC,st:tabST,raw:tabRAW,vs:tabVS,dq:tabDQ};
-  try{$('#main').innerHTML=(V[TAB]||tabOV)()}
+  const V={ov:tabOV,dm:tabDM,tree:tabTREE,lg:tabLG,pd:tabPD,caps:tabCAPS,
+    pc:tabPC,st:tabST,cost:tabCOST,raw:tabRAW,
+    vs:(window.CHX&&CHX.tabVS)||tabVS, dq:tabDQ};
+  try{$('#main').innerHTML=(V[TAB]||tabOV)();decorateCards()}
   catch(err){$('#main').innerHTML=`<div class="empty"><h2 class="neg">Ошибка отрисовки блока</h2><p>${esc(err.message)}</p></div>`;console.error(err)}
   if(!STAT_PIN)
     $('#stat').innerHTML=`${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций | периоды ${uq(DS.orders,o=>o.p).sort((a,b)=>a-b).join(', ')}`;
@@ -4598,11 +5028,13 @@ document.addEventListener('click',e=>{
   if(j){CapacityRCA.drillDownToOrder(+j.dataset.ord,j.dataset.rs,j.dataset.mode||'prod_res')}
 });
 $('#bLoad').onclick=()=>$('#fIn').click();
+$('#bCH').onclick=()=>{ if(window.CHX) CHX.openModal(); else alert('Модуль ClickHouse не загружен: проверьте файл assets/inplan-ch.js') };
 $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.target.files);e.target.value=''}};
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
 $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nАвтосохранение тоже будет удалено. Сохранённые версии для сравнения останутся.'))return;
   try{localStorage.removeItem(AUTOSAVE_KEY)}catch(e){}
+  if(window.CHX&&typeof CHX.forgetSession==='function') CHX.forgetSession();
   DS=null;TAB='ov';STAT_PIN=false;clearF();render();
 };
 const toggleRail=()=>{
@@ -4627,13 +5059,63 @@ if(window.ResizeObserver){
   ro.observe(document.getElementById('main'));
 }
 window.addEventListener('keydown',e=>{
-  // Escape закрывает только всплывающие панели; сброс фильтров — отдельной кнопкой «Сбросить»
-  if(e.key==='Escape'){dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'))}
+  // Escape закрывает всплывающие панели и полноэкранный график; сброс фильтров — отдельной кнопкой «Сбросить»
+  if(e.key!=='Escape')return;
+  dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'));
+  if(FULL_ID){FULL_ID=null;render()}
 });
+
+/* Хук ClickHouse: при загрузке данных из CH сохраняем свежий снимок,
+   чтобы после закрытия браузера восстановились и данные, и соединение. */
+window.onCHDataset=function(ds,versions){
+  Object.keys(TBL).forEach(k=>delete TBL[k]);
+  Object.keys(POPQ).forEach(k=>delete POPQ[k]);
+  SELECTED_ORDER_ID=null; TREE_FOCUSED_KEY=null; clearF();
+  DS=ds;
+  if(Array.isArray(versions)&&versions.length) DS._chVersions=versions;
+  STAT_PIN=true;
+  render();
+  autosaveDS();
+};
+
+/* Статус автосессии, который обновляет коннектор после фонового
+   переподключения или проверки соединения. */
+window.onCHSessionStatus=function(info){
+  const stat=document.getElementById('stat');
+  if(!stat)return;
+  stat.classList.add('session-status');
+  if(info.type==='restoring'){
+    stat.innerHTML='<span class="mid">Восстановление сессии…</span>';
+    STAT_PIN=true;
+    return;
+  }
+  if(info.type==='restored' || info.type==='active'){
+    /* Снимок CH хранит и агрегаты версий, поэтому сравнение доступно сразу
+       после перезагрузки, без повторной тяжёлой загрузки всех данных. */
+    if(DS && Array.isArray(DS._chVersions) && window.CHX && !CHX.versions.length){
+      CHX.versions=DS._chVersions;
+      window.DS=DS;
+    }
+    const hasData=!!(DS && DS.src==='clickhouse' && !DS._demo);
+    stat.innerHTML=hasData
+      ?'<span class="pos">Сессия восстановлена</span><br>Данные предыдущей сессии восстановлены и подключение активно.'
+      :'<span class="pos">Сессия восстановлена</span><br>Подключение к ClickHouse активно.';
+    STAT_PIN=true;
+    return;
+  }
+  if(info.type==='error'){
+    const hasData=!!(DS && DS.src==='clickhouse' && !DS._demo);
+    stat.innerHTML=hasData
+      ?'<span class="neg">Сессия восстановлена частично</span><br>Данные доступны, но подключение неактивно. Откройте подключение к ClickHouse.'
+      :'<span class="neg">Не удалось восстановить сессию</span><br>Откройте подключение к ClickHouse для повторной попытки.';
+    STAT_PIN=true;
+  }
+};
 
 /* стартуем с последнего автосохранения, иначе — на демо-наборе */
 const SAVED=restoreDS();
 DS=SAVED?SAVED.ds:build(SEED);
+if(!SAVED)DS._demo=true;
 render();
 if(SAVED){
   $('#stat').innerHTML=`<span class="pos">Восстановлено автосохранение:</span> ${esc(SAVED.name||DS.name)}${SAVED.ts?' · '+fmtTs(SAVED.ts):''}<br>${DS.orders.length} заказов | ${DS.ops.length} операций`;
