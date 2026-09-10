@@ -65,7 +65,11 @@ CHX.session = {
     try{ localStorage.setItem(LS_SESSION, JSON.stringify(rec)); return true }
     catch(e){ console.warn('Автосессия не сохранена:',e); return false }
   },
-  touch(){ return this.save() },
+  touch(){
+    const ok=this.save();
+    if(ok && typeof window.onCHSessionTouched==='function') window.onCHSessionTouched(this.read()?.expiresAt);
+    return ok;
+  },
   enable(){ this.disabled=false },
   clear(){ this.disabled=true; try{ localStorage.removeItem(LS_SESSION) }catch(e){} },
   exists(){ return !!this.read() },
@@ -265,6 +269,9 @@ CHX.restoreSession = async function(){
   if(sessionRestoreBusy || CHX.state.busy) return false;
   const rec = CHX.session.read();
   if(!rec) return false;
+  /* Excel is the last active source: an old CH session must not overwrite it. */
+  if(typeof window.getActiveDatasetSource==='function' &&
+     window.getActiveDatasetSource()==='excel') return false;
   sessionRestoreBusy = true;
   lastSessionCheck = Date.now();
   Object.assign(CHX.cfg, rec.cfg, {
@@ -274,6 +281,9 @@ CHX.restoreSession = async function(){
   emitSessionStatus('restoring', {expiresAt:rec.expiresAt});
   try{
     await CHX.connect();
+    /* Loading the dataset is part of session restoration; connection alone
+       must not leave the dashboard on demo data. */
+    if(CHX.cfg.schemas.length) await CHX.loadAll();
     emitSessionStatus('restored', {expiresAt:CHX.session.read()?.expiresAt||Date.now()+SESSION_TTL_MS});
     return true;
   }catch(e){
