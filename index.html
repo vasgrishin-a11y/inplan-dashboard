@@ -2670,18 +2670,59 @@ function saveVer(){const v=getVers();v.unshift(snap(DS));localStorage.setItem('s
    DS — чистые данные (строки/числа, без Date), поэтому сериализуется целиком.
    Формат версионируется (v:1): после смены структуры кода старая запись игнорируется. */
 const AUTOSAVE_KEY='sop_autosave_v1';
+const ACTIVE_DATASET_KEY='inplan_active_dataset_v1';
+const DATASET_TTL_MS=4*60*60*1000;
+function getActiveDatasetSource(){
+  const active=readActiveDataset();
+  return active&&active.source||null;
+}
+window.getActiveDatasetSource=getActiveDatasetSource;
+function readActiveDataset(){
+  try{
+    const raw=localStorage.getItem(ACTIVE_DATASET_KEY);
+    if(!raw)return null;
+    const o=JSON.parse(raw);
+    if(!o||o.v!==1||!o.source||!o.expiresAt||o.expiresAt<=Date.now()){
+      localStorage.removeItem(ACTIVE_DATASET_KEY);
+      return null;
+    }
+    return o;
+  }catch(e){return null}
+}
+function writeActiveDataset(ds,expiresAt){
+  if(!ds)return;
+  try{localStorage.setItem(ACTIVE_DATASET_KEY,JSON.stringify({
+    v:1,source:ds.src==='clickhouse'?'clickhouse':'excel',name:ds.name||'',
+    schema:ds.schema||'',gran:ds.gran||null,expiresAt:expiresAt||Date.now()+DATASET_TTL_MS
+  }))}catch(e){console.warn('Активный набор не сохранён:',e)}
+}
+function clearSavedDataset(){
+  try{localStorage.removeItem(AUTOSAVE_KEY);localStorage.removeItem(ACTIVE_DATASET_KEY)}catch(e){}
+}
+function expireActiveDatasetIfNeeded(){
+  if(DS && !DS._demo && !readActiveDataset()){
+    clearSavedDataset();
+    DS=build(SEED);DS._demo=true;TAB='ov';STAT_PIN=false;clearF();render();
+  }
+}
 function autosaveDS(){
   if(!DS)return;
-  try{localStorage.setItem(AUTOSAVE_KEY,JSON.stringify({v:1,ts:new Date().toISOString(),name:DS.name,ds:DS}))}
+  try{
+    localStorage.setItem(AUTOSAVE_KEY,JSON.stringify({v:1,ts:new Date().toISOString(),name:DS.name,ds:DS}));
+    writeActiveDataset(DS);
+  }
   catch(e){/* приватный режим / переполнение квоты (~5 МБ) — просто не сохраняем */
     console.warn('Автосохранение не выполнено:',e)}
 }
 function restoreDS(){
   try{
+    const active=readActiveDataset();
+    if(!active)return null;
     const raw=localStorage.getItem(AUTOSAVE_KEY);
     if(!raw)return null;
     const o=JSON.parse(raw);
     if(!o||o.v!==1||!o.ds||!Array.isArray(o.ds.orders)||!Array.isArray(o.ds.ops))return null;
+    if((active.source==='clickhouse') !== (o.ds.src==='clickhouse'))return null;
     return o;
   }catch(e){return null}
 }
@@ -5033,7 +5074,7 @@ $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.tar
 $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохранения');return}saveVer()};
 $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nАвтосохранение тоже будет удалено. Сохранённые версии для сравнения останутся.'))return;
-  try{localStorage.removeItem(AUTOSAVE_KEY)}catch(e){}
+  clearSavedDataset();
   if(window.CHX&&typeof CHX.forgetSession==='function') CHX.forgetSession();
   DS=null;TAB='ov';STAT_PIN=false;clearF();render();
 };
@@ -5076,6 +5117,15 @@ window.onCHDataset=function(ds,versions){
   STAT_PIN=true;
   render();
   autosaveDS();
+  writeActiveDataset(DS, (window.CHX&&CHX.session&&CHX.session.read()?.expiresAt)||Date.now()+DATASET_TTL_MS);
+};
+
+/* Продление ClickHouse-сессии одновременно продлевает срок локального снимка. */
+window.onCHSessionTouched=function(expiresAt){
+  const active=readActiveDataset();
+  if(active&&active.source==='clickhouse'){
+    try{active.expiresAt=expiresAt||Date.now()+DATASET_TTL_MS;localStorage.setItem(ACTIVE_DATASET_KEY,JSON.stringify(active))}catch(e){}
+  }
 };
 
 /* Статус автосессии, который обновляет коннектор после фонового
@@ -5114,9 +5164,11 @@ window.onCHSessionStatus=function(info){
 
 /* стартуем с последнего автосохранения, иначе — на демо-наборе */
 const SAVED=restoreDS();
+if(!SAVED){clearSavedDataset()}
 DS=SAVED?SAVED.ds:build(SEED);
 if(!SAVED)DS._demo=true;
 render();
+setInterval(expireActiveDatasetIfNeeded,60000);
 if(SAVED){
   $('#stat').innerHTML=`<span class="pos">Восстановлено автосохранение:</span> ${esc(SAVED.name||DS.name)}${SAVED.ts?' · '+fmtTs(SAVED.ts):''}<br>${DS.orders.length} заказов | ${DS.ops.length} операций`;
   STAT_PIN=true;
