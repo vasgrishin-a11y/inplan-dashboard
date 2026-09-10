@@ -147,6 +147,7 @@ h1{font:600 28px/34px 'Open Sans',sans-serif;margin:0;color:var(--scp-text)}
 .icon-btn[data-tip]:hover::after{opacity:1}
 .stat{font-size:12px;line-height:16px;color:var(--scp-text-3);text-align:right;white-space:nowrap;
   align-self:center}
+.stat.session-status{white-space:normal;max-width:440px}
 
 /* ═══════════════ ПАНЕЛЬ ФИЛЬТРОВ ═══════════════ */
 .fpanel{background:var(--scp-surface);border-bottom:1px solid var(--scp-line-2);
@@ -5033,6 +5034,7 @@ $('#bSave').onclick=()=>{if(!DS){alert('Нет данных для сохран�
 $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nАвтосохранение тоже будет удалено. Сохранённые версии для сравнения останутся.'))return;
   try{localStorage.removeItem(AUTOSAVE_KEY)}catch(e){}
+  if(window.CHX&&typeof CHX.forgetSession==='function') CHX.forgetSession();
   DS=null;TAB='ov';STAT_PIN=false;clearF();render();
 };
 const toggleRail=()=>{
@@ -5063,14 +5065,51 @@ window.addEventListener('keydown',e=>{
   if(FULL_ID){FULL_ID=null;render()}
 });
 
-/* Хук ClickHouse: при загрузке данных из CH демо и старое автосохранение удаляются */
+/* Хук ClickHouse: при загрузке данных из CH сохраняем свежий снимок,
+   чтобы после закрытия браузера восстановились и данные, и соединение. */
 window.onCHDataset=function(ds,versions){
   Object.keys(TBL).forEach(k=>delete TBL[k]);
   Object.keys(POPQ).forEach(k=>delete POPQ[k]);
   SELECTED_ORDER_ID=null; TREE_FOCUSED_KEY=null; clearF();
-  DS=ds; STAT_PIN=true;
+  DS=ds;
+  if(Array.isArray(versions)&&versions.length) DS._chVersions=versions;
+  STAT_PIN=true;
   render();
-  try{ localStorage.removeItem(AUTOSAVE_KEY) }catch(e){}
+  autosaveDS();
+};
+
+/* Статус автосессии, который обновляет коннектор после фонового
+   переподключения или проверки соединения. */
+window.onCHSessionStatus=function(info){
+  const stat=document.getElementById('stat');
+  if(!stat)return;
+  stat.classList.add('session-status');
+  if(info.type==='restoring'){
+    stat.innerHTML='<span class="mid">Восстановление сессии…</span>';
+    STAT_PIN=true;
+    return;
+  }
+  if(info.type==='restored' || info.type==='active'){
+    /* Снимок CH хранит и агрегаты версий, поэтому сравнение доступно сразу
+       после перезагрузки, без повторной тяжёлой загрузки всех данных. */
+    if(DS && Array.isArray(DS._chVersions) && window.CHX && !CHX.versions.length){
+      CHX.versions=DS._chVersions;
+      window.DS=DS;
+    }
+    const hasData=!!(DS && DS.src==='clickhouse' && !DS._demo);
+    stat.innerHTML=hasData
+      ?'<span class="pos">Сессия восстановлена</span><br>Данные предыдущей сессии восстановлены и подключение активно.'
+      :'<span class="pos">Сессия восстановлена</span><br>Подключение к ClickHouse активно.';
+    STAT_PIN=true;
+    return;
+  }
+  if(info.type==='error'){
+    const hasData=!!(DS && DS.src==='clickhouse' && !DS._demo);
+    stat.innerHTML=hasData
+      ?'<span class="neg">Сессия восстановлена частично</span><br>Данные доступны, но подключение неактивно. Откройте подключение к ClickHouse.'
+      :'<span class="neg">Не удалось восстановить сессию</span><br>Откройте подключение к ClickHouse для повторной попытки.';
+    STAT_PIN=true;
+  }
 };
 
 /* стартуем с последнего автосохранения, иначе — на демо-наборе */
