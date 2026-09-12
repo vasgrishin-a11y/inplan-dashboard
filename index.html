@@ -117,6 +117,20 @@ body{margin:0;background:var(--scp-bg);color:var(--scp-text);
   font:400 12px 'Open Sans',sans-serif;padding:7px 8px;border-radius:var(--r-s);text-align:left;
   display:flex;align-items:center;justify-content:center}
 .rail-foot button:hover{background:var(--scp-rail-hover);color:#fff}
+/* ── РЕЖИМ «МЕНЮ СВЕРХУ»: класс .nav-top на .app (ручной выбор пользователя).
+   Правила зеркалят адаптивный вариант из @media(max-width:1100px) ниже, но с
+   большей специфичностью, поэтому ручной выбор переопределяет мобильную вёрстку. ── */
+.app.nav-top{flex-direction:column}
+.app.nav-top .rail{width:100%;flex:0 0 auto;height:auto;position:sticky;top:0;
+  flex-direction:row;align-items:center;gap:4px}
+.app.nav-top .rail-logo{padding:8px 12px;min-height:52px;flex:0 0 auto}
+.app.nav-top .rail-sub,.app.nav-top .rail-grp,.app.nav-top .rail-foot{display:none}
+.app.nav-top .rail-nav{flex-direction:row;overflow-x:auto;padding:0 8px;flex:1;
+  scrollbar-width:thin}
+.app.nav-top .rail-nav button{border-left:0;border-bottom:3px solid transparent;
+  padding:8px 12px;white-space:nowrap}
+.app.nav-top .rail-nav button.on{border-left:0;border-bottom-color:var(--scp-accent)}
+.app.nav-top .btn-rail-menu{display:none}
 .wrap{flex:1;min-width:0;display:flex;flex-direction:column}
 
 /* ═══════════════ ШАПКА СТРАНИЦЫ ═══════════════ */
@@ -420,6 +434,9 @@ input[type=number]{font-family:'Open Sans',sans-serif}
         <button class="btn-rail-menu" id="bRailToggleHdr" title="Свернуть / раскрыть меню">
           <svg viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
+        <button class="btn-rail-menu" id="bNavPos" title="Меню: слева / сверху" aria-label="Позиция меню">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><line class="np-l" x1="9" y1="3" x2="9" y2="21"/></svg>
+        </button>
         <div>
           <h1 id="pgTitle">Общий</h1>
           <div class="h-sub" id="pgSub">Результат планирования спроса</div>
@@ -487,6 +504,11 @@ input[type=number]{font-family:'Open Sans',sans-serif}
           <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Транспорт:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
           <div class="pop-menu"><div class="pop-hdr"><span>Виды транспорта</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
+      </div>
+      <div class="fbar-divider"></div>
+      <div class="fbar-mid" id="lmSegWrap">
+        <span class="fbar-lbl">Упущ. маржа:</span>
+        <div class="seg" id="lmSeg"></div>
       </div>
       <div class="fbar-right">
         <button type="button" class="btn-reset-flt" id="bResetFlt" disabled>Сбросить</button>
@@ -700,6 +722,66 @@ const S=(a,f)=>a.reduce((s,o)=>s+(f(o)||0),0);
 const uq=(a,f)=>[...new Set(a.map(f).filter(x=>x!==''&&x!=null))].sort();
 function grp(a,k,ag){const m=new Map();a.forEach(o=>{const key=k(o);if(!m.has(key))m.set(key,[]);m.get(key).push(o)});
   return [...m].map(([key,rows])=>({k:key,n:rows.length,rows,...ag(rows)}))}
+/* ═══════════════ 3.5. МЕТОДЫ РАСЧЁТА УПУЩЕННОЙ МАРЖИ ═══════════════
+   Единая точка оценки дефицита: все KPI, таблицы и графики считают «упущ.
+   маржа» через lmVal(o), поэтому переключение метода в панели фильтров
+   меняет всю картину согласованно. Метод выбирается пользователем,
+   выбор сохраняется в localStorage.
+   Справочные ставки (средняя маржа по продукту, верхняя себестоимость,
+   смешанная маржинальность) считаются по ВСЕМУ датасету без фильтров —
+   чтобы смена фильтров не меняла ставку, а только объёмы дефицита. */
+const LM_KEY='inplan_lm_mode';
+const LM_MODES={
+  order:{t:'Маржа заказа',d:'Недовыполненные тонны × собственная маржа на тонну заказа (margin_per_unit). Базовый метод: «если бы отгрузили оставшиеся тонны на тех же условиях, что и отгруженные».'},
+  prod:{t:'Средняя по продукту',d:'Недовыполненные тонны × средняя маржа ₽/т продукта по всему плану (Σмаржа/Σпродажи). Сглаживает аномалии отдельного заказа и закрывает пропуски margin_per_unit.'},
+  marginal:{t:'Маржинальная (ниж. граница)',d:'Недовыполненные тонны × (цена − максимальная себестоимость ₽/т среди заказов продукта). Консервативная оценка: доп. тонна идёт по самому дорогому маршруту/ресурсу.'},
+  blend:{t:'Смешанная маржинальность',d:'Упущенная выручка × средняя маржинальность портфеля (Σмаржа/Σвыручка). Простой и устойчивый метод, не зависит от поля margin_per_unit.'},
+  penalty:{t:'Ставка штрафа',d:'Недовыполненные тонны × ставка непоставки (demand_cost, товар+локация). Это договорная потеря, а не маржа — метод для сверки тарифов оптимизатора с ценностью спроса.'}
+};
+const lmMode=()=>{try{const m=localStorage.getItem(LM_KEY);return (m&&LM_MODES[m])?m:'order'}catch(e){return 'order'}};
+let LM_MODE=lmMode();
+let LM_REF=null;
+function lmRef(){
+  if(LM_REF&&LM_REF.ds===DS)return LM_REF;
+  const o=DS?DS.orders:[];
+  const byProd=new Map();
+  o.forEach(x=>{if(!x.prod)return;const m=byProd.get(x.prod)||{mar:0,sal:0,cptMax:0};
+    m.mar+=x.mar;m.sal+=x.sal;if(x.cpt>m.cptMax)m.cptMax=x.cpt;byProd.set(x.prod,m)});
+  const mptProd=new Map(),cptMaxProd=new Map();
+  byProd.forEach((m,k)=>{cptMaxProd.set(k,m.cptMax);mptProd.set(k,m.sal>0?m.mar/m.sal:0)});
+  let rev=0,mar=0;o.forEach(x=>{rev+=x.rev;mar+=x.mar});
+  /* ставки непоставки: безпериодные — фон, периодные перекрывают (как в CH-агрегаторе) */
+  const penRate=new Map(),pkey=(i,l)=>i+'|'+l;
+  (DS&&DS.penaltyFlat||[]).forEach(r=>penRate.set(pkey(r.item,r.loc),r));
+  (DS&&DS.penalty||[]).forEach(r=>penRate.set(pkey(r.item,r.loc),r));
+  LM_REF={ds:DS,mptProd,cptMaxProd,blendRate:rev>0?mar/rev:0,penRate,hasPen:penRate.size>0};
+  return LM_REF;
+}
+/* Ставка упущенной маржи в ₽/т для заказа под активным методом */
+function lmRate(o){
+  const ref=lmRef();
+  switch(LM_MODE){
+    case 'prod':{const v=ref.mptProd.get(o.prod);return (v>0?v:(o.mpt||(o.price-o.cpt)))}
+    case 'marginal':{const c=ref.cptMaxProd.get(o.prod);return Math.max(0,o.price-(c!=null?c:o.cpt))}
+    case 'blend':return ref.blendRate>0?o.price*ref.blendRate:(o.mpt||(o.price-o.cpt));
+    case 'penalty':{const r=ref.penRate.get(o.prod+'|'+o.loc);return r?(r.nonDel||0):0}
+    default:return o.mpt;
+  }
+}
+const lmVal=o=>o.unm*lmRate(o);
+/* UI сегмента методов: перестраиваем активный класс после выбора */
+function lmSegBuild(){
+  const seg=$('#lmSeg');if(!seg)return;
+  seg.innerHTML=Object.entries(LM_MODES).map(([k,m])=>
+    `<button type="button" class="btn ${LM_MODE===k?'p':''}" data-lm="${k}" title="${esc(m.d)}">${m.t}</button>`).join('');
+  $$('#lmSeg .btn').forEach(b=>b.onclick=()=>{
+    if(b.dataset.lm===LM_MODE)return;
+    LM_MODE=b.dataset.lm;
+    try{localStorage.setItem(LM_KEY,LM_MODE)}catch(e){}
+    lmSegBuild();
+    if(DS)render();
+  });
+}
 /* esc и sany — в assets/inplan-common.js */
 /* plural — в assets/inplan-common.js */
 
@@ -1961,7 +2043,7 @@ function summary(title,blocks){
 function tabOV(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
   const rev=S(D,o=>o.rev),cost=S(D,o=>o.cost),mar=S(D,o=>o.mar),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
-  const lr=S(D,o=>o.unm*o.price),lm=S(D,o=>o.unm*o.mpt),full=D.filter(o=>!o.unm).length;
+  const lr=S(D,o=>o.unm*o.price),lm=S(D,lmVal),full=D.filter(o=>!o.unm).length;
   const ops=fOps(),byT=grp(ops,r=>r.type,v=>({c:S(v,r=>r.cost)}));
   const K=[['Валовая выручка',bn(rev),'план продаж × цена',''],
    ['Себестоимость',bn(cost),pc(cost/rev)+' от выручки',''],
@@ -1970,7 +2052,7 @@ function tabOV(){
    ['Service Level',pc(sal/dem),nf(sal)+' из '+nf(dem)+' т',sal/dem>.9?'pos':sal/dem>.7?'mid':'neg'],
    ['Заказов без дефицита',full+' из '+D.length,pc(full/D.length)+' портфеля',''],
    ['Упущенная выручка',bn(lr),nf(unm)+' т дефицита','neg'],
-   ['Упущенная маржа',bn(lm),'оценка при той же марже','neg']];
+   ['Упущенная маржа',bn(lm),'метод: '+LM_MODES[LM_MODE].t,'neg']];
   const per=grp(D,o=>o.p,v=>({rev:S(v,o=>o.rev),cost:S(v,o=>o.cost),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
     .sort((a,b)=>a.k-b.k);
   const pr=grp(D,o=>o.prod,v=>({rev:S(v,o=>o.rev),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),
@@ -2024,8 +2106,8 @@ function tabOV(){
         cls:v=>v>.7?'pos':v>.3?'mid':'neg'}
     ],D,{key:'ov_orders',sort:'mar',dir:'desc',h:340,csv:1,name:'orders'});
   },0);
-  const worst=D.slice().sort((a,b)=>a.mar/a.rev-b.mar/b.rev)[0];
-  const mptTrend=per.length>1?(per[per.length-1].mar/per[per.length-1].sal)/(per[0].mar/per[0].sal)-1:0;
+  const worst=(D.filter(o=>o.rev>0).slice().sort((a,b)=>a.mar/a.rev-b.mar/b.rev)[0]);
+  const mptTrend=(per.length>1&&per[0].sal>0&&per[per.length-1].sal>0)?(per[per.length-1].mar/per[per.length-1].sal)/(per[0].mar/per[0].sal)-1:0;
   const top3=pr.sort((a,b)=>b.mar-a.mar).slice(0,3);
   const conc=S(top3,p=>p.mar)/mar;
   const flatDemand=uq(D,o=>o.dem).length===1;
@@ -2041,7 +2123,7 @@ function tabOV(){
       flatPriceN
         ?`Цены реализации не индексируются по периодам (${flatPriceN} ${plural(flatPriceN,['продукт','продукта','продуктов'])} с одинаковой ценой), а закупочные тарифы растут — систематическое сжатие маржи, не связанное с операционной эффективностью.`
         :`Отпускные цены варьируются по периодам — признак ценовой индексации в модели.`,
-      `Худшая позиция: <span class="h">#${worst.id} ${worst.prod}</span> — маржинальность ${pc(worst.mar/worst.rev)} при цене ${nf(worst.price)} ₽/т.`,
+      worst?`Худшая позиция: <span class="h">#${worst.id} ${worst.prod}</span> — маржинальность ${pc(worst.mar/worst.rev)} при цене ${nf(worst.price)} ₽/т.`:'Нет позиций с ненулевой выручкой — проверка маржинальности невозможна.',
       flatDemand
         ?`Все заказы имеют одинаковый План спроса (${nf(D[0].dem)} т) — признак синтетического набора; абсолютные значения не следует переносить в отчётность без проверки.`
         :`План спроса варьируется по заказам — набор не выглядит синтетическим.`,
@@ -2065,15 +2147,15 @@ function tabDM(){
   const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
   const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU'),p1=D.filter(o=>o.pr==1);
   const defOrders=D.filter(o=>o.unm>0),full=D.length-defOrders.length;
-  const lm=S(defOrders,o=>o.unm*o.mpt),lostRev=S(defOrders,o=>o.unm*o.price);
+  const lm=S(defOrders,lmVal),lostRev=S(defOrders,o=>o.unm*o.price);
   const demUnc=useUnc?(num(covT.demUnc)||(num(covT.ff)+num(covT.uf))):dem;
   const notPlanned=Math.max(0,demUnc-dem),late=useUnc?num(covT.late):0,inTime=Math.max(0,sal-late);
   const sl=dem?sal/dem:0;
 
   const per=grp(D,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)})).sort((a,b)=>a.k-b.k);
-  const def=grp(defOrders,o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt),prod:v[0].prod}))
+  const def=grp(defOrders,o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,lmVal),prod:v[0].prod}))
     .sort((a,b)=>b.lm-a.lm).slice(0,8);
-  const prDef=grp(defOrders,o=>o.prod,v=>({unm:S(v,o=>o.unm),lm:S(v,o=>o.unm*o.mpt)})).sort((a,b)=>b.unm-a.unm);
+  const prDef=grp(defOrders,o=>o.prod,v=>({unm:S(v,o=>o.unm),lm:S(v,lmVal)})).sort((a,b)=>b.unm-a.unm);
   const cl=grp(D,o=>o.cl,v=>({mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem),unm:S(v,o=>o.unm),rev:S(v,o=>o.rev)}))
     .sort((a,b)=>b.mar-a.mar);
   const pr=grp(D,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/Math.max(S(v,o=>o.sal),1),cpt:S(v,o=>o.cost)/Math.max(S(v,o=>o.sal),1),
@@ -2093,7 +2175,7 @@ function tabDM(){
     ['Отгружено',nf(sal)+' т','Service Level '+pc(sl),sl>=.95?'pos':sl>=.8?'mid':'neg'],
     ['Дефицит',nf(unm)+' т',defOrders.length+' '+plural(defOrders.length,['заказ','заказа','заказов'])+' с дефицитом',unm?'neg':'pos'],
     ['Отгружено с опозданием',useUnc?nf(late)+' т':'—',useUnc?pc(sal?late/sal:0)+' отгруженного':'нужен demand_coverage',late&&late/Math.max(sal,1)>.05?'neg':late?'mid':''],
-    ['Упущенная маржа',bn(lm),'потерянная выручка '+bn(lostRev),'neg'],
+    ['Упущенная маржа',bn(lm),'метод: '+LM_MODES[LM_MODE].t+' | выручка '+bn(lostRev),'neg'],
     ['Маржинальность продаж',pc(rev?mar/rev:0),`Выручка ${bn(rev)} | Маржа ${bn(mar)}`,'pos'],
     ['Заказов без дефицита',pc(full/D.length),`${full} из ${D.length}`,full/D.length>=.85?'pos':'mid']
   ];
@@ -2186,7 +2268,7 @@ function tabDM(){
         const st=b.isBlocked?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)':'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
         return `<span class="tag" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" style="${st};font-weight:600;cursor:pointer" title="Открыть цепочку логистических лимитов">${icon} ${txt} ↗</span>`}},
       {k:'lostRev',t:'Потер. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v),cls:()=>'neg'},
-      {k:'lm',t:'Упущ. маржа',num:1,v:o=>o.unm*o.mpt,f:v=>mln(v),cls:()=>'neg'}
+      {k:'lm',t:'Упущ. маржа',num:1,v:o=>lmVal(o),f:v=>mln(v),cls:()=>'neg'}
     ],defOrders,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
   },0);
 
@@ -2754,6 +2836,7 @@ function tabVS(){
     <div class="fg"><label>Версия B (сравниваемая)</label><select id="vsB">${opt(0)}</select></div>
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
+  <div class="dt-info" style="margin-bottom:10px">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) — переключатель методов на вкладках «Общий», «Спрос», «Экономика отказов» на историю версий не действует.</div>
   <div class="kpis">
     ${[['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
@@ -2837,6 +2920,25 @@ function tabDQ(){
   add(bad3.length?'e':'i','Маржа',
     bad3.length?`${bad3.length} заказов: маржа не равна разнице выручки и себестоимости.`:'Маржа сходится с разницей выручки и себестоимости.',
     bad3.length?'Проверить знаки и полноту состава себестоимости.':'Финансовая логика непротиворечива.');
+
+  const bad4=o.filter(x=>x.unm>0.01&&!(x.mpt>0));
+  add(bad4.length?'e':'i','Упущенная маржа: база',
+    bad4.length?`${bad4.length} ${plural(bad4.length,['заказ','заказа','заказов'])} с дефицитом не имеют маржи на тонну (margin_per_unit отсутствует или 0) — базовый метод считает для них упущенную маржу 0, например №${bad4[0].id}.`
+      :'Во всех заказах с дефицитом задана маржа на тонну.',
+    bad4.length?'Проверить выгрузку колонки «Маржинальность на тонну». Пока поле пусто, переключите метод на «Средняя по продукту» или «Смешанная маржинальность» в панели фильтров.':'—');
+
+  const bad5=o.filter(x=>x.mpt>0&&Math.abs(x.mpt-(x.price-x.cpt))>Math.max(1,x.price*.05));
+  add(bad5.length?'w':'i','Маржа на тонну: согласованность',
+    bad5.length?`${bad5.length} ${plural(bad5.length,['заказ','заказа','заказов'])}: маржа на тонну расходится с «цена − себестоимость» более чем на 5%, например №${bad5[0].id}: ${nf(bad5[0].mpt)} против ${nf(bad5[0].price-bad5[0].cpt)} ₽/т.`
+      :'Маржа на тонну согласована с «цена − себестоимость» в пределах 5%.',
+    bad5.length?'Уточнить, входит ли в margin_per_unit логистика/пошлины: разные основания искажают сравнение методов упущенной маржи.':'—');
+
+  const prVals=uq(o,x=>x.pr).filter(v=>v>0);
+  const prWeird=prVals.length>0&&prVals.every(v=>v>100);
+  add(prWeird?'w':'i','Приоритет заказа',
+    prWeird?`Все значения «приоритета» >100 (${prVals.slice(0,4).map(nf).join(', ')} ₽) — похоже, поле читается из колонки margin_per_hour, а не из реального приоритета. Проверка «приоритет 1 обслужен» в резюме «Спрос» на таких данных не работает.`
+      :'Поля приоритетов принимают типовые значения (1–N).',
+    prWeird?'Уточнить у владельца модели имя колонки с приоритетом заказа; в COL.prio сейчас отображена margin_per_hour.':'—');
 
   const an=o.filter(x=>x.cpt<x.price*.01);
   add(an.length?'e':'i','Аномальная себестоимость',
@@ -3205,18 +3307,22 @@ function tabCOST(){
   const pen=DS.penalty||[], penFlat=DS.penaltyFlat||[];
   const D=fOrders();
   const hasRates=pen.length>0||penFlat.length>0;
-  const lm=num(t.lm)||S(D,o=>o.unm*o.mpt);
+  /* lm считаем из заказов под текущими фильтрами активным методом (lmVal):
+     раньше брали серверный t.lm по всей схеме без фильтров, и KPI на одной
+     карточке смешивали фильтрованное (заказы) и нефилтрованное (маржа). */
+  const lm=S(D,lmVal);
   const penNonDel=num(t.penaltyNonDel)||0, penLate=num(t.penaltyLate)||0;
   const mar=num(t.mar)||S(D,o=>o.mar);
   const defOrd=D.filter(o=>o.unm>0);
+  const fActive=Object.values(F).some(a=>a.length);
   if(!hasRates && !defOrd.length)
     return '<div class="empty"><h2>Экономика отказов неприменима</h2><p>Таблицы <code>demand_cost</code>/<code>demand_cost_ti</code> не загружены, а дефицитов в плане нет.</p></div>';
   const rateSrc=pen.length?pen:penFlat;
   const rates=rateSrc.slice().sort((a,b)=>(b.nonDel||0)-(a.nonDel||0)).slice(0,9);
-  const prLm=grp(defOrd,o=>o.prod,v=>({lm:S(v,o=>o.unm*o.mpt),unm:S(v,o=>o.unm)}))
+  const prLm=grp(defOrd,o=>o.prod,v=>({lm:S(v,lmVal),unm:S(v,o=>o.unm)}))
     .sort((a,b)=>b.lm-a.lm);
   const K=[
-    ['Упущенная маржа',bn(lm),'неудовлетворённый спрос × маржа/т','neg'],
+    ['Упущенная маржа',bn(lm),'метод: '+LM_MODES[LM_MODE].t+(fActive?' · под фильтрами':''),'neg'],
     ['Штраф за непоставку',hasRates?bn(penNonDel):'нет ставок',hasRates?'ставка × дефицитный объём':'справочник demand_cost не загружен',hasRates&&penNonDel?'neg':'mid'],
     ['Штраф за опоздание',hasRates?bn(penLate):'нет ставок',hasRates?'поздние отгрузки × ставка × периоды':'',hasRates&&penLate?'mid':''],
     ['Суммарные потери',bn(lm+penNonDel+penLate),mar?pc((lm+penNonDel+penLate)/mar)+' валовой маржи':'','neg'],
@@ -3225,10 +3331,13 @@ function tabCOST(){
     ['Записей в справочнике ставок',nf(pen.length+penFlat.length),pen.length?'периодные перекрывают безпериодные':'только безпериодные (demand_cost_ti)',hasRates?'':'mid'],
     ['Средняя ставка непоставки',hasRates?nf(S(rateSrc,r=>r.nonDel||0)/Math.max(rateSrc.length,1))+' ₽/т':'—','средняя по справочнику','']
   ];
+  const lmPenWarn=LM_MODE==='penalty'&&!lmRef().hasPen;
   const html=`
-  <div class="dq ${hasRates?'i':'w'}" style="margin-bottom:14px"><span class="tag">Источник</span>
-    <div class="m">${hasRates
-      ?`Ставки: <code>${pen.length?'demand_cost (периодные)':'demand_cost_ti (безпериодные)'}</code>. Штрафы считаны как ставка × неудовлетворённый объём${pen.length&&penFlat.length?' (периодные ставки перекрывают безпериодные)':''}.`
+  <div class="dq ${lmPenWarn?'w':(hasRates?'i':'w')}" style="margin-bottom:14px"><span class="tag">Источник</span>
+    <div class="m">${lmPenWarn
+      ?`Метод «Ставка штрафа» активен, но справочник <code>demand_cost</code>/<code>demand_cost_ti</code> не загружен — упущенная маржа пока 0. Загрузите ставки либо верните метод «Маржа заказа».`
+      :hasRates
+      ?`Ставки: <code>${pen.length?'demand_cost (периодные)':'demand_cost_ti (безпериодные)'}</code>. Штрафы считаны как ставка × неудовлетворённый объём${pen.length&&penFlat.length?' (периодные ставки перекрывают безпериодные)':''} и относятся ко всей схеме (не режутся фильтрами).`
       :'Таблицы ставок не загружены — показана только упущенная маржа из заказов.'}</div></div>
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
@@ -3256,8 +3365,8 @@ function tabCOST(){
     else{const g=cv('#ct3',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
       g.x.fillText('Ставки не загружены',g.w/2,100)}}
     if(defOrd.length)
-      chPareto('#ct4',H('#ct4',280,0.5),defOrd.sort((a,b)=>b.unm*b.mpt-a.unm*a.mpt)
-        .map(o=>({k:`#${o.id} ${o.prod}`,v:o.unm*o.mpt})),bn,null);
+      chPareto('#ct4',H('#ct4',280,0.5),defOrd.slice().sort((a,b)=>lmVal(b)-lmVal(a))
+        .map(o=>({k:`#${o.id} ${o.prod}`,v:lmVal(o)})),bn,null);
     else{const g=cv('#ct4',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
       g.x.fillText('Дефицитов нет — потери нулевые',g.w/2,100)}}
     dtable('#ct5',[
@@ -3284,7 +3393,7 @@ function tabCOST(){
         ?`Пересмотреть ставки nondelcostrate: заниженный штраф заставляет оптимизатор отказывать маржинальному спросу. Ставка должна отражать упущенную маржу на тонну, а не договорную неустойку.`
         :`Использовать справочник ставок как есть: текущая настройка согласована с ценностью спроса.`,
       `Проверить, что ставки заданы для всех значимых товарно-локационных комбинаций: отсутствие ставки = нулевой штраф, и оптимизатор игнорирует такой спрос.`,
-      `Сверять упущенную маржу с разделом «Покрытие спроса»: расхождение указывает на разные основания расчёта (цена против маржи на тонну).`
+      `Сверять упущенную маржу с разделом «Спрос и покрытие»: расхождение между вкладками говорит о выбранном методе оценки (переключатель в панели фильтров), а не об ошибке данных.`
     ]}]);
 }
 
@@ -5086,6 +5195,30 @@ const toggleRail=()=>{
 $('#railToggle').onclick=toggleRail;
 const hdrToggle=$('#bRailToggleHdr');
 if(hdrToggle)hdrToggle.onclick=toggleRail;
+/* ── Позиция меню: тёмный рельс слева (по умолчанию) или горизонтальное меню сверху.
+   Выбор персистится в localStorage и применяется при загрузке (до первого render,
+   с quiet=true, чтобы не перерисовывать дважды). ── */
+const NAVPOS_KEY='inplan_navpos';
+function ipGetNavPos(){try{return localStorage.getItem(NAVPOS_KEY)||'left'}catch(e){return 'left'}}
+function paintNavPos(){
+  const b=$('#bNavPos');if(!b)return;
+  const top=$('#app').classList.contains('nav-top');
+  b.title=top?'Меню сверху — вернуть в левую панель':'Меню слева — переместить наверх';
+  const l=b.querySelector('.np-l');
+  if(l){l.setAttribute('x1',top?'3':'9');l.setAttribute('y1',top?'9':'3');
+        l.setAttribute('x2',top?'21':'9');l.setAttribute('y2',top?'9':'21')}
+}
+function setNavPos(pos,quiet){
+  const app=$('#app');
+  app.classList.toggle('nav-top',pos==='top');
+  if(pos==='top'){app.classList.remove('min');$('#railToggle').textContent='‹ Свернуть панель'}
+  try{localStorage.setItem(NAVPOS_KEY,pos)}catch(e){}
+  paintNavPos();
+  if(!quiet)setTimeout(()=>{if(DS)render()},220);
+}
+const navPosBtn=$('#bNavPos');
+if(navPosBtn)navPosBtn.onclick=()=>setNavPos($('#app').classList.contains('nav-top')?'left':'top');
+setNavPos(ipGetNavPos(),true);
 let RT,lastW=0;
 function redraw(force){
   const el=document.getElementById('main');
@@ -5167,6 +5300,7 @@ const SAVED=restoreDS();
 if(!SAVED){clearSavedDataset()}
 DS=SAVED?SAVED.ds:build(SEED);
 if(!SAVED)DS._demo=true;
+lmSegBuild();
 render();
 setInterval(expireActiveDatasetIfNeeded,60000);
 if(SAVED){
