@@ -130,7 +130,13 @@ body{margin:0;background:var(--scp-bg);color:var(--scp-text);
 .app.nav-top .rail-nav button{border-left:0;border-bottom:3px solid transparent;
   padding:8px 12px;white-space:nowrap}
 .app.nav-top .rail-nav button.on{border-left:0;border-bottom-color:var(--scp-accent)}
-.app.nav-top .btn-rail-menu{display:none}
+/* В режиме «сверху» прячем только «Свернуть панель»: переключатель позиции #bNavPos
+   обязан остаться видимым — иначе вернуться к левому меню мышью нечем. Кнопка
+   подсвечивается акцентом, чтобы управление было заметно. (Обе кнопки несли класс
+   .btn-rail-menu, поэтому прежнее правило .btn-rail-menu{display:none} убирало и
+   сам переключатель.) */
+.app.nav-top #bRailToggleHdr{display:none}
+.app.nav-top #bNavPos{border-color:var(--scp-accent);color:var(--scp-accent);background:var(--scp-b-50)}
 .wrap{flex:1;min-width:0;display:flex;flex-direction:column}
 
 /* ═══════════════ ШАПКА СТРАНИЦЫ ═══════════════ */
