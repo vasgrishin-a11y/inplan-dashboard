@@ -23,7 +23,7 @@ const CHX = window.CHX = {
     detailOrders:2000            // сколько заказов тянуть детально в основную схему
   },
   state:{
-    connected:false, dbs:[], granOptions:[], scenario:new Map(),
+    connected:false, dbs:[], granOptions:[], granByDb:{}, scenario:new Map(),
     lastError:null, busy:false
   },
   versions:[]                    // [{id,label,src,isBase,agg,dims}]
@@ -228,6 +228,13 @@ CHX.connect = async function(){
     CHX.state.fallbackAll = !hit.length;
     if(!CHX.state.dbs.length)
       throw new Error("Подключение прошло, но список баз пуст. Проверьте права пользователя на system.databases.");
+    /* Перепроверяем базу и выбранные схемы по текущему кластеру: устаревшая
+       база из автосессии/профиля не должна оставаться фантомом и тем более
+       становиться объектом пробы гранулярности (схемы может не существовать). */
+    CHX.cfg.schemas = (CHX.cfg.schemas||[]).filter(db=>CHX.state.dbs.includes(db));
+    if(CHX.cfg.schemas.length && !CHX.cfg.schemas.includes(CHX.cfg.base))
+      CHX.cfg.base = CHX.cfg.schemas[0];
+    if(!CHX.cfg.schemas.length) CHX.cfg.base = '';
     /* мета по каждой схеме: свежесть и объём */
     const metas = await Promise.allSettled(CHX.state.dbs.map(async db=>{
       const r = await chQuery(
@@ -239,13 +246,7 @@ CHX.connect = async function(){
     metas.forEach(m=>{ if(m.status==='fulfilled') CHX.state.meta[m.value.db]=m.value; });
     /* гранулярности — динамически из данных основной/первой схемы */
     const probe = CHX.cfg.base || CHX.state.dbs[0];
-    try{
-      const g = await chQuery(
-        `SELECT periodtype AS t, count() AS n FROM ${q(probe)}.${q('demand_coverage')}
-         WHERE is_deleted = 0 GROUP BY t ORDER BY n DESC`);
-      CHX.state.granOptions = g.map(r=>({t:num(r.t), n:num(r.n)})).filter(x=>x.t);
-    }catch(e){ CHX.state.granOptions = [{t:4,n:0}]; }
-    if(!CHX.state.granOptions.length) CHX.state.granOptions = [{t:4,n:0}];
+    CHX.state.granOptions = (await CHX.granOptionsFor(probe, {fresh:true})) || [{t:4,n:0}];
     if(!CHX.state.granOptions.some(o=>o.t===CHX.cfg.gran))
       CHX.cfg.gran = CHX.state.granOptions[0].t;
     CHX.state.connected = true;
@@ -314,21 +315,32 @@ CHX.checkSession = async function(force){
   }
   return CHX.restoreSession();
 };
-/* Пересчёт доступных гранулярностей по выбранной основной схеме:
-   у разных версий планов набор periodtype может отличаться */
-CHX.refreshGran = async function(db){
+/* Фактические гранулярности схемы — что реально есть в её demand_coverage.
+   У разных версий планов набор periodtype может отличаться, поэтому список
+   всегда спрашивается у КОНКРЕТНОЙ схемы, а не раз и навсегда.
+   Результат кэшируется на время сессии; {fresh:true} — переспросить принудительно.
+   Возврат null — в схеме нет demand_coverage (фильтр по гранулярности не применим). */
+CHX.granOptionsFor = async function(db, opts){
   db = db || CHX.cfg.base;
-  if(!db) return;
+  if(!db) return null;
+  if(!(opts && opts.fresh) && CHX.state.granByDb[db]) return CHX.state.granByDb[db];
   try{
     const g = await chQuery(
       `SELECT periodtype AS t, count() AS n FROM ${q(db)}.${q('demand_coverage')}
        WHERE is_deleted = 0 GROUP BY t ORDER BY n DESC`);
-    CHX.state.granOptions = g.map(r=>({t:num(r.t), n:num(r.n)})).filter(x=>x.t);
-  }catch(e){
-    /* у схемы нет demand_coverage — показываем месяцы как безопасный дефолт */
-    CHX.state.granOptions = [{t:4,n:0}];
-  }
-  if(!CHX.state.granOptions.length) CHX.state.granOptions = [{t:4,n:0}];
+    const list = g.map(r=>({t:num(r.t), n:num(r.n)})).filter(x=>x.t);
+    if(!list.length) return null;
+    CHX.state.granByDb[db] = list;
+    return list;
+  }catch(e){ return null }
+};
+
+/* Пересчёт доступных гранулярностей по выбранной основной схеме:
+   панель должна показывать periods ВЫБРАННОЙ версии, а не той, что была раньше */
+CHX.refreshGran = async function(db){
+  db = db || CHX.cfg.base;
+  if(!db) return;
+  CHX.state.granOptions = (await CHX.granOptionsFor(db, {fresh:true})) || [{t:4,n:0}];
   /* если текущая гранулярность в новой схеме отсутствует — берём самую массовую */
   if(!CHX.state.granOptions.some(o=>o.t===CHX.cfg.gran))
     CHX.cfg.gran = CHX.state.granOptions[0].t;
@@ -760,7 +772,18 @@ CHX.loadAll = async function(onProgress){
   const aggs = [];
   for(const db of c.schemas){
     step(`Агрегаты: ${CHX.labelFor(db)}…`);
-    aggs.push(await loadVersionAgg(db, c.gran));
+    /* У версии может быть свой набор periodtype. Если выбранной общей
+       гранулярности в ней нет, фильтр `periodtype = N` не попадёт ни в одну
+       строку и периодные агрегаты версии (покрытие, мощности, штрафы)
+       прилетят нулями. Берём самую массовую гранулярность ЭТОЙ версии
+       и честно помечаем смену в заметках. */
+    const opts = await CHX.granOptionsFor(db);
+    let g = c.gran;
+    if(opts && !opts.some(o=>o.t===g)) g = opts[0].t;
+    const a = await loadVersionAgg(db, g);
+    if(g !== c.gran)
+      a.notes.push('в версии нет periodtype '+c.gran+' — периодные агрегаты (покрытие, мощности, штрафы) посчитаны по periodtype '+g+' ('+CHX.granLabel(g)+')');
+    aggs.push(a);
   }
 
   step('Детализация основной схемы…');
@@ -785,10 +808,14 @@ CHX.loadAll = async function(onProgress){
   ds.detailLimited = detail.orders.length >= (c.detailOrders||2000);
   ds._demo = false;
 
-  CHX.versions = c.schemas.map(db=>({
-    id:db, label:CHX.labelFor(db), src:'ch', isBase:(db===c.base),
-    agg:aggs.find(a=>a.db===db), gran:c.gran, ts:(CHX.state.meta&&CHX.state.meta[db]||{}).ts||''
-  }));
+  CHX.versions = c.schemas.map(db=>{
+    const a = aggs.find(x=>x.db===db) || {};
+    return {
+      id:db, label:CHX.labelFor(db), src:'ch', isBase:(db===c.base),
+      agg:a, gran:a.gran || c.gran,   // фактическая гранулярность агрегатов этой версии
+      ts:(CHX.state.meta&&CHX.state.meta[db]||{}).ts||''
+    };
+  });
   CHX.loaded.marking_demand = true;
 
   window.DS = ds;
@@ -903,7 +930,8 @@ function drawModal(){
   <div class="chm-row"><label>Гранулярность</label>
     <select id="chmGran">${st.granOptions.map(o=>
       `<option value="${o.t}" ${c.gran===o.t?'selected':''}>${esc(CHX.granLabel(o.t))} (periodtype ${o.t}${o.n?', '+nf(o.n)+' строк':''})</option>`).join('')}
-    </select></div>
+    </select>
+    <span class="chm-hint">набор периодов основной схемы ${c.base?esc(c.base):'—'}</span></div>
   <div class="chm-row"><label>Детализация</label>
     <input id="chmDet" type="number" min="100" step="100" value="${c.detailOrders}">
     <span class="chm-hint">заказов основной схемы грузим построчно; остальное — агрегатами, детали по клику</span></div>
@@ -967,11 +995,17 @@ function drawModal(){
   /* Только чекбоксы, не строки: строка-див тоже несла data-db, и всплывшее
      событие change от чекбокса срабатывало на ней вторично — div.checked === undefined,
      и схема сразу же удалялась из выбора. Отсюда «галочки не ставятся». */
-  m.querySelectorAll('input[type=checkbox][data-db]').forEach(cb=>cb.onchange = ()=>{
+  m.querySelectorAll('input[type=checkbox][data-db]').forEach(cb=>cb.onchange = async ()=>{
     const db = cb.dataset.db, i = c.schemas.indexOf(db);
     if(cb.checked && i<0) c.schemas.push(db);
     if(!cb.checked && i>=0) c.schemas.splice(i,1);
+    const oldBase = c.base;
     if(!c.schemas.includes(c.base)) c.base = c.schemas[0] || '';
+    /* Смена основной схемы — в т.ч. «тихая»: первая галочка назначает базу,
+       снятие галочки с текущей базы перекладывает её на другую. Без переспроса
+       панель показывала бы periodtype ПРЕЖНЕЙ версии, а следующая загрузка
+       пошла бы с чужим periodtype (данных по нему в новой базе может не быть). */
+    if(st.connected && c.base && c.base !== oldBase) await CHX.refreshGran(c.base);
     if(st.connected) CHX.session.touch();
     drawModal();
   });
@@ -1093,6 +1127,12 @@ CHX.tabVS = function(){
     VS_TARGET = (rows.find(r=>!r.isBase)||rows[0]).id;
   const target = rows.find(r=>r.id===VS_TARGET);
 
+  /* фактическая гранулярность каждой версии: если версия без общего periodtype,
+     её периодные агрегаты посчитаны по её собственной гранулярности (см. loadAll) */
+  const vGran = r => r._v.gran || CHX.cfg.gran;
+  const gransU = uq(rows, vGran);
+  const gransMix = gransU.length > 1;
+
   /* лучшая версия по каждой метрике */
   const best = {};
   VS_METRICS.forEach(([k,,dir])=>{
@@ -1113,7 +1153,10 @@ CHX.tabVS = function(){
     ['Разброс маржи',
       bn(Math.max(...rows.map(r=>r.mar))-Math.min(...rows.map(r=>r.mar))),
       'между лучшей и худшей версией', 'mid'],
-    ['Гранулярность', CHX.granLabel(CHX.cfg.gran), 'periodtype '+CHX.cfg.gran, '']
+    ['Гранулярность',
+      gransMix ? gransU.map(g=>CHX.granLabel(g)).join(', ') : CHX.granLabel(gransU[0]),
+      gransMix ? 'у версий разные periodtype — см. заметки загрузки' : 'periodtype '+gransU[0],
+      gransMix ? 'mid' : '']
   ];
 
   const html = `
@@ -1191,7 +1234,9 @@ CHX.tabVS = function(){
         {k:'base', t:base.label+' (база)', num:1, f:(v,r)=>r._fmt(v)}
       ];
       rows.filter(r=>!r.isBase).forEach(r=>{
-        cols.push({k:'v_'+r.id, t:r.label, num:1,
+    cols.push({k:'v_'+r.id,
+      t:r.label + (vGran(r)!==vGran(base)?' · '+CHX.granLabel(vGran(r)):''),
+      num:1,
           f:(v,row)=>{
             const d = row['d_'+r.id], dir = row._dir;
             const star = (best[row._k]===r.id && dir) ? ' ★' : '';
@@ -1314,7 +1359,12 @@ CHX.tabVS = function(){
        сравнивайте сумму блоков, а не отдельные строки.`
     ]},
     {t:'Гигиена сравнения', i:[
-      `Все версии агрегированы с одной гранулярностью (<b>${CHX.granLabel(CHX.cfg.gran)}</b>) —
+      gransMix
+        ? `<span class="h">Гранулярности версий разные:</span> `
+          + rows.map(r=>`${esc(r.label)} — ${CHX.granLabel(vGran(r))}`).join('; ')
+          + `. Версия, в которой общего periodtype нет, агрегирована своей самой массовой гранулярностью —
+             при сравнении блоков «Спрос/Мощности» учитывайте базу периодов.`
+        : `Все версии агрегированы с одной гранулярностью (<b>${CHX.granLabel(gransU[0])}</b>) —
        смешивания месяцев с неделями не происходит.`,
       `Дедупликация: <code>is_deleted = 0</code> + последняя версия строки по <code>update_date_time</code>.`,
       CHX.unmatchedSchemas().length
