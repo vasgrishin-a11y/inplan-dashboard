@@ -423,4 +423,111 @@ test('сохранённая версия хранит непокрытый сп
     + '(регрессия: CHX.tabVS перехватывала вкладку без CH-схем)');
   assert.match(tbl.textContent, /Не покрыто всего/, 'в таблице отличий есть «Не покрыто всего, т»');
   assert.match(tbl.textContent, /Не принято в план/, 'в таблице отличий есть «Не принято в план, т»');
+  assert.match(tbl.textContent, /Упущенная маржа по непокрытому спросу/,
+    'в сравнении версий видна полная цена отказа, а не только дефицит плана');
+
+  /* полная цена отказа версии = сохранённый непокрытый объём × замороженная ставка
+     (ставка = lm/unm — восстанавливается из самого снапшота, пересчёт истории не
+     нужен). Проверяем по числу, которое реально показано в таблице отличий. */
+  const expect = v.gap * (v.lm / v.unm);
+  assert.ok(expect > v.lm, 'полная цена отказа больше LM по дефициту плана');
+  const row = [...ctx.document.querySelectorAll('#v3 tr')]
+    .find((r) => /Упущенная маржа по непокрытому спросу/.test(r.textContent));
+  assert.ok(row, 'строка полной цены отказа есть в таблице отличий');
+  const cells = [...row.querySelectorAll('td')].map((td) => parseBn(td.textContent));
+  assert.ok(cells.some((c) => isFinite(c) && close(c, expect, 2e-3)),
+    `в строке показано значение ${expect / 1e9} млрд ₽ (ячейки: ${cells.join(', ')})`);
+
+  const kpis = [...ctx.document.querySelectorAll('#main .kpi')].map((k) => k.querySelector('.t').textContent);
+  assert.ok(kpis.some((x) => /полной цены отказа/i.test(x)),
+    'в KPI сравнения версий есть «Изменение полной цены отказа»');
+});
+
+test('«Качество данных» проверяет demand_coverage: инварианты, разрез против итога, спрос вне плана', async (t) => {
+  const ctx = await loadApp();
+  t.after(ctx.close);
+  ctx.ev("go('dq')");
+  await ctx.tick(60);
+
+  const checks = JSON.parse(ctx.ev(`(function(){
+    return JSON.stringify([...document.querySelectorAll('#main .dq')].map(el => ({
+      sev: el.className,
+      txt: el.textContent.replace(/\\s+/g, ' ').trim(),
+    })));
+  })()`));
+  const find = (re) => checks.find((c) => re.test(c.txt));
+
+  const inv = find(/Неограниченный спрос: инварианты/);
+  assert.ok(inv, 'чек инвариантов неограниченного спроса есть');
+  assert.match(inv.txt, /Инварианты соблюдены/, 'на демо-наборе инварианты соблюдены');
+  assert.match(inv.txt, /414\s?400/, 'в чеке назван неограниченный спрос');
+  assert.match(inv.txt, /44\s?400/, 'в чеке назван объём вне плана');
+  assert.ok(!/\be\b/.test(inv.sev.replace(/dq/g, '')), 'чек не в статусе ошибки');
+
+  const out = find(/Спрос вне плана/);
+  assert.ok(out, 'чек «Спрос вне плана» есть');
+  assert.match(out.txt, /не принято в план/, 'объяснено, что это спрос, не дошедший до плана');
+  assert.match(out.txt, /раза больше|полная цена отказа/, 'сказано, во сколько раз полная цена отказа больше дефицита плана');
+
+  const lr = find(/Упущенная маржа против lostrevenue/);
+  assert.ok(lr, 'денежная сверка с lostrevenue продублирована в качестве данных');
+
+  const demo = find(/Демо-агрегат покрытия/);
+  assert.ok(demo, 'в демо-наборе честно сказано, что агрегат покрытия синтезирован');
+  assert.match(demo.txt, /условн/, 'тонны названы условными');
+
+  // ошибок (severity 'e') среди чеков покрытия быть не должно
+  const covErrs = checks.filter((c) => /Неограниченный спрос|Спрос вне плана|lostrevenue/.test(c.txt)
+    && /(^|\s)e(\s|$)/.test(c.sev));
+  assert.deepEqual(covErrs.map((c) => c.txt.slice(0, 60)), [], 'чеки покрытия без ошибок на корректных данных');
+});
+
+test('нет demand_coverage — в «Качестве данных» предупреждение, а не тишина', async (t) => {
+  const ctx = await loadApp();
+  t.after(ctx.close);
+  // убираем агрегат покрытия: так выглядит реальная выгрузка без demand_coverage
+  ctx.ev(`DS.agg.totals.cov = {}; DS.agg.dims.coverage = []; render()`);
+  await ctx.tick(60);
+  ctx.ev("go('dq')");
+  await ctx.tick(60);
+
+  const txt = ctx.document.querySelector('#main').textContent.replace(/\s+/g, ' ');
+  assert.match(txt, /Неограниченный спрос/, 'чек про неограниченный спрос есть и без данных');
+  assert.match(txt, /отсутствует или нулевой/, 'сказано, что агрегата нет');
+  assert.match(txt, /полная цена отказа занижена|занижена/, 'объяснено последствие для упущенной маржи');
+  assert.match(txt, /demand_coverage/, 'назван источник, который нужно добавить в выгрузку');
+});
+
+test('денежная сверка с lostrevenue одна и та же в «Спросе» и в «Качестве данных»', async (t) => {
+  /* covMoneyCheck() — единственная точка формулы и допуска (25%), поэтому две
+     вкладки обязаны показывать одинаковое расхождение и одинаковый вердикт.
+     Раньше в DQ был свой порог «3×», и вкладки могли спорить друг с другом. */
+  const ctx = await loadApp();
+  t.after(ctx.close);
+
+  ctx.ev("go('dm')");
+  await ctx.tick(60);
+  const dmRow = [...ctx.document.querySelectorAll('#main table.rec tr')]
+    .find((r) => /lostrevenue/.test(r.textContent));
+  assert.ok(dmRow, 'в своде спроса есть денежная сверка с lostrevenue');
+  const dmTxt = dmRow.textContent.replace(/\s+/g, ' ').trim();
+  const dmPct = parseNum((dmTxt.match(/расхождение\s+([\d,]+)/) || [, 'NaN'])[1]);
+  const dmOk = /✓/.test(dmTxt);
+  assert.ok(isFinite(dmPct), `в сверке названо расхождение в процентах (${dmTxt})`);
+
+  ctx.ev("go('dq')");
+  await ctx.tick(60);
+  const dq = [...ctx.document.querySelectorAll('#main .dq')]
+    .find((el) => /Упущенная маржа против lostrevenue/.test(el.textContent));
+  assert.ok(dq, 'в «Качестве данных» есть та же сверка');
+  const dqTxt = dq.textContent.replace(/\s+/g, ' ').trim();
+  const dqPct = parseNum((dqTxt.match(/расхождение\s+([\d,]+)/) || [, 'NaN'])[1]);
+  const dqOk = !/\bw\b/.test(dq.className);
+  assert.ok(isFinite(dqPct), `в чеке названо то же расхождение (${dqTxt})`);
+
+  assert.ok(Math.abs(dmPct - dqPct) < 0.05,
+    `расхождение одинаковое: «Спрос» ${dmPct}% против «Качество данных» ${dqPct}%`);
+  assert.equal(dmOk, dqOk, 'вердикт совпадает: обе вкладки либо принимают сверку, либо нет');
+  assert.equal(dmOk, dmPct <= 25, 'допуск 25% применён честно');
+  assert.match(dqTxt, /lostrevenue\s*×\s*маржинальность|×\s*\d/, 'в чеке показана формула оценки');
 });

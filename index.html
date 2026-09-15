@@ -1066,6 +1066,17 @@ function lmKpiSub(T){
   return `метод: ${LM_MODES[LM_MODE].t} · база: ${base}<br>`
     +(T.uncAvail?alt:`вторая база недоступна (${LM_B?LM_B.uncWhy:'нет данных'})`);
 }
+/* Денежная сверка упущенной маржи с lostrevenue из demand_coverage.
+   Одна формула и один допуск (25%) для блока «Спрос и покрытие» и для вкладки
+   «Качество данных», чтобы два места не могли разойтись в оценке.
+   Смысл: LM ≈ lostrevenue × маржинальность портфеля — потерянная выручка,
+   оценённая той же маржой, что и остальной портфель. */
+function covMoneyCheck(B,T,mrgp){
+  const lmSrc=(B&&B.lostRev||0)*(mrgp||0);
+  const lm=(T&&T.lmUnc!=null)?T.lmUnc:0;
+  const dev=lm>0?Math.abs(lmSrc-lm)/lm:(lmSrc>0?1:0);
+  return {lmSrc,lm,dev,ok:dev<=.25,hasData:lmSrc>0&&lm>0};
+}
 /* Карточка-сверка: как складываются спрос, план, отгрузка и непокрытый объём.
    Обычная HTML-таблица (не canvas) — читается без тултипов и доступна скринридеру.
    mrgp — маржинальность портфеля (маржа / выручка) для денежной сверки с lostrevenue. */
@@ -1075,13 +1086,13 @@ function covReconHtml(B,T,mrgp){
       <td>${esc(i.t)} <span class="tag">${i.kind==='def'?'по построению':'сверка источников'}</span></td>
       <td class="n">${nf(i.a)} т</td><td class="n">${nf(i.b)} т</td>
       <td class="st">${i.ok?'✓ сходится':`⚠ ${nf(Math.abs(i.a-i.b))} т — ${esc(i.bad||'расхождение')}`}</td></tr>`).join('');
-  const lmSrc=(B.lostRev||0)*(mrgp||0);
+  const M=covMoneyCheck(B,T,mrgp), lmSrc=M.lmSrc;
   const money=(B.useUnc&&B.lostRev>0)
     ?`<tr><td>Упущенная маржа по непокрытому спросу = lostrevenue × маржинальность портфеля <span class="tag">сверка источников</span></td>
        <td class="n">${bn(lmSrc)}</td><td class="n">${bn(T.lmUnc)}</td>
-       <td class="st">${Math.abs(lmSrc-T.lmUnc)<=Math.max(T.lmUnc,1)*0.25
-         ?'✓ порядок величины сходится'
-         :'⚠ расхождение больше 25% — ставка потери в demand_coverage не совпадает с маржой плана'}</td></tr>`
+       <td class="st">${M.ok
+         ?`✓ порядок величины сходится (расхождение ${pc(M.dev)})`
+         :`⚠ расхождение ${pc(M.dev)} — ставка потери в demand_coverage не совпадает с маржой плана`}</td></tr>`
     :(B.useUnc
       ?`<tr><td>Денежная сверка с demand_coverage <span class="tag">нет данных</span></td><td class="n">—</td><td class="n">—</td>
          <td class="st">Поле lostrevenue пустое — сверить упущенную маржу с источником нельзя</td></tr>`
@@ -3321,6 +3332,13 @@ function tabVS(){
   const iA=gi('vA',Math.min(1,list.length-1)),iB=gi('vB',0);
   const A=list[Math.min(iA,list.length-1)],B=list[Math.min(iB,list.length-1)];
   const d=(a,b)=>b-a, r=(a,b)=>a?b/a-1:0;
+  /* LM в снапшоте заморожен по базе «Дефицит плана» базовым методом, но ставку из
+     него можно восстановить: rate = lm/unm, а непокрытый объём (gap) сохраняется
+     рядом. Тогда «полная цена отказа» версии = gap × rate — сравнима между
+     версиями без пересчёта истории под активный переключатель базы.
+     У снапшотов, сохранённых до появления базы, поля gap нет → null. */
+  const lmUncOf=v=>(v&&v.gap!=null&&v.unm>0)?v.gap*(v.lm/v.unm):null;
+  const lmUA=lmUncOf(A),lmUB=lmUncOf(B),lmUncBoth=lmUA!=null&&lmUB!=null;
   const rows=[
     ['Валовая выручка',A.rev,B.rev,bn,1],['Себестоимость',A.cost,B.cost,bn,-1],['Валовая маржа',A.mar,B.mar,bn,1],
     ['Маржинальность',A.mar/A.rev,B.mar/B.rev,pc,1],['Маржа на тонну',A.mar/A.sal,B.mar/B.sal,v=>nf(v)+' ₽',1],
@@ -3328,6 +3346,7 @@ function tabVS(){
     ['Service Level',A.sal/A.dem,B.sal/B.dem,pc,1],['Упущенная маржа',A.lm,B.lm,bn,-1],
     /* Непокрытый спрос от неограниченного: есть только у версий, сохранённых
        после появления базы «Непокрытый спрос» (у старых снапшотов поля нет) */
+    ...(lmUncBoth?[['Упущенная маржа по непокрытому спросу',lmUA,lmUB,bn,-1]]:[]),
     ...((A.gap!=null&&B.gap!=null)?[['Не покрыто всего, т',A.gap,B.gap,v=>nf(v),-1],
       ['Не принято в план, т',A.notPlanned||0,B.notPlanned||0,v=>nf(v),-1]]:[]),
     ['Затраты: производство',A.pd,B.pd,bn,-1],['Затраты: логистика',A.mv,B.mv,bn,-1],
@@ -3341,13 +3360,14 @@ function tabVS(){
     <div class="fg"><label>Версия B (сравниваемая)</label><select id="vsB">${opt(0)}</select></div>
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
-  <div class="dt-info" style="margin-bottom:10px">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий», «Спрос», «Экономика отказов» на историю версий не действуют. Полная цена отказа видна в строках «Не покрыто всего» и «Не принято в план» (сохраняются, если в датасете версии был demand_coverage).</div>
+  <div class="dt-info" style="margin-bottom:10px">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий», «Спрос», «Экономика отказов» на историю версий не действуют. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</div>
   <div class="kpis">
     ${[['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
        ['Изменение Service Level',pc(d(A.sal/A.dem,B.sal/B.dem)),'процентных пунктов',(B.sal/B.dem)>=(A.sal/A.dem)?'pos':'neg'],
        ['Изменение маржи на тонну',nf(d(A.mar/A.sal,B.mar/B.sal))+' ₽',pc(r(A.mar/A.sal,B.mar/B.sal)),d(A.mar/A.sal,B.mar/B.sal)>=0?'pos':'neg'],
        ['Изменение упущенной маржи',bn(d(A.lm,B.lm)),pc(r(A.lm,B.lm)),d(A.lm,B.lm)<=0?'pos':'neg'],
+       ...(lmUncBoth?[['Изменение полной цены отказа',bn(d(lmUA,lmUB)),pc(r(lmUA,lmUB)),d(lmUA,lmUB)<=0?'pos':'neg']]:[]),
        ['Изменение логистики',bn(d(A.mv,B.mv)),pc(r(A.mv,B.mv)),d(A.mv,B.mv)<=0?'pos':'neg']]
       .map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}
   </div>
@@ -3362,7 +3382,9 @@ function tabVS(){
     $('#vsB').onchange=e=>{sessionStorage.setItem('vB',e.target.value);render()};
     $('#vsClr').onclick=()=>{if(confirm('Удалить все сохранённые версии?')){localStorage.removeItem('sop_vers');render()}};
     const norm=[['Выручка',A.rev,B.rev],['Себестоимость',A.cost,B.cost],['Валовая маржа',A.mar,B.mar],
-      ['Упущенная маржа',A.lm,B.lm],['Логистика',A.mv,B.mv],['Закупки',A.pc,B.pc]];
+      ['Упущенная маржа',A.lm,B.lm],
+      ...(lmUncBoth?[['Полная цена отказа',lmUA,lmUB]]:[]),
+      ['Логистика',A.mv,B.mv],['Закупки',A.pc,B.pc]];
     chDumbbell('#v1',H('#v1',260,0.5),norm.map(n=>({k:n[0],a:n[1],b:n[2],
       tip:`<b>${n[0]}</b><br>Версия A: ${bn(n[1])}<br>Версия B: ${bn(n[2])}<br>Изменение: ${bn(n[2]-n[1])} (${pc(r(n[1],n[2]))})`})),
       bn,null);
@@ -3437,6 +3459,61 @@ function tabDQ(){
     bad5.length?`${bad5.length} ${plural(bad5.length,['заказ','заказа','заказов'])}: маржа на тонну расходится с «цена − себестоимость» более чем на 5%, например №${bad5[0].id}: ${nf(bad5[0].mpt)} против ${nf(bad5[0].price-bad5[0].cpt)} ₽/т.`
       :'Маржа на тонну согласована с «цена − себестоимость» в пределах 5%.',
     bad5.length?'Уточнить, входит ли в margin_per_unit логистика/пошлины: разные основания искажают сравнение методов упущенной маржи.':'—');
+
+  /* ── Неограниченный спрос (demand_coverage): данные для базы «Непокрытый спрос» ──
+     Проверяем не UI-сверку (она живёт в блоке «Спрос и покрытие»), а качество
+     источника: инварианты определений, сходимость периодного разреза с итогом,
+     масштаб спроса вне плана и согласованность lostrevenue с маржой. */
+  const aggD=(DS&&DS.agg)||{}, covD=(aggD.totals||{}).cov||{}, dimsD=((aggD.dims||{}).coverage||[]);
+  const demUncD=num(covD.demUnc)||(num(covD.ff)+num(covD.uf));
+  const demD=S(o,x=>x.dem), salD=S(o,x=>x.sal), unmD=S(o,x=>x.unm);
+  const revD=S(o,x=>x.rev), marD=S(o,x=>x.mar);
+  if(!(demUncD>0)){
+    add('w','Неограниченный спрос',
+      'Агрегат <code>demand_coverage</code> отсутствует или нулевой: упущенная маржа считается только по дефициту плана (<code>marking_demand</code>). Заказы, которые в план не попали, в потерях не участвуют — полная цена отказа занижена.',
+      'Добавить в выгрузку <code>demand_coverage</code> (fullfilleddemandqty, unfullfilleddemandqty, demandfullfilledlateqty, lostrevenue) — либо прямо говорить, что LM означает «дефицит внутри плана», а не «непокрытый спрос».');
+  }else{
+    const notPlannedD=Math.max(0,demUncD-demD), gapD=Math.max(0,demUncD-salD);
+    const badU=[];
+    if(demUncD+.01<salD)badU.push(`отгружено ${nf(salD)} т больше неограниченного спроса ${nf(demUncD)} т`);
+    if(demUncD+.01<demD)badU.push(`ограниченный спрос ${nf(demD)} т больше неограниченного ${nf(demUncD)} т`);
+    add(badU.length?'e':'i','Неограниченный спрос: инварианты',
+      badU.length?`Нарушено определение неограниченного спроса: ${badU.join('; ')}. База «Непокрытый спрос» на таких данных отключается автоматически.`
+        :`Инварианты соблюдены: неограниченный ${nf(demUncD)} т = план ${nf(demD)} т + вне плана ${nf(notPlannedD)} т; не покрыто всего ${nf(gapD)} т = вне плана + дефицит плана ${nf(unmD)} т.`,
+      badU.length?'Проверить гранулярность и границы горизонта <code>demand_coverage</code>: смешение «месяц/день» или неполный период дают отгрузку больше спроса.':'—');
+
+    /* сходимость периодного разреза с итогом — ловит смешение гранулярностей */
+    if(dimsD.length>1){
+      const sumD=S(dimsD,x=>num(x.demUnc)||(num(x.ff)+num(x.uf)));
+      const dev=Math.abs(sumD-demUncD)/Math.max(demUncD,1);
+      add(dev>.01?'e':'i','Неограниченный спрос: разрез против итога',
+        `Сумма по ${dimsD.length} периодам <code>demand_coverage</code> — ${nf(sumD)} т против итога ${nf(demUncD)} т, расхождение ${pc(dev)}.`,
+        dev>.01?'Периоды и итог собраны по разным гранулярностям или с разными границами — сверить periodtype выгрузки (у каждой версии он свой, см. «Сравнение версий»).'
+              :'Пер-периодный разрез сходится с итогом: распределение упущенной маржи по периодам корректно.');
+    }
+
+    /* сколько спроса не дошло до плана — это уже бизнес-факт, а не брак данных */
+    const npShare=demUncD?notPlannedD/demUncD:0;
+    add(npShare>.5?'w':'i','Спрос вне плана',
+      `${nf(notPlannedD)} т (${pc(npShare)} неограниченного спроса) не принято в план${unmD>0?` — полная цена отказа в ${nf(gapD/unmD,2)} раза больше, чем по одному дефициту плана`:''}.`,
+      npShare>.5?'Больше половины спроса не дошло до плана: проверить ограничения модели (горизонт, мощности, лимиты заявок) — возможно, оптимизатор «не видит» часть спроса, а не отказывается от неё осознанно.'
+              :'Объём вне плана учтён в базе «Непокрытый спрос» (переключатель рядом с методом расчёта LM).');
+
+    /* денежная сверка: та же формула и тот же допуск, что в блоке «Спрос и
+       покрытие» (covMoneyCheck) — две вкладки не могут расходиться в оценке */
+    const lostRevD=num(covD.lostRev);
+    if(lostRevD>0&&revD>0&&unmD>0){
+      const mrgpD=marD/revD, rateD=S(o,x=>x.unm*x.mpt)/unmD;
+      const MD=covMoneyCheck({lostRev:lostRevD},{lmUnc:gapD*rateD},mrgpD);
+      add(MD.ok?'i':'w','Упущенная маржа против lostrevenue',
+        `LM по непокрытому спросу ${bn(MD.lm)} против оценки <code>lostrevenue × маржинальность</code> = ${bn(MD.lmSrc)} (${bn(lostRevD)} × ${pc(mrgpD)}): расхождение ${pc(MD.dev)}${MD.ok?'':' — больше допуска 25%'}.`,
+        MD.ok?'Денежные оценки согласованы: упущенная маржа объясняется потерянной выручкой и маржинальностью портфеля.'
+             :'Уточнить, по какой базе и по какой цене считается lostrevenue: включает ли внеплановый спрос, учитывает ли скидки/надбавки, та ли маржа на тонну.');
+    }
+    if(aggD.demo)add('i','Демо-агрегат покрытия',
+      'В демо-наборе <code>demand_coverage</code> синтезирован из заказов (в демо-файле этой таблицы нет): тонны и суммы условные, логика тождеств, баз и ставок — настоящая.',
+      'Для боевых чисел подключить ClickHouse-схему с настоящей <code>demand_coverage</code>.');
+  }
 
   const prVals=uq(o,x=>x.pr).filter(v=>v>0);
   const prWeird=prVals.length>0&&prVals.every(v=>v>100);
@@ -5087,6 +5164,7 @@ function tabTREE(){
       ${cSt>0?`<button class="chip ${TREE_OP_TYPE_FILTER==='stock'?'on':''}" id="fltOpSt"><i style="background:${CH.d6}"></i>Хранение (${cSt})</button>`:''}
     </div>`:''}
     <canvas id="treeCanvas" height="480"></canvas>
+    <div class="dq w" id="treeClipWarn" style="display:none;margin-top:8px"></div>
   </div>
   <div class="card w" style="margin-top:12px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
@@ -5198,9 +5276,18 @@ function tabTREE(){
     }
     /* Потолок высоты выше для режимов цепочки мощностей: карточки там укладываются
        в много строк, и прежнее ограничение 1200 px обрезало «Площадки»/«Сетку»
-       при большом числе узлов (раскладка считалась верно, резал сам потолок). */
+       при большом числе узлов (раскладка считалась верно, резал сам потолок).
+       6000 px — с большим запасом в пределах ограничений браузера на размер
+       канваса; если раскладке нужно ещё больше, обрезку не прячем, а сообщаем. */
     const isResMode=(TREE_VIEW_MODE==='prod_res'||TREE_VIEW_MODE==='log_res');
-    const g=cv('#treeCanvas',H('#treeCanvas',reqH,0.48,200,isResMode?2800:1200));
+    const treeH=H('#treeCanvas',reqH,0.48,200,isResMode?6000:1200);
+    const clipW=$('#treeClipWarn');
+    if(clipW){
+      const clipped=reqH>treeH+1;
+      clipW.style.display=clipped?'':'none';
+      if(clipped)clipW.innerHTML=`<span class="tag">Не всё поместилось</span> Карточек больше, чем влезает в канвас: раскладке нужно ${nf(reqH)} px по высоте, доступно ${nf(treeH)} px — часть карточек снизу не нарисована. Переключите режим на «Фокус» (только критические ограничения) или сузьте выбор заказа/фильтр операций.`;
+    }
+    const g=cv('#treeCanvas',treeH);
     if(g){
       if(TREE_VIEW_MODE==='stages')drawModeStages(g,curOpsAll,curOrd);
       else if(TREE_VIEW_MODE==='swimlanes')drawModeSwimlanes(g,curOpsAll,curOrd);

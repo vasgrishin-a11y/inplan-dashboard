@@ -64,7 +64,10 @@ function installCanvasStub(window) {
      той же сетке, что в браузере (4 колонки в «Фокусе»). */
   Object.defineProperty(window.HTMLCanvasElement.prototype, 'clientWidth', {
     configurable: true,
-    get() { return Number(this.dataset.testWidth) || 1240; },
+    get() {
+      const w = this.ownerDocument && this.ownerDocument.defaultView;
+      return Number(this.dataset.testWidth) || Number(w && w.__CANVAS_W) || 1240;
+    },
   });
   window.HTMLCanvasElement.prototype.getContext = function () {
     if (this.__ctx) return this.__ctx;
@@ -282,4 +285,53 @@ test('числа на канвасе объясняют разницу с рее
   assert.match(header, /заказ/, 'в шапке назван заказ, к которому привязана цепочка');
   assert.ok(d.registryBn >= d.bn,
     `в реестре всей схемы узких мест не меньше (${d.registryBn} ≥ ${d.bn}) — разница объясняется привязкой к заказу`);
+});
+
+test('если карточек больше, чем влезает в канвас, это сказано вслух, а не молча обрезано', async (t) => {
+  /* Инвариант: ЛИБО высота канваса не меньше нарисованного, ЛИБО показан
+     #treeClipWarn с числами. Молчаливая обрезка (как было с потолком 1200 px)
+     недопустима. Раздуваем реестр мощностей — «соседние» ограничения с загрузкой
+     ≥BN_UTIL попадают в цепочку, и в узком канвасе (одна колонка) карточки
+     заведомо не влезают. */
+  const ctx = await loadApp();
+  t.after(ctx.close);
+
+  const total = ctx.ev(`(function(){
+    const base = DS.capacity.slice(0, 6);
+    for (let i = 0; i < 40; i++)
+      base.forEach((c, j) => DS.capacity.push(Object.assign({}, c, {
+        rs: c.rs + '_dup' + i + '_' + j,
+        name: c.name + ' (копия ' + (i + 1) + ')',
+        util: Math.max(c.util || 0, 0.95), isBottleneck: true,
+      })));
+    return DS.capacity.length;
+  })()`);
+  assert.ok(total > 200, `реестр мощностей раздут до ${total} строк`);
+
+  ctx.window.__CANVAS_W = 60;        // узкий канвас → одна колонка → много строк
+  await ctx.openFocus('grid');
+  const d = ctx.drawn();
+  const warn = ctx.document.getElementById('treeClipWarn');
+  assert.ok(warn, 'в блоке есть место для предупреждения об обрезке');
+  assert.ok(d.gridHits > 40, `карточек нарисовано много (${d.gridHits})`);
+
+  const clipped = d.gridBottom > d.cssH + 1;
+  const warnShown = warn.style.display !== 'none';
+  assert.equal(warnShown, clipped,
+    `предупреждение видимо ровно тогда, когда карточки не влезли (обрезка=${clipped}, показано=${warnShown}, ` +
+    `низ карточек=${d.gridBottom}, высота канваса=${d.cssH})`);
+  if (clipped) {
+    assert.match(warn.textContent, /Не всё поместилось/, 'предупреждение названо по-человечески');
+    assert.match(warn.textContent, /px/, 'в предупреждении есть числа высот');
+    assert.match(warn.textContent, /Фокус/, 'предложен способ увидеть всё — режим «Фокус»');
+  }
+
+  // и наоборот: на обычном широком канвасе демо-набора ничего не обрезано
+  ctx.window.__CANVAS_W = 1240;
+  await ctx.openFocus('grid');
+  const d2 = ctx.drawn();
+  assert.ok(d2.gridBottom <= d2.cssH + 1,
+    `на нормальной ширине все карточки влезли (${d2.gridBottom} ≤ ${d2.cssH})`);
+  assert.equal(ctx.document.getElementById('treeClipWarn').style.display, 'none',
+    'предупреждение скрыто, когда всё поместилось');
 });
