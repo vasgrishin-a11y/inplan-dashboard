@@ -524,7 +524,7 @@ input[type=number]{font-family:'Open Sans',sans-serif}
         </div>
         <div class="pop-wrap" id="pop_pi">
           <button type="button" class="pill-btn" aria-haspopup="listbox" aria-expanded="false"><span class="pill-lbl">Приоритет:</span> <span class="pill-val">Все</span> <span class="pill-badge hide">0</span><span class="pill-arr">▼</span></button>
-          <div class="pop-menu"><div class="pop-hdr"><span>Приоритет заказа</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
+          <div class="pop-menu"><div class="pop-hdr"><span>Приоритет заказа · demandtype</span><div class="pop-hdr-links"><a data-act="all">Все</a><a data-act="clr">Сброс</a></div></div><div class="pop-list"></div></div>
         </div>
       </div>
       <div class="fbar-divider"></div>
@@ -566,43 +566,43 @@ input[type=number]{font-family:'Open Sans',sans-serif}
 const SEED={
  name:"Демо: run 19 / cfg 300 / ds 14",
  orders:[
-  {id:1,p:0,d:"2026-04",loc:"Sale_RU_3",prod:"FPRL_5",cl:"Роснефть",dem:10000,sal:3348.6,unm:6651.4,price:5562900,cpt:154383.18,mpt:5408516.82,rev:18627923755,cost:516967429,mar:18110956326,pr:2},
-  {id:2,p:0,d:"2026-04",loc:"Sale_EX_2",prod:"FPSO_1",cl:"Вьетнам",dem:10000,sal:10000,unm:0,price:696500,cpt:107532.29,mpt:588967.71,rev:6965000000,cost:1075322865,mar:5889677135,pr:2},
-  {id:3,p:0,d:"2026-04",loc:"Sale_RU_46",prod:"FPRL_4",cl:"Прочие",dem:10000,sal:557.78,unm:9442.22,price:6160400,cpt:194094.52,mpt:5966305.48,rev:3436122394,cost:108261239,mar:3327861155,pr:2},
-  {id:4,p:0,d:"2026-04",loc:"Sale_EX_12",prod:"FPSO_3",cl:"Южная Америка",dem:10000,sal:10000,unm:0,price:300000,cpt:43790.64,mpt:256209.36,rev:3000000000,cost:437906420,mar:2562093580,pr:2},
-  {id:5,p:0,d:"2026-04",loc:"Sale_RU_16",prod:"FNAZ_4",cl:"Прочие",dem:10000,sal:4430.66,unm:5569.34,price:568947,cpt:82977.04,mpt:485969.96,rev:2520812184,cost:367643257,mar:2153168928,pr:2},
-  {id:6,p:0,d:"2026-04",loc:"Sale_RU_11",prod:"FNAZ_3",cl:"Новатэк",dem:10000,sal:10000,unm:0,price:240000,cpt:135166.74,mpt:104833.26,rev:2400000000,cost:1351667356,mar:1048332644,pr:2},
-  {id:7,p:0,d:"2026-04",loc:"Sale_EX_1",prod:"FPSO_6",cl:"Турция",dem:10000,sal:10000,unm:0,price:208700,cpt:38629.89,mpt:170070.11,rev:2087000000,cost:386298861,mar:1700701139,pr:2},
-  {id:8,p:0,d:"2026-04",loc:"Sale_RU_28",prod:"FCC_15",cl:"Прочие",dem:10000,sal:10000,unm:0,price:166400,cpt:29907.33,mpt:136492.67,rev:1664000000,cost:299073288,mar:1364926712,pr:2},
-  {id:9,p:0,d:"2026-04",loc:"Sale_RU_19",prod:"FNAZ_6",cl:"Прочие",dem:10000,sal:10000,unm:0,price:159800,cpt:66794.89,mpt:93005.11,rev:1598000000,cost:667948907,mar:930051093,pr:2},
-  {id:10,p:0,d:"2026-04",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:9941.33,unm:58.67,price:158700,cpt:49548.33,mpt:109151.67,rev:1577689121,cost:492576311,mar:1085112811,pr:2},
-  {id:11,p:0,d:"2026-04",loc:"Sale_RU_1",prod:"FNAZ_5",cl:"ГПНефть",dem:10000,sal:10000,unm:0,price:135000,cpt:107798.16,mpt:27201.84,rev:1350000000,cost:1077981627,mar:272018373,pr:2},
-  {id:12,p:0,d:"2026-04",loc:"Sale_RU_5",prod:"FPSO_8",cl:"Газпром",dem:10000,sal:1249.88,unm:8750.12,price:903200,cpt:44459.98,mpt:858740.02,rev:1128895340,cost:55569826,mar:1073325514,pr:1},
-  {id:13,p:0,d:"2026-04",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:16975.25,mpt:87024.75,rev:1040000000,cost:169752489,mar:870247511,pr:2},
-  {id:14,p:0,d:"2026-04",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:39574.60,mpt:58425.40,rev:980000000,cost:395745979,mar:584254021,pr:2},
-  {id:145,p:11,d:"2027-03",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:10000,unm:0,price:158700,cpt:55865.60,mpt:102834.40,rev:1587000000,cost:558655994,mar:1028344006,pr:2},
-  {id:146,p:11,d:"2027-03",loc:"Sale_RU_1",prod:"FNAZ_5",cl:"ГПНефть",dem:10000,sal:10000,unm:0,price:135000,cpt:97126.67,mpt:37873.33,rev:1350000000,cost:971266674,mar:378733326,pr:2},
-  {id:147,p:11,d:"2027-03",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:15132.08,mpt:88867.92,rev:1040000000,cost:151320806,mar:888679194,pr:2},
-  {id:148,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:51635.72,mpt:46364.28,rev:980000000,cost:516357235,mar:463642765,pr:2},
-  {id:149,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_11",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:2044.87,mpt:81955.13,rev:840000000,cost:20448651,mar:819551349,pr:2},
-  {id:150,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_13",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:23388.03,mpt:60611.97,rev:840000000,cost:233880261,mar:606119739,pr:2},
-  {id:151,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_8",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:39815.63,mpt:44184.37,rev:840000000,cost:398156250,mar:441843750,pr:2},
-  {id:152,p:11,d:"2027-03",loc:"Sale_EX_3",prod:"FNAZ_1",cl:"Турция",dem:10000,sal:10000,unm:0,price:82000,cpt:22337.34,mpt:59662.66,rev:820000000,cost:223373371,mar:596626629,pr:2},
-  {id:153,p:12,d:"2027-04",loc:"Sale_RU_3",prod:"FPRL_5",cl:"Роснефть",dem:10000,sal:3468.22,unm:6531.78,price:5562900,cpt:131616.25,mpt:5431283.75,rev:19293346573,cost:456473766,mar:18836872807,pr:2},
-  {id:154,p:12,d:"2027-04",loc:"Sale_EX_2",prod:"FPSO_1",cl:"Вьетнам",dem:10000,sal:10000,unm:0,price:696500,cpt:94855.67,mpt:601644.33,rev:6965000000,cost:948556704,mar:6016443296,pr:2},
-  {id:155,p:12,d:"2027-04",loc:"Sale_EX_12",prod:"FPSO_3",cl:"Южная Америка",dem:10000,sal:10000,unm:0,price:300000,cpt:48974.80,mpt:251025.20,rev:3000000000,cost:489747974,mar:2510252026,pr:2},
-  {id:156,p:12,d:"2027-04",loc:"Sale_RU_46",prod:"FPRL_4",cl:"Прочие",dem:10000,sal:471.8,unm:9528.2,price:6160400,cpt:70839.89,mpt:6089560.11,rev:2906457273,cost:33422035,mar:2873035239,pr:2},
-  {id:157,p:12,d:"2027-04",loc:"Sale_RU_5",prod:"FPSO_8",cl:"Газпром",dem:10000,sal:3078.45,unm:6921.55,price:903200,cpt:95233.36,mpt:807966.64,rev:2780455013,cost:293171021,mar:2487283991,pr:1},
-  {id:158,p:12,d:"2027-04",loc:"Sale_RU_11",prod:"FNAZ_3",cl:"Новатэк",dem:10000,sal:10000,unm:0,price:240000,cpt:66644.73,mpt:173355.27,rev:2400000000,cost:666447263,mar:1733552737,pr:2},
-  {id:159,p:12,d:"2027-04",loc:"Sale_EX_1",prod:"FPSO_6",cl:"Турция",dem:10000,sal:10000,unm:0,price:208700,cpt:45831.50,mpt:162868.50,rev:2087000000,cost:458315048,mar:1628684952,pr:2},
-  {id:160,p:12,d:"2027-04",loc:"Sale_RU_28",prod:"FCC_15",cl:"Прочие",dem:10000,sal:10000,unm:0,price:166400,cpt:54050.73,mpt:112349.27,rev:1664000000,cost:540507267,mar:1123492733,pr:2},
-  {id:161,p:12,d:"2027-04",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:10000,unm:0,price:158700,cpt:56884.21,mpt:101815.79,rev:1587000000,cost:568842080,mar:1018157920,pr:2},
-  {id:162,p:12,d:"2027-04",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:12430.41,mpt:91569.59,rev:1040000000,cost:124304107,mar:915695893,pr:2},
-  {id:163,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:17271.14,mpt:80728.86,rev:980000000,cost:172711352,mar:807288648,pr:2},
-  {id:164,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_11",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:2,mpt:83998,rev:840000000,cost:20000,mar:839980000,pr:2},
-  {id:165,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_13",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:14815.72,mpt:69184.28,rev:840000000,cost:148157248,mar:691842752,pr:2},
-  {id:166,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_8",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:38231.50,mpt:45768.50,rev:840000000,cost:382315024,mar:457684976,pr:2},
-  {id:167,p:12,d:"2027-04",loc:"Sale_EX_3",prod:"FNAZ_1",cl:"Турция",dem:10000,sal:10000,unm:0,price:82000,cpt:38294.50,mpt:43705.50,rev:820000000,cost:382944954,mar:437055046,pr:2}
+  {id:1,p:0,d:"2026-04",loc:"Sale_RU_3",prod:"FPRL_5",cl:"Роснефть",dem:10000,sal:3348.6,unm:6651.4,price:5562900,cpt:154383.18,mpt:5408516.82,rev:18627923755,cost:516967429,mar:18110956326,dt:2},
+  {id:2,p:0,d:"2026-04",loc:"Sale_EX_2",prod:"FPSO_1",cl:"Вьетнам",dem:10000,sal:10000,unm:0,price:696500,cpt:107532.29,mpt:588967.71,rev:6965000000,cost:1075322865,mar:5889677135,dt:2},
+  {id:3,p:0,d:"2026-04",loc:"Sale_RU_46",prod:"FPRL_4",cl:"Прочие",dem:10000,sal:557.78,unm:9442.22,price:6160400,cpt:194094.52,mpt:5966305.48,rev:3436122394,cost:108261239,mar:3327861155,dt:2},
+  {id:4,p:0,d:"2026-04",loc:"Sale_EX_12",prod:"FPSO_3",cl:"Южная Америка",dem:10000,sal:10000,unm:0,price:300000,cpt:43790.64,mpt:256209.36,rev:3000000000,cost:437906420,mar:2562093580,dt:2},
+  {id:5,p:0,d:"2026-04",loc:"Sale_RU_16",prod:"FNAZ_4",cl:"Прочие",dem:10000,sal:4430.66,unm:5569.34,price:568947,cpt:82977.04,mpt:485969.96,rev:2520812184,cost:367643257,mar:2153168928,dt:2},
+  {id:6,p:0,d:"2026-04",loc:"Sale_RU_11",prod:"FNAZ_3",cl:"Новатэк",dem:10000,sal:10000,unm:0,price:240000,cpt:135166.74,mpt:104833.26,rev:2400000000,cost:1351667356,mar:1048332644,dt:2},
+  {id:7,p:0,d:"2026-04",loc:"Sale_EX_1",prod:"FPSO_6",cl:"Турция",dem:10000,sal:10000,unm:0,price:208700,cpt:38629.89,mpt:170070.11,rev:2087000000,cost:386298861,mar:1700701139,dt:2},
+  {id:8,p:0,d:"2026-04",loc:"Sale_RU_28",prod:"FCC_15",cl:"Прочие",dem:10000,sal:10000,unm:0,price:166400,cpt:29907.33,mpt:136492.67,rev:1664000000,cost:299073288,mar:1364926712,dt:2},
+  {id:9,p:0,d:"2026-04",loc:"Sale_RU_19",prod:"FNAZ_6",cl:"Прочие",dem:10000,sal:10000,unm:0,price:159800,cpt:66794.89,mpt:93005.11,rev:1598000000,cost:667948907,mar:930051093,dt:2},
+  {id:10,p:0,d:"2026-04",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:9941.33,unm:58.67,price:158700,cpt:49548.33,mpt:109151.67,rev:1577689121,cost:492576311,mar:1085112811,dt:2},
+  {id:11,p:0,d:"2026-04",loc:"Sale_RU_1",prod:"FNAZ_5",cl:"ГПНефть",dem:10000,sal:10000,unm:0,price:135000,cpt:107798.16,mpt:27201.84,rev:1350000000,cost:1077981627,mar:272018373,dt:2},
+  {id:12,p:0,d:"2026-04",loc:"Sale_RU_5",prod:"FPSO_8",cl:"Газпром",dem:10000,sal:1249.88,unm:8750.12,price:903200,cpt:44459.98,mpt:858740.02,rev:1128895340,cost:55569826,mar:1073325514,dt:1},
+  {id:13,p:0,d:"2026-04",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:16975.25,mpt:87024.75,rev:1040000000,cost:169752489,mar:870247511,dt:2},
+  {id:14,p:0,d:"2026-04",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:39574.60,mpt:58425.40,rev:980000000,cost:395745979,mar:584254021,dt:2},
+  {id:145,p:11,d:"2027-03",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:10000,unm:0,price:158700,cpt:55865.60,mpt:102834.40,rev:1587000000,cost:558655994,mar:1028344006,dt:2},
+  {id:146,p:11,d:"2027-03",loc:"Sale_RU_1",prod:"FNAZ_5",cl:"ГПНефть",dem:10000,sal:10000,unm:0,price:135000,cpt:97126.67,mpt:37873.33,rev:1350000000,cost:971266674,mar:378733326,dt:2},
+  {id:147,p:11,d:"2027-03",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:15132.08,mpt:88867.92,rev:1040000000,cost:151320806,mar:888679194,dt:2},
+  {id:148,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:51635.72,mpt:46364.28,rev:980000000,cost:516357235,mar:463642765,dt:2},
+  {id:149,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_11",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:2044.87,mpt:81955.13,rev:840000000,cost:20448651,mar:819551349,dt:2},
+  {id:150,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_13",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:23388.03,mpt:60611.97,rev:840000000,cost:233880261,mar:606119739,dt:2},
+  {id:151,p:11,d:"2027-03",loc:"Sale_RU_26",prod:"FCC_8",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:39815.63,mpt:44184.37,rev:840000000,cost:398156250,mar:441843750,dt:2},
+  {id:152,p:11,d:"2027-03",loc:"Sale_EX_3",prod:"FNAZ_1",cl:"Турция",dem:10000,sal:10000,unm:0,price:82000,cpt:22337.34,mpt:59662.66,rev:820000000,cost:223373371,mar:596626629,dt:2},
+  {id:153,p:12,d:"2027-04",loc:"Sale_RU_3",prod:"FPRL_5",cl:"Роснефть",dem:10000,sal:3468.22,unm:6531.78,price:5562900,cpt:131616.25,mpt:5431283.75,rev:19293346573,cost:456473766,mar:18836872807,dt:2},
+  {id:154,p:12,d:"2027-04",loc:"Sale_EX_2",prod:"FPSO_1",cl:"Вьетнам",dem:10000,sal:10000,unm:0,price:696500,cpt:94855.67,mpt:601644.33,rev:6965000000,cost:948556704,mar:6016443296,dt:2},
+  {id:155,p:12,d:"2027-04",loc:"Sale_EX_12",prod:"FPSO_3",cl:"Южная Америка",dem:10000,sal:10000,unm:0,price:300000,cpt:48974.80,mpt:251025.20,rev:3000000000,cost:489747974,mar:2510252026,dt:2},
+  {id:156,p:12,d:"2027-04",loc:"Sale_RU_46",prod:"FPRL_4",cl:"Прочие",dem:10000,sal:471.8,unm:9528.2,price:6160400,cpt:70839.89,mpt:6089560.11,rev:2906457273,cost:33422035,mar:2873035239,dt:2},
+  {id:157,p:12,d:"2027-04",loc:"Sale_RU_5",prod:"FPSO_8",cl:"Газпром",dem:10000,sal:3078.45,unm:6921.55,price:903200,cpt:95233.36,mpt:807966.64,rev:2780455013,cost:293171021,mar:2487283991,dt:1},
+  {id:158,p:12,d:"2027-04",loc:"Sale_RU_11",prod:"FNAZ_3",cl:"Новатэк",dem:10000,sal:10000,unm:0,price:240000,cpt:66644.73,mpt:173355.27,rev:2400000000,cost:666447263,mar:1733552737,dt:2},
+  {id:159,p:12,d:"2027-04",loc:"Sale_EX_1",prod:"FPSO_6",cl:"Турция",dem:10000,sal:10000,unm:0,price:208700,cpt:45831.50,mpt:162868.50,rev:2087000000,cost:458315048,mar:1628684952,dt:2},
+  {id:160,p:12,d:"2027-04",loc:"Sale_RU_28",prod:"FCC_15",cl:"Прочие",dem:10000,sal:10000,unm:0,price:166400,cpt:54050.73,mpt:112349.27,rev:1664000000,cost:540507267,mar:1123492733,dt:2},
+  {id:161,p:12,d:"2027-04",loc:"Sale_RU_28",prod:"FCC_42",cl:"Прочие",dem:10000,sal:10000,unm:0,price:158700,cpt:56884.21,mpt:101815.79,rev:1587000000,cost:568842080,mar:1018157920,dt:2},
+  {id:162,p:12,d:"2027-04",loc:"Sale_RU_30",prod:"FMUFZ_2",cl:"Прочие",dem:10000,sal:10000,unm:0,price:104000,cpt:12430.41,mpt:91569.59,rev:1040000000,cost:124304107,mar:915695893,dt:2},
+  {id:163,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_21",cl:"Прочие",dem:10000,sal:10000,unm:0,price:98000,cpt:17271.14,mpt:80728.86,rev:980000000,cost:172711352,mar:807288648,dt:2},
+  {id:164,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_11",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:2,mpt:83998,rev:840000000,cost:20000,mar:839980000,dt:2},
+  {id:165,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_13",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:14815.72,mpt:69184.28,rev:840000000,cost:148157248,mar:691842752,dt:2},
+  {id:166,p:12,d:"2027-04",loc:"Sale_RU_26",prod:"FCC_8",cl:"Прочие",dem:10000,sal:10000,unm:0,price:84000,cpt:38231.50,mpt:45768.50,rev:840000000,cost:382315024,mar:457684976,dt:2},
+  {id:167,p:12,d:"2027-04",loc:"Sale_EX_3",prod:"FNAZ_1",cl:"Турция",dem:10000,sal:10000,unm:0,price:82000,cpt:38294.50,mpt:43705.50,rev:820000000,cost:382944954,mar:437055046,dt:2}
  ],
  ops:[
  {o:1,p:0,t:"mv",pl:"",pr:"FPRL_5",rs:"",fr:"Plant_25",to:"Dispatch_RU_7",tm:"PLANTFCA",v:1032.53,r:1,vd:"",rt:"",oid:"B.1.A",dp:3},
@@ -1232,7 +1232,7 @@ function dtable(sel,cols,rows,opts){
       </div>
       <div class="scr" style="max-height:${opts.h||340}px"><table><thead><tr>
         ${cols.map(c=>{const on=st.sort===c.k,fon=st.flt[c.k]&&st.flt[c.k].length;
-          return `<th class="dt-th${c.left?' l':''}"${on?` aria-sort="${st.dir==='asc'?'ascending':'descending'}"`:''}><span class="dt-t" data-sk="${c.k}">${esc(c.t)}
+          return `<th class="dt-th${c.left?' l':''}"${c.title?` title="${esc(c.title)}"`:''}${on?` aria-sort="${st.dir==='asc'?'ascending':'descending'}"`:''}><span class="dt-t" data-sk="${c.k}">${esc(c.t)}
             <span class="dt-ar">${on?(st.dir==='asc'?'▲':'▼'):'↕'}</span></span>${
             c.flt?`<span class="dt-fn${fon?' on':''}" data-fk="${c.k}">▾</span>`:''}</th>`}).join('')}
       </tr></thead><tbody>
@@ -1317,7 +1317,21 @@ function build(src){
      (тултипы canvas и т.п.). */
   const CLEAN=['loc','prod','cl'];
   const o=src.orders.map(r=>{const x={...r,chan:String(r.loc).startsWith('Sale_EX')?'EX':'RU'};
-    CLEAN.forEach(k=>x[k]=sany(x[k]));return x});
+    CLEAN.forEach(k=>x[k]=sany(x[k]));
+    /* Приоритет заказа — колонка demandtype (marking_demand / demand_coverage).
+       Нормализуем в одной точке: сюда приходят XLSX, ClickHouse, встроенный
+       демо-набор и датасеты из автосохранения. В старых снапшотах поля dt нет,
+       а pr прочитан из margin_per_hour — такие значения на приоритет не похожи
+       (сотни тысяч), поэтому их не переносим: pr=0, и DQ прямо скажет, что
+       приоритет не определён и файл нужно перезагрузить. */
+    const dtRaw=[x.dt,x.demandtype,x.dtype].find(v=>v!==undefined&&v!=='');
+    const P=prioFields(dtRaw,x.prioAlt!==undefined?x.prioAlt:x.prio);
+    if(!P.src&&num(x.pr)>0&&num(x.pr)<=50){   // правдоподобный приоритет из старого снапшота
+      P.pr=num(x.pr);P.pk=String(P.pr);P.dtl=nf(P.pr);P.src='снапшот (demandtype не сохранён)';
+    }
+    x.dt=P.dt===''?'':P.dt; x.pr=P.pr; x.dtl=P.dtl; x.pk=P.pk; x.prioSrc=P.src;
+    x.mph=num(x.mph);
+    return x});
   const ops=src.ops.map(r=>{const x={...r,type:TMAP[r.t]||r.t,cost:(Math.abs(r.r)<=1?0:Math.abs(r.r)*r.v),
     stub:Math.abs(r.r)<=1,tclass:TCLASS[r.tm]||r.tm||'—'};
     ['pl','pr','rs','fr','to','tm','vd','rt','oid'].forEach(k=>x[k]=sany(x[k]));return x});
@@ -1636,7 +1650,7 @@ function fOrders(excludeKey=null){
     if(excludeKey!=='ch' && F.ch.length && !F.ch.includes(o.chan)) return false;
     if(excludeKey!=='cl' && F.cl.length && !F.cl.includes(o.cl)) return false;
     if(excludeKey!=='pr' && F.pr.length && !F.pr.includes(o.prod)) return false;
-    if(excludeKey!=='pi' && F.pi.length && !F.pi.includes(String(o.pr))) return false;
+    if(excludeKey!=='pi' && F.pi.length && !F.pi.includes(o.pk)) return false;
     if((excludeKey!=='pl' && F.pl.length) || (excludeKey!=='vd' && F.vd.length) ||
        (excludeKey!=='tm' && F.tm.length) || (excludeKey!=='nd' && F.nd.length)){
       const relOps = DS.ops.filter(r=>r.o===o.id);
@@ -1736,7 +1750,7 @@ function fillSelects(){
 
   renderPill('#pop_p','p',uq(o,x=>x.p).sort((a,b)=>a-b),v=>'P'+v);
   renderPill('#pop_ch','ch',['RU','EX'],v=>v==='RU'?'RU · внутренний':'EX · экспорт');
-  renderPill('#pop_pi','pi',uq(o,x=>x.pr),v=>'Приоритет '+v);
+  renderPill('#pop_pi','pi',uq(o,x=>x.pk).sort(prioKeySort),v=>'Приоритет '+v);
   renderPill('#pop_cl','cl',uq(o,x=>x.cl));
   renderPill('#pop_pr','pr',uq(o,x=>x.prod));
   renderPill('#pop_pl','pl',uq(ops,x=>x.pl));
@@ -2594,7 +2608,24 @@ function tabDM(){
   const {B,T}=lmState(D);
   const hasDC=B.hasDC,useUnc=B.useUnc;
   const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=B.dem,sal=B.sal,unm=B.unm;
-  const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU'),p1=D.filter(o=>o.pr==1);
+  const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU');
+  /* Приоритет — колонка demandtype. Числовые значения упорядочены (1 важнее 2),
+     поэтому «наивысший приоритет» — минимальное из присутствующих. Строковые
+     метки типа спроса порядка не имеют: ничего не выдумываем, а показываем
+     Service Level по каждой метке. */
+  const prioAll=grp(D,o=>o.pk,v=>({n:v.length,dem:S(v,o=>o.dem),sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),
+      dtl:v[0].dtl||v[0].pk,sl:S(v,o=>o.sal)/Math.max(S(v,o=>o.dem),1)})).sort((a,b)=>prioKeySort(a.k,b.k));
+  const prioGrp=prioAll.filter(g=>g.k!=='—');       // «—» = приоритет не определён
+  const prioNum=prioGrp.length>0&&prioGrp.every(g=>isFinite(parseFloat(String(g.k))));
+  const topPrio=prioGrp[0]||null;
+  const prioLine=!prioGrp.length
+    ?`Приоритет заказа не определён: в выгрузке нет <code>demandtype</code> (marking_demand / demand_coverage) — проверка обслуживания приоритетов недоступна.`
+    :prioNum
+      ?(topPrio.sl<.9
+        ?`<span class="h">Приоритет ${esc(topPrio.k)} (наивысший из ${prioGrp.length}) не обслужен полностью</span>: SL ${pc(topPrio.sl)} — проверить правила аллокации и мощности.`
+        :`Приоритет ${esc(topPrio.k)} (наивысший из ${prioGrp.length}) обслужен полностью.`)
+      :`Service Level по типам спроса (<code>demandtype</code>, порядок в данных не задан): ${prioGrp.slice(0,4).map(g=>`${esc(g.dtl||g.k)} — ${pc(g.sl)}`).join(', ')}${prioGrp.length>4?` и ещё ${prioGrp.length-4}`:''}.`
+        +(prioGrp.some(g=>g.sl<.9)?` <span class="h">Есть типы спроса с покрытием ниже 90%</span> — проверить, осознанно ли модель их урезает.`:'');
   const defOrders=D.filter(o=>o.unm>0),full=D.length-defOrders.length;
   /* Упущенная маржа — через lmS(): при базе «Непокрытый спрос» значения заказов
      масштабированы так, что их сумма равна KPI (плюс нераспределённый остаток,
@@ -2769,7 +2800,7 @@ function tabDM(){
       def.length?`Топ-позиция по упущенной марже: <span class="h">${topDef.k}</span> — ${nf(topDef.v)} т, ${bn(topDef.lm)}.`:'',
       `Экспорт: ${pc(sal?S(ex,o=>o.sal)/sal:0)} объёма и <span class="h">${pc(mar?S(ex,o=>o.mar)/mar:0)}</span> маржи; самая маржинальная позиция — ${hiMar.prod} (${nf(hiMar.mpt)} ₽/т, ${hiMar.cl}).`].filter(Boolean)},
     {t:'Аномалии',i:[
-      p1.length&&S(p1,o=>o.sal)/Math.max(S(p1,o=>o.dem),1)<.9?`<span class="h">Приоритет 1 не обслужен полностью</span>: SL ${pc(S(p1,o=>o.sal)/S(p1,o=>o.dem))} — проверить правила аллокации и мощности.`:`Приоритет 1 обслужен полностью.`,
+      prioLine,
       def.length&&defOrders.some(o=>o.sal/o.dem<.1)?`Есть заказы с покрытием менее 10% — спрос фактически игнорируется оптимизатором: нет маршрута, мощности или сырья.`:`Критически низких покрытий не выявлено.`,
       `Поле «Клиент» смешивает юрлица и географии, сегмент «Прочие» агрегирует разнородных контрагентов — искажает клиентскую аналитику.`]},
     {t:'Рекомендации',i:[
@@ -3429,7 +3460,7 @@ function tabVS(){
 
 /* ═══════════════ 15. БЛОК: КАЧЕСТВО ДАННЫХ ═══════════════ */
 function tabDQ(){
-  const o=DS.orders,ops=DS.ops,ch=[];
+  const o=DS.orders,ops=DS.ops,ch=[],aggP=(DS&&DS.agg)||{};
   const add=(sev,tag,msg,rec)=>ch.push({sev,tag,msg,rec});
 
   const bad1=o.filter(x=>Math.abs(x.sal+x.unm-x.dem)>.01);
@@ -3515,12 +3546,36 @@ function tabDQ(){
       'Для боевых чисел подключить ClickHouse-схему с настоящей <code>demand_coverage</code>.');
   }
 
-  const prVals=uq(o,x=>x.pr).filter(v=>v>0);
-  const prWeird=prVals.length>0&&prVals.every(v=>v>100);
-  add(prWeird?'w':'i','Приоритет заказа',
-    prWeird?`Все значения «приоритета» >100 (${prVals.slice(0,4).map(nf).join(', ')} ₽) — похоже, поле читается из колонки margin_per_hour, а не из реального приоритета. Проверка «приоритет 1 обслужен» в резюме «Спрос» на таких данных не работает.`
-      :'Поля приоритетов принимают типовые значения (1–N).',
-    prWeird?'Уточнить у владельца модели имя колонки с приоритетом заказа; в COL.prio сейчас отображена margin_per_hour.':'—');
+  /* Приоритет заказа — колонка demandtype (marking_demand / demand_coverage).
+     Проверяем, что она действительно пришла и похожа на приоритет. */
+  const prVals=uq(o,x=>x.pk).sort(prioKeySort);
+  const prNums=uq(o,x=>x.pr).filter(v=>v>0);
+  const srcDt=o.filter(x=>x.prioSrc==='demandtype').length;
+  const srcAlt=o.filter(x=>x.prioSrc==='demandtypepriority').length;
+  const srcNone=o.filter(x=>!x.prioSrc||String(x.prioSrc).indexOf('снапшот')===0).length;
+  const prWeird=prNums.length>0&&prNums.every(v=>v>100);
+  const prLabels=prVals.filter(v=>!isFinite(parseFloat(String(v))));
+  add(srcNone===o.length?'e':(prWeird?'e':(srcDt?'i':'w')),'Приоритет заказа (demandtype)',
+    !o.length?'—'
+    :srcNone===o.length?`Ни в одном из ${nf(o.length)} ${plural(o.length,['заказа','заказов','заказов'])} приоритет не определён: колонка <code>demandtype</code> не найдена (в прежней версии поля читалась из <code>margin_per_hour</code>). Фильтр «Приоритет» и проверка обслуживания приоритетов не работают.`
+    :prWeird?`Значения приоритета (${prNums.slice(0,4).map(nf).join(', ')}) не похожи на приоритет — больше 100. Проверьте, что в <code>demandtype</code> не попал другой показатель.`
+    :`Приоритет задан в ${nf(srcDt)} из ${nf(o.length)} заказов по колонке <code>demandtype</code>${srcAlt?`, ещё в ${nf(srcAlt)} — по запасной колонке <code>demand_demandtypepriority</code>`:''}${srcNone?`, в ${nf(srcNone)} не определён`:''}. Значения: ${prVals.slice(0,8).map(v=>esc(String(v))).join(', ')}${prVals.length>8?` и ещё ${prVals.length-8}`:''}${prLabels.length?' (строковые метки типа спроса — порядка между ними нет, резюме показывает Service Level по каждой)':''}.`,
+    srcNone===o.length?'Перезагрузить файл: <code>demandtype</code> должен быть в листе marking_demand. Если колонка называется иначе — добавить вариант в <code>COL.prio</code>.'
+    :prWeird?'Уточнить у владельца модели содержимое <code>demandtype</code>: приоритет — small int (1, 2, …), а не сумма.'
+    :srcDt?'—':'Часть заказов без <code>demandtype</code>: приоритет взят из <code>demand_demandtypepriority</code> либо не определён — сверить оба источника в выгрузке.');
+
+  /* demandtype — ключ ставки штрафа в demand_cost/demand_cost_ti (item|loc|dt|stream):
+     если тип спроса дефицитного заказа не встречается в ставках, штраф по нему равен 0.
+     Проверяем только когда ставки загружены (ClickHouse). */
+  const penRows=[].concat((aggP.penalty||[]),(aggP.penaltyFlat||[]));
+  if(penRows.length){
+    const dtRates=new Set(penRows.map(r=>String(num(r.dt))));
+    const defO=o.filter(x=>x.unm>0);
+    const noRate=defO.filter(x=>x.pr>0&&!dtRates.has(String(x.pr)));
+    add(noRate.length?'w':'i','Ставки штрафа по типам спроса',
+      `В demand_cost/demand_cost_ti ${nf(dtRates.size)} ${plural(dtRates.size,['тип спроса','типа спроса','типов спроса'])} (${[...dtRates].slice(0,6).map(v=>esc(v)).join(', ')}).${noRate.length?` У ${nf(noRate.length)} из ${nf(defO.length)} дефицитных заказов тип спроса (${uq(noRate,x=>x.pk).slice(0,4).map(v=>esc(String(v))).join(', ')}) в ставках не встречается — штраф для них равен нулю.`:' Все типы спроса дефицитных заказов в ставках присутствуют.'}`,
+      noRate.length?'Добавить ставки для недостающих типов спроса либо сверить <code>demandtype</code> в marking_demand и demand_cost: штрафы занижаются.':'—');
+  }
 
   const an=o.filter(x=>x.cpt<x.price*.01);
   add(an.length?'e':'i','Аномальная себестоимость',
@@ -3540,9 +3595,21 @@ function tabDQ(){
     `${stub.length} из ${ops.length} операций (${pc(stubRate)}) имеют ставку не более 1 ₽/т, в основном ${uq(stub,r=>r.tm).filter(x=>x).slice(0,4).join(', ')||'перемещения без тарифа'}.`,
     'Стоимостные метрики по этим строкам исключены из расчёта, поэтому затраты цепочки недооценены. Заполнить реальные ставки либо вынести в отдельную статью условий поставки.');
 
-  add('w','Незаполненные поля',
-    'Поля «Тип спроса», «Потреблённый запас», «late_delivery», «mapper_run_id» пусты во всей выгрузке.',
-    'Без них недоступны сегментация спроса, оборачиваемость запасов и метрика своевременности. Запросить заполнение у владельца модели.');
+  /* Раньше здесь было жёстко написано «поля пусты во всей выгрузке» — утверждение
+     устаревало само, как только выгрузка менялась. Теперь список считается по данным. */
+  const emptyF=[
+    ['Тип спроса (demandtype)',o,x=>x.prioSrc==='demandtype'],
+    ['Дата спроса',o,x=>!!x.d],
+    ['Машино-часы (resource_consumption)',ops.filter(r=>r.type==='production'),x=>num(x.rc)>0],
+    ['Потреблённый запас',ops,()=>false],
+    ['late_delivery',ops,()=>false],
+    ['mapper_run_id',o,()=>false]
+  ].map(f=>({k:f[0],tot:f[1].length,fill:f[1].length?f[1].filter(f[2]).length:0}))
+   .filter(f=>f.tot>0&&f.fill===0);
+  add(emptyF.length?'w':'i','Незаполненные поля',
+    emptyF.length?`Пусты во всей выгрузке: ${emptyF.map(f=>'«'+f.k+'»').join(', ')}.`
+      :'Все отслеживаемые поля заполнены хотя бы частично.',
+    emptyF.length?'Без них недоступны сегментация спроса, оборачиваемость запасов и метрика своевременности. Запросить заполнение у владельца модели.':'—');
 
   const mixed=ops.filter(r=>r.type==='movement'&&r.rs);
   add('w','Смешение сущностей',
@@ -3653,7 +3720,7 @@ function tabDQ(){
       ['Поставщик',ops.filter(r=>r.type==='procurement'),r=>r.vd],
       ['Плечо откуда и куда',ops.filter(r=>r.type==='movement'),r=>r.fr&&r.to],
       ['Тариф без заглушки',ops,r=>!r.stub],
-      ['Тип спроса',ops,()=>false],
+      ['Тип спроса',o,x=>x.prioSrc==='demandtype'],
       ['Потреблённый запас',ops,()=>false],
       ['late_delivery',ops,()=>false]
     ].map(f=>({k:f[0],v:f[1].length?f[1].filter(f[2]).length/f[1].length*100:0}));
@@ -3708,7 +3775,11 @@ function tabRAW(){
     {k:'rev',t:'Выручка',num:1,f:v=>mln(v)},
     {k:'cost',t:'Себестоимость',num:1,f:v=>mln(v)},
     {k:'mar',t:'Маржа',num:1,f:v=>mln(v)},
-    {k:'pr',t:'Приоритет',num:1,flt:1}
+    {k:'pk',t:'Приоритет',flt:1,
+      title:'Приоритет заказа — колонка demandtype (marking_demand / demand_coverage)',
+      f:(v,r)=>r.prioSrc&&r.prioSrc!=='demandtype'?`${v} (${esc(r.prioSrc)})`:v},
+    ...(DS.orders.some(x=>x.mph>0)?[{k:'mph',t:'Маржа ₽/ч',num:1,f:v=>v?nf(v):'—',
+      title:'margin_per_hour — метрика, а не приоритет (раньше её ошибочно читали как приоритет)'}]:[])
   ];
   const opsCols=[
     {k:'o',t:'Заказ',num:1,flt:1,left:1,f:v=>'№'+v},
@@ -3965,7 +4036,8 @@ function tabCOST(){
       {k:'nonDel',t:'Ставка непоставки, ₽/т',num:1,f:v=>nf(v)},
       {k:'lateRate',t:'Ставка опоздания, ₽/т',num:1,f:v=>nf(v)},
       {k:'latePeriods',t:'Периодов опоздания',num:1,f:v=>nf(v,1)},
-      {k:'priority',t:'Приоритет',num:1,flt:1,f:v=>v?nf(v):'—'},
+      {k:'priority',t:'Приоритет (demand_cost_ti)',num:1,flt:1,f:v=>v?nf(v):'—',
+        title:'Приоритет из справочника ставок, а не из заказа: у заказа приоритет — demandtype'},
       {k:'quota',t:'Квота',num:1,f:v=>v?nf(v):'—'},
       {k:'grain',t:'Источник',flt:1,f:v=>v==='period'?'demand_cost':'demand_cost_ti'}
     ],rateSrc,{key:'cost_rates',sort:'nonDel',dir:'desc',h:330,csv:1,name:'penalty_rates'});
@@ -5316,7 +5388,14 @@ const COL={
   price:['Цена за тонну'],cpt:['Cебестоимость на тонну','Себестоимость на тонну'],
   mpt:['Маржинальность на тонну'],rev:['Валовая выручка (план продаж)'],
   cost:['Суммарная себестоимость'],mar:['Валовая маржа (план продаж), руб'],
-  id:['order_id'],prio:['margin_per_hour'],
+  id:['order_id'],
+  /* Приоритет заказа определяется колонкой demandtype — в marking_demand она же
+     demand_demandtype, в demand_coverage — demandtype. Русская выгрузка может
+     называть её «Тип спроса». margin_per_hour здесь больше не участвует: это
+     маржа в час, а не приоритет (CODE_AUDIT.md, B1) — читаем её отдельным полем. */
+  prio:['demandtype','demand_demandtype','demand_type','Тип спроса'],
+  prioAlt:['demand_demandtypepriority','demandtypepriority'],
+  mph:['margin_per_hour'],
   pl:['Локация производства'],rt:['Источник поставки'],oprod:['Продукт производства'],
   rs:['Ресурс'],v:['Размеченный объем операции'],r:['Затраты на тонну'],
   fr:['Локация откуда'],to:['Локация куда'],tm:['Тип транспорта'],
@@ -5374,7 +5453,9 @@ function parseRows(rows,fileName){
         loc:str(pick(rw,COL.loc)),prod:str(pick(rw,COL.prod)),cl:str(pick(rw,COL.cl))||'—',
         dem:num(pick(rw,COL.dem)),sal,unm:num(pick(rw,COL.unm)),price,
         cpt:Math.abs(num(pick(rw,COL.cpt))),mpt:num(pick(rw,COL.mpt)),
-        rev,cost,mar,pr:num(pick(rw,COL.prio))||2});
+        rev,cost,mar,
+        /* приоритет — demandtype; нормализует build(), здесь только сырые значения */
+        dt:pick(rw,COL.prio),prioAlt:pick(rw,COL.prioAlt),mph:num(pick(rw,COL.mph))});
     }
     const t=T2[str(pick(rw,COL.type)).toLowerCase()];
     if(!t){skippedOps++;return} // неизвестный тип — строка не теряется молча, а попадёт в отчёт загрузки

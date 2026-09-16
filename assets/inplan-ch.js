@@ -691,7 +691,7 @@ async function loadMainDetail(db, gran, limitOrders){
       ${orNot('revenue','0')}            AS rev,
       ${orNot('cost_of_demand','0')}     AS cost,
       ${orNot('total_margin','0')}       AS mar,
-      ${orNot('demand_demandtypepriority','2')} AS prio,
+      ${orNot('demand_demandtypepriority','0')} AS prio,
       ${orNot('margin_per_hour','0')}    AS mph
     FROM ${S_MD} GROUP BY order_id
     ORDER BY abs(mar) DESC
@@ -700,10 +700,19 @@ async function loadMainDetail(db, gran, limitOrders){
   const orders = ords.map(r=>({
     id:num(r.id), p:pnum(r.p), d:'', loc:sany(r.loc), prod:sany(r.prod),
     cl:sany(r.cl)||'—', stream:sany(r.stream),
-    dtype:num(r.dtype), dem:num(r.dem), sal:num(r.sal), unm:num(r.unm),
+    /* Приоритет заказа определяется колонкой demandtype (в marking_demand она
+       называется demand_demandtype). demand_demandtypepriority — запасной
+       вариант: build() возьмёт его, только если demandtype пуст или нулевой.
+       Нормализация (pr / dtl / pk / prioSrc) — в build() из index.html, чтобы
+       XLSX и ClickHouse не расходились в правилах.
+       Прежнее pr:num(r.prio)||2 подставляло «2» всем заказам, когда колонки
+       приоритета в схеме не было, — отсутствие данных выглядело как данные. */
+    dt:num(r.dtype), dtype:num(r.dtype), prioAlt:num(r.prio),
+    pr:num(r.dtype)>0?num(r.dtype):num(r.prio),
+    dem:num(r.dem), sal:num(r.sal), unm:num(r.unm),
     price:num(r.price), cpt:Math.abs(num(r.cpt)), mpt:num(r.mpt),
     rev:num(r.rev), cost:Math.abs(num(r.cost)), mar:num(r.mar),
-    pr:num(r.prio)||2, mph:num(r.mph)
+    mph:num(r.mph)
   }));
   if(!orders.length) throw new Error('В схеме '+db+' не найдено заказов в marking_demand');
 
