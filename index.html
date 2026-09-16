@@ -225,6 +225,14 @@ main{padding:20px 32px 72px;flex:1}
 .kpi .v{font:700 28px/34px 'Open Sans',sans-serif;color:var(--scp-text);margin-top:6px;
   letter-spacing:-.4px}
 .kpi .s{font-size:12px;line-height:16px;color:var(--scp-text-3);margin-top:3px}
+/* Карточка с пояснением: значок «?» — фокусируемая точка входа для клавиатуры,
+   само пояснение показывается тем же тултипом #tip, что и у графиков */
+.kpi.has-h{cursor:help}
+.kpi-q{display:inline-block;width:15px;height:15px;margin-left:5px;border-radius:50%;
+  background:var(--scp-line-2);color:var(--scp-text-3);font:700 10px/15px 'Open Sans',sans-serif;
+  text-align:center;vertical-align:1px;cursor:help}
+.kpi-q::after{content:'?'}
+.kpi-q:hover,.kpi-q:focus{background:var(--scp-accent);color:#fff;outline:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(440px,1fr))}
 .card{background:var(--scp-surface);border:1px solid var(--scp-line-2);border-radius:var(--r-m);
   padding:16px 18px 12px;min-width:0}
@@ -326,6 +334,14 @@ tbody tr:hover{background:var(--scp-b-50)}
 .chip.rm{border-color:var(--scp-err);color:var(--scp-err)}
 .chip.rm:hover{background:var(--scp-err-bg)}
 .chip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0}
+/* Переключатель «Вид ресурса» в разделе «Мощности»: отдельная панель-фильтр,
+   а не колонка таблицы — видно сразу, что раздел пересчитан по выбранным видам */
+.rt-filter{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px;padding:10px 12px;
+  background:var(--scp-pane);border:1px solid var(--scp-ctrl);border-radius:var(--r-m)}
+.rt-filter .rt-t{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--scp-text-3);margin-right:2px}
+.rt-filter .chip b{font-weight:700;opacity:.72;margin-left:5px;font-variant-numeric:tabular-nums}
+.rt-filter .rt-note{font-size:12px;color:var(--scp-text-3);margin-left:auto}
 .tag{font-size:11px;padding:2px 8px;border-radius:9999px;background:var(--scp-n-50);
   color:var(--scp-text-2);border:1px solid var(--scp-line-2)}
 select{background:var(--scp-surface);color:var(--scp-text);border:1px solid var(--scp-ctrl);
@@ -377,6 +393,18 @@ input[type=number]{font-family:'Open Sans',sans-serif}
 .dq.w{border-left:4px solid var(--scp-warn);background:#fffdf8}
 .dq.i{border-left:4px solid var(--scp-ok);background:#fafffc}
 .dq .m{flex:1}
+/* «Источник и методика» — свёрнутый блок в начале разделов (srcFold) */
+details.src-fold{margin:0 0 12px}
+details.src-fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  max-width:100%;font-size:11.5px;line-height:1.35;color:var(--scp-text-3);padding:5px 11px;
+  border:1px dashed var(--scp-ctrl);border-radius:var(--r-m);user-select:none}
+details.src-fold>summary::-webkit-details-marker{display:none}
+details.src-fold>summary:hover,details.src-fold[open]>summary{color:var(--scp-accent);border-color:var(--scp-accent)}
+details.src-fold>summary::before{content:'›';font-size:13px;transition:transform .15s ease}
+details.src-fold[open]>summary::before{transform:rotate(90deg)}
+details.src-fold>summary .sf-b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.src-fold[open]>summary{margin-bottom:8px}
+details.src-fold .dq{margin:0}
 .dq b{color:var(--scp-text)}
 .empty{text-align:center;padding:72px 24px;color:var(--scp-text-3);font-size:14px;
   background:var(--scp-surface);border:1px solid var(--scp-line-2);border-radius:var(--r-m)}
@@ -1640,6 +1668,10 @@ const CapacityRCA = {
     SELECTED_ORDER_ID = Number(orderId);
     TREE_VIEW_MODE = mode;
     TREE_FOCUSED_KEY = rsKey || null;
+    /* Переход из «Спрос и покрытие» всегда в тоннах: иначе после drill-down на
+       узкое место «Этапы цепи» открываются в себестоимости, оставшейся от
+       прошлого просмотра, и объёмы не сходятся с таблицей дефицита. */
+    TREE_METRIC_MODE = 'vol';
     go('tree');
   }
 };
@@ -1791,6 +1823,39 @@ function lg(id,items){
     `<span class="lg-i${hs.has(i)?' off':''}" data-lg-id="${id}" data-lg-i="${i}" title="Клик — скрыть / показать ряд">`
     +`<i style="background:${col}"></i>${esc(name)}</span>`).join('')+`</div>`;
 }
+/* Тултип-пояснение для любого элемента с data-help (карточки KPI, значки «?»):
+   тот же #tip, что у графиков. Мышь — позиция за курсором, клавиатура — у элемента.
+   Канвасы не трогаем: у них свои обработчики в bind(). */
+let HELP_EL=null;
+function tipAt(html,x,y){
+  if(!TIP)return;
+  TIP.innerHTML=html;TIP.style.display='block';
+  const w=TIP.offsetWidth||320,h=TIP.offsetHeight||90;
+  let L=x+14,T=y+16;
+  if(L+w>innerWidth-10)L=Math.max(8,x-w-14);
+  if(T+h>innerHeight-10)T=Math.max(8,y-h-16);
+  TIP.style.left=L+'px';TIP.style.top=T+'px';
+}
+document.addEventListener('mousemove',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-help]'):null;
+  if(!el||el.tagName==='CANVAS')return;
+  HELP_EL=el;tipAt(el.dataset.help,e.clientX,e.clientY);
+},true);
+document.addEventListener('mouseout',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-help]'):null;
+  if(el&&el===HELP_EL&&!(e.relatedTarget&&el.contains(e.relatedTarget))){
+    HELP_EL=null;if(TIP)TIP.style.display='none';}
+},true);
+document.addEventListener('focusin',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-help]'):null;
+  if(!el)return;
+  const r=el.getBoundingClientRect();HELP_EL=el;
+  tipAt(el.dataset.help,r.left+r.width/2,r.bottom);
+});
+document.addEventListener('focusout',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-help]'):null;
+  if(el){HELP_EL=null;if(TIP)TIP.style.display='none';}
+});
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-lg-id]');if(!t)return;
   const id=t.dataset.lgId,i=+t.dataset.lgI,hs=hiddenOf(id);
@@ -2433,10 +2498,142 @@ function chDumbbell(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w
 /* KPI-сетка. k=[заголовок, значение, подпись, класс значения, title-подсказка].
    Подпись (k[2]) может содержать разметку (<br>, <code>) — не экранируется;
    title экранируется, потому что в него попадают имена источников из данных. */
+/* Сворачиваемая строка «Источник и методика» (задача владельца 2026-09-16):
+   техническая справка больше не стоит первой строкой разделов «Спрос и
+   покрытие» и «Экономика отказов». Краткая суть видна в заголовке свёрнутого
+   блока; если состояние проблемное (нет demand_coverage, активны фильтры, метод
+   без ставок), блок раскрывается сам — прятать предупреждение нельзя. */
+function srcFold(sev,brief,body){
+  return `<details class="src-fold"${sev==='i'?'':' open'}>
+    <summary><span class="tag">${sev==='i'?'Источник':'Внимание'}</span><span class="sf-b">${brief}</span></summary>
+    <div class="dq ${sev}"><div class="m">${body}</div></div></details>`;
+}
+/* Реестр пояснений к расчётным показателям: как считается число и откуда данные.
+   Ключ — заголовок карточки KPI; ключ вида «вкладка|заголовок» имеет приоритет
+   (одинаковые названия на разных вкладках считаются по-разному). Показывается
+   наведением на карточку или фокусом на значке «?». */
+const METRIC_HELP={
+ /* ── Деньги и покрытие (Общий, Спрос, Дерево) ── */
+ 'Валовая выручка':'<b>Σ (отгружено, т × цена, ₽/т)</b> по заказам выборки.<br>Источник: <code>demand_coverage</code> (sal, price), при отсутствии — <code>marking_demand</code>.',
+ 'Себестоимость':'<b>Σ cost</b> по заказам выборки: производство + логистика + закупки + хранение.<br>Источник: <code>demand_cost</code> / <code>demand_cost_ti</code>.',
+ 'Валовая маржа':'<b>Σ mar</b> = выручка − себестоимость заказа.<br>Источник: поле <code>mar</code> (<code>demand_coverage</code>).',
+ 'Маржа на тонну':'<b>Σ mar / Σ sal</b>, ₽/т — взвешенно по объёму отгрузки, а не среднее по заказам.',
+ 'Маржинальность':'<b>Валовая маржа / Валовая выручка</b>, %.',
+ 'Маржинальность продаж':'<b>Валовая маржа / Валовая выручка</b>, % по заказам вкладки «Спрос и покрытие».',
+ 'Service Level':'<b>Σ sal / Σ dem</b> — доля удовлетворённого планового спроса в тоннах.',
+ 'Заказов без дефицита':'Заказы с <b>unm = 0</b> к общему числу заказов выборки.',
+ 'Упущенная выручка':'<b>Σ (unm × цена заказа)</b>, ₽ — выручка, не полученная из-за дефицита плана.<br>Цена берётся по заказу (<code>demand_coverage.price</code>), а не средней по портфелю.',
+ 'Не покрыто всего':'<b>Дефицит плана + не принятый в план спрос</b> (<code>gapTotal</code>), т.<br>Не принятый в план = неограниченный спрос − ограниченный спрос.',
+ 'Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽.<br>Ставка — выбранный метод (маржа заказа / маржа на тонну продукта / предельная / смесь / ставка штрафа), объём — выбранная база (дефицит плана или непокрытый спрос от неограниченного спроса). Переключатели — в шапке вкладки, сверка со строкой <code>lostrevenue</code> — в «Экономике отказов».',
+ 'Неограниченный спрос':'<b>Σ demand_unlimited</b>, т — спрос до ограничения планом.<br>Источник: <code>demand_coverage</code>. Если колонки нет, карточка не считается («—»).',
+ 'Не принято в план':'<b>Неограниченный спрос − Ограниченный спрос (план)</b>, т: объём, который не дошёл до планирования.',
+ 'Ограниченный спрос (план)':'<b>Σ dem</b>, т — спрос, принятый в план (<code>demand</code> / <code>demand_limited</code>).',
+ 'Отгружено':'<b>Σ sal</b>, т — объём, покрытый планом продаж.',
+ 'Дефицит плана':'<b>Σ unm = Ограниченный спрос − Отгружено</b>, т: непокрытая часть планового спроса.',
+ 'Отгружено с опозданием':'<b>Σ sal</b> заказов с признаком <code>late_delivery = 1</code> (<code>demand_coverage</code>), т.',
+ 'tree|Объём отгрузки':'<b>sal</b> выбранного заказа, т; рядом — плановый спрос и Service Level заказа.',
+ 'tree|Себестоимость заказа':'<b>cost</b> выбранного заказа, ₽; рядом — себестоимость на тонну (<code>cpt</code>).',
+ 'tree|Маржа заказа':'<b>mar = rev − cost</b> выбранного заказа; рядом — рентабельность <b>mar / rev</b>.',
+ 'tree|Выпускающих заводов':'Число различных площадок (<code>pl</code>) в производственных операциях продукта выбранного заказа.',
+ 'tree|Поставщиков сырья':'Число различных поставщиков (<code>vendor</code>) в закупках цепочки выбранного заказа.',
+ /* ── Логистика ── */
+ 'Затраты на логистику':'<b>Σ cost</b> операций <code>movement</code>.<br>Источник: <code>demand_cost_ti</code> (тип «перемещение»).',
+ 'Перемещено':'<b>Σ v</b> операций перемещения, т.',
+ 'Средний тариф':'<b>Σ cost / Σ v</b>, ₽/т — только по операциям без строк-заглушек (тариф > 1 ₽/т).',
+ 'Плеч на заказ':'<b>Σ плеч / число заказов</b>: среднее число перемещений «откуда → куда» на заказ, индикатор перевалки.',
+ 'Строк-заглушек':'Доля операций перемещения с тарифом <b>≤ 1 ₽/т</b> — стоимость не проставлена и в расчётах не участвует.',
+ 'Уникальных плеч':'Число различных пар «<code>loc_fr</code> → <code>loc_to</code>» в операциях перемещения.',
+ /* ── Производство и мощности ── */
+ 'Затраты на производство':'<b>Σ cost</b> операций <code>production</code> (<code>demand_cost_ti</code>).',
+ 'Объём операций':'<b>Σ v</b> по операциям вкладки, т.',
+ 'Средняя загрузка мощностей':'<b>Σ load / Σ avail</b> по строкам <code>capacity_view_sp</code>.<br>Без листа мощностей не считается — показывается «Базовый режим».',
+ 'Узких мест (≥90%)':'Ресурсы с <b>load / avail ≥ 90%</b> в <code>capacity_view_sp</code>. Порог общий с «Цепочкой заказа».',
+ 'Задействовано заводов':'Число различных площадок (<code>pl</code>) в операциях вкладки.',
+ 'Максимальная глубина BOM':'Максимальный уровень разузлования (<code>dp</code>) в производственных операциях.',
+ 'Доступный фонд':'<b>Σ avail</b> — доступная мощность по строкам <code>capacity_view_sp</code> выбранного вида ресурса, ч.',
+ 'План загрузки':'<b>Σ load</b> — плановая загрузка фонда, ч; подпись — доля доступного фонда.',
+ 'Средняя утилизация':'<b>Σ load / Σ avail</b> по всем ресурс-периодам выборки.',
+ 'Перегружены (100%+)':'Ресурс-периоды, где <b>load > avail</b>: объём физически не размещается в фонд.',
+ 'Свободный резерв':'<b>max(0, Σ avail − Σ load)</b>, ч — незанятый фонд.',
+ 'Ремонты и простои':'<b>Σ maint</b> из <code>capacity_view_sp</code>, ч.',
+ 'План ФРВ (rescapacity)':'<b>Σ avail</b> из <code>rescapacity</code> — плановый фонд рабочего времени, ч; отдельно показаны часы расширения (<code>expansion</code>).',
+ 'Расхождение план/факт':'<b>|Σ avail (capacity_view_sp) − Σ avail (rescapacity)| / Σ avail (rescapacity)</b>.',
+ 'Ресурсов с потреблением':'Число различных ресурсов с машино-часами <code>resource_consumption</code> в операциях — режим без <code>capacity_view_sp</code>.',
+ 'Потреблено часов':'<b>Σ resource_consumption</b> по производственным операциям; доступный фонд не задан, поэтому утилизация не считается.',
+ 'Объём передела':'<b>Σ v</b> производственных операций, т.',
+ /* ── Закупки ── */
+ 'Затраты на закупки':'<b>Σ cost</b> операций <code>procurement</code>.',
+ 'Закуплено':'<b>Σ v</b> операций закупки, т.',
+ 'Средняя цена закупки':'<b>Σ cost / Σ v</b>, ₽/т — взвешенно по объёму.',
+ 'pc|Поставщиков':'Число различных поставщиков (<code>vendor</code>) в операциях закупки.',
+ 'Концентрация топ-3':'<b>Σ затрат трёх крупнейших поставщиков / Σ затрат закупок</b>. Выше 60% — риск зависимости от узкого круга.',
+ 'Мультисорсинг':'Число продуктов (SKU), которые закупаются у <b>двух и более</b> поставщиков.',
+ /* ── Хранение ── */
+ 'Затраты на хранение':'<b>Σ cost</b> операций <code>stock</code>.',
+ 'Тонно-периодов':'<b>Σ v</b> операций хранения — тонно-периоды (тонны × число периодов на складе).',
+ 'Ставка хранения':'<b>Σ cost / Σ тонно-периодов</b>, ₽ за тонну-период.',
+ 'Складских узлов':'Число различных локаций хранения (<code>pl</code>) в операциях <code>stock</code>.',
+ 'Максимальное пролёживание':'Наибольшее число периодов подряд, которые партия продукта лежит на одном складе (цепочка операций хранения).',
+ 'Средняя длина хранения':'<b>Σ периодов хранения / число партий</b> (партия = продукт × склад).',
+ /* ── Экономика отказов ── */
+ 'Штраф за непоставку':'<b>Σ (unm × ставка непоставки)</b>, ₽. Ставка — <code>non_delivery</code> из справочника <code>demand_cost</code>/<code>demand_cost_ti</code> по продукту и локации.',
+ 'Штраф за опоздание':'<b>Σ (объём с опозданием × ставка опоздания × число периодов опоздания)</b>, ₽.',
+ 'Суммарные потери':'<b>Упущенная маржа + штраф за непоставку + штраф за опоздание</b> — полная цена отказа, ₽.',
+ 'Штрафы к упущенной марже':'<b>(Штраф за непоставку + Штраф за опоздание) / Упущенная маржа</b>: во сколько раз штрафы превышают упущенную маржу.',
+ 'Заказов с дефицитом':'Число заказов с <b>unm > 0</b> в выборке.',
+ 'Записей в справочнике ставок':'Строк справочника штрафов, загруженных в выгрузке (<code>demand_cost</code> / <code>demand_cost_ti</code>).',
+ 'Средняя ставка непоставки':'Среднее значение ставки <code>non_delivery</code> по справочнику, ₽/т.',
+ 'cost|Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽ — та же величина, что на вкладках «Общий» и «Спрос и покрытие», но без влияния фильтров вкладки: здесь это база для сравнения со штрафами.',
+ /* ── Версии ── */
+ 'vs|Упущенная маржа':'Упущенная маржа, замороженная в снапшоте версии базовым методом «маржа заказа» и по базе «дефицит плана». Переключатели метода и базы на неё не действуют.',
+ 'Упущенная маржа по непокрытому спросу':'<b>Σ (непокрытый спрос от неограниченного × ставка маржи)</b>, восстановленная из сохранённых объёмов версии той же замороженной ставкой, ₽.',
+ 'Не покрыто всего, т':'Дефицит плана + не принятый в план спрос в снапшоте версии, т.',
+ 'Не принято в план, т':'Неограниченный спрос − ограниченный спрос в снапшоте версии, т.',
+ 'План продаж, т':'<b>Σ sal</b> в снапшоте версии, т.',
+ 'Неудовлетворённый спрос, т':'<b>Σ unm</b> в снапшоте версии, т.',
+ 'Затраты: производство':'<b>Σ cost</b> операций <code>production</code> в снапшоте версии.',
+ 'Затраты: логистика':'<b>Σ cost</b> операций <code>movement</code> в снапшоте версии.',
+ 'Затраты: закупки':'<b>Σ cost</b> операций <code>procurement</code> в снапшоте версии.',
+ 'Затраты: хранение':'<b>Σ cost</b> операций <code>stock</code> в снапшоте версии.',
+ 'vs|Заказов':'Число заказов в снапшоте версии.',
+ 'Заводов задействовано':'Число различных площадок в операциях снапшота версии.',
+ 'vs|Поставщиков':'Число различных поставщиков в операциях снапшота версии.',
+ 'Изменение валовой маржи':'<b>B − A</b> по валовой марже сохранённых версий; подпись — изменение относительно A, %.',
+ 'Изменение себестоимости':'<b>B − A</b> по себестоимости; подпись — изменение относительно A, %.',
+ 'Изменение Service Level':'<b>SL(B) − SL(A)</b> в процентных пунктах (SL = sal / dem снапшота).',
+ 'Изменение маржи на тонну':'<b>mar/sal(B) − mar/sal(A)</b>, ₽/т.',
+ 'Изменение упущенной маржи':'<b>lm(B) − lm(A)</b>, ₽ (замороженные значения версий).',
+ 'Изменение полной цены отказа':'<b>lm по непокрытому спросу: B − A</b>, ₽. Считается, только если в обеих версиях был <code>demand_coverage</code>.',
+ 'Изменение логистики':'<b>mv(B) − mv(A)</b> — затраты на перемещения, ₽.',
+ /* ── Качество данных ── */
+ 'Индекс качества данных':'<b>max(0, 100 − критических × 13 − предупреждений × 5)</b>: каждая критическая проверка снимает 13 баллов, предупреждение — 5.',
+ 'Проверок выполнено':'Число выполненных проверок качества данных; подпись — сколько из них пройдено.',
+ 'Заказов в наборе':'Строк <code>marking_demand</code>/<code>demand_coverage</code> в загруженном наборе (без верхних фильтров).',
+ 'Операций в наборе':'Строк <code>demand_cost_ti</code> в загруженном наборе (без верхних фильтров).',
+ 'Покрытие затрат':'<b>1 − доля строк-заглушек</b>: операции с реальной ставкой (> 1 ₽/т) ко всем операциям.',
+ 'Пустых атрибутов':'Число колонок выгрузки, которые дашборд не использует из-за отсутствия значений.',
+ /* ── Данные ── */
+ 'Заказов в выборке':'Строк заказов после верхних фильтров (период, продукт, клиент, локация, канал).',
+ 'Операций в выборке':'Строк операций после верхних фильтров.',
+ 'Не задействовано в плане':'<b>Маршруты + ресурсы + поставщики, которые есть в реестре, но не получили объёма в плане.</b><br>«Всего» — из реестра (<code>capacity_view_sp</code>, <code>res_loc_loc</code>), а не из операций: по операциям незадействованное тождественно нулю. Считается по всей выгрузке, без верхних фильтров. Разбор и источник каждого реестра — в карточке «Что не задействовано в плане».'
+};
+/* Пояснение к показателю: сначала ключ с вкладкой, затем общий, затем явный текст карточки */
+function metricHelp(title){
+  const t=String(title==null?'':title);
+  return METRIC_HELP[(TAB||'')+'|'+t]||METRIC_HELP[t]||'';
+}
 function kpisHtml(K){
-  return `<div class="kpis">`+K.map(k=>`<div class="kpi"${k[4]?` title="${esc(k[4])}"`:''}>`
-    +`<div class="t">${k[0]}</div><div class="v ${k[3]||''}">${k[1]}</div>`
-    +`<div class="s">${k[2]}</div></div>`).join('')+`</div>`;
+  return `<div class="kpis">`+K.map(k=>{
+    const h=[metricHelp(k[0]),k[4]||''].filter(Boolean).join('<br>');
+    const plain=h?h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim():'';
+    return `<div class="kpi${h?' has-h':''}"${h?` data-help="${esc(h)}" title="${esc(plain)}"`:''}>`
+      +`<div class="t">${k[0]}`
+      /* Знак «?» рисуется через ::after, чтобы textContent заголовка карточки
+         оставался чистым названием показателя (его читают тесты и скринридеры) */
+      +(h?`<span class="kpi-q" role="img" tabindex="0" data-help="${esc(h)}" title="${esc(plain)}" aria-label="Как считается «${esc(String(k[0]).replace(/<[^>]+>/g,''))}»: ${esc(plain)}"></span>`:'')
+      +`</div><div class="v ${k[3]||''}">${k[1]}</div>`
+      +`<div class="s">${k[2]}</div></div>`;
+  }).join('')+`</div>`;
 }
 function summary(title,blocks){
   return `<div class="sum"><h4>${title}</h4>`+blocks.map(b=>
@@ -2701,10 +2898,13 @@ function tabDM(){
   ];
 
   const html=`
-  <div class="dq ${useUnc?'i':'w'}" style="margin-bottom:14px"><span class="tag">Источник</span>
-    <div class="m">${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>demand_coverage</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':'Неограниченный спрос и опоздания — агрегаты <code>demand_coverage</code> по всей схеме; план, отгрузка и дефицит — <code>marking_demand</code>. '}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}».`
+  ${srcFold(useUnc?'i':'w',
+    (B.demo?'демо-агрегат покрытия · ':'')+(useUnc
+      ?`demand_coverage + marking_demand · не покрыто ${nf(B.gapTotal)} т · база «${LM_BASES[T.base].t}»`
+      :hasDC?'активны фильтры — расчёт по marking_demand':'нет demand_coverage — расчёт по marking_demand'),
+    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>demand_coverage</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':'Неограниченный спрос и опоздания — агрегаты <code>demand_coverage</code> по всей схеме; план, отгрузка и дефицит — <code>marking_demand</code>. '}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}».`
       :hasDC?`Активны фильтры: неограниченный спрос (<code>demand_coverage</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
-      :'Таблица <code>demand_coverage</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}</div></div>
+      :'Таблица <code>demand_coverage</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}`)}
   ${lmRowHtml()}
   ${kpisHtml(K)}
   <div class="grid">
@@ -2767,7 +2967,7 @@ function tabDM(){
     else noData('#d9','Дефицитов нет');
 
     dtable('#d7',[
-      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}">№${v} ↗</span>`},
+      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}" data-tree-mode="stages">№${v} ↗</span>`},
       {k:'loc',t:'Локация',left:1,flt:1},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
@@ -3403,16 +3603,13 @@ function tabVS(){
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
   <div class="dt-info" style="margin-bottom:10px">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий», «Спрос», «Экономика отказов» на историю версий не действуют. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</div>
-  <div class="kpis">
-    ${[['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
+  ${kpisHtml([['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
        ['Изменение Service Level',pc(d(A.sal/A.dem,B.sal/B.dem)),'процентных пунктов',(B.sal/B.dem)>=(A.sal/A.dem)?'pos':'neg'],
        ['Изменение маржи на тонну',nf(d(A.mar/A.sal,B.mar/B.sal))+' ₽',pc(r(A.mar/A.sal,B.mar/B.sal)),d(A.mar/A.sal,B.mar/B.sal)>=0?'pos':'neg'],
        ['Изменение упущенной маржи',bn(d(A.lm,B.lm)),pc(r(A.lm,B.lm)),d(A.lm,B.lm)<=0?'pos':'neg'],
        ...(lmUncBoth?[['Изменение полной цены отказа',bn(d(lmUA,lmUB)),pc(r(lmUA,lmUB)),d(lmUA,lmUB)<=0?'pos':'neg']]:[]),
-       ['Изменение логистики',bn(d(A.mv,B.mv)),pc(r(A.mv,B.mv)),d(A.mv,B.mv)<=0?'pos':'neg']]
-      .map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}
-  </div>
+       ['Изменение логистики',bn(d(A.mv,B.mv)),pc(r(A.mv,B.mv)),d(A.mv,B.mv)<=0?'pos':'neg']])}
   <div class="grid">
     <div class="card"><h3>Ключевые показатели: A и B</h3><div class="sub">Синяя точка — версия A, вторая точка — версия B</div><canvas id="v1"></canvas></div>
     <div class="card"><h3>Структура затрат по блокам</h3><div class="sub">Сравнение состава себестоимости. Клик по легенде — скрыть версию</div>
@@ -3692,15 +3889,12 @@ function tabDQ(){
   <div class="dq i" style="margin-bottom:14px"><span class="tag">Область анализа</span>
     <div class="m">Проверки выполняются по <b>всему загруженному набору</b>: ${o.length} заказов и ${ops.length} операций.
     Они не зависят от активных фильтров — качество данных оценивается целиком.</div></div>
-  <div class="kpis">
-    ${[['Индекс качества данных',score+' из 100',errs+' критических, '+warns+' предупреждений',score>=75?'pos':score>=50?'mid':'neg'],
+  ${kpisHtml([['Индекс качества данных',score+' из 100',errs+' критических, '+warns+' предупреждений',score>=75?'pos':score>=50?'mid':'neg'],
        ['Проверок выполнено',nf(ch.length),oks+' пройдено успешно',''],
        ['Заказов в наборе',nf(o.length),uq(o,x=>x.p).length+' периодов | '+uq(o,x=>x.prod).length+' продуктов',''],
        ['Операций в наборе',nf(ops.length),uq(ops,r=>r.type).length+' типов операций',''],
        ['Покрытие затрат',pc(1-stubRate),'строк с реальным тарифом',stubRate>.2?'neg':stubRate>.1?'mid':'pos'],
-       ['Пустых атрибутов',nf(4),'из выгрузки не используются','mid']]
-      .map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}
-  </div>
+       ['Пустых атрибутов',nf(4),'из выгрузки не используются','mid']])}
   <div class="grid">
     <div class="card"><h3>Профиль проверок</h3><div class="sub">Распределение результатов по уровню критичности</div><canvas id="q1"></canvas></div>
     <div class="card"><h3>Покрытие затрат по типам операций</h3><div class="sub">Доля строк с реальным тарифом</div><canvas id="q2"></canvas></div>
@@ -3763,11 +3957,53 @@ function tabDQ(){
 let RAW_VIEW='orders';
 function tabRAW(){
   const O=fOrders(),Ops=fOps(),isOrd=RAW_VIEW==='orders';
+  /* ── Что не задействовано в плане: маршруты, ресурсы, поставщики ──
+     «Всего» берётся из реестра (capacity_view_sp / res_loc_loc), а не из операций:
+     только так видно, что часть мощностей и направлений планом не использована —
+     по операциям «незадействованное» тождественно нулю. Считаем по всей выгрузке,
+     без верхних фильтров: вопрос относится ко всему плану, а не к выбранной неделе. */
+  const capRows=DS.capacity||[], opsAll=DS.ops||[], nz=x=>num(x)>0;
+  const leg=o=>(o.fr||'')+'\u2192'+(o.to||''), legC=c=>(c.locFr||c.fr||'')+'\u2192'+(c.locTo||c.to||'');
+  const regRs=new Set(capRows.filter(c=>c.cat!=='route').map(c=>c.rs).filter(Boolean));
+  const usedRs=new Set(opsAll.filter(o=>o.rs&&nz(o.v)).map(o=>o.rs));
+  const rsIn=[...regRs].filter(r=>usedRs.has(r)).length;
+  const rsOut=[...usedRs].filter(r=>!regRs.has(r)).length;      // ресурсы операций вне реестра мощностей
+  const RES=regRs.size
+    ?{total:regRs.size,used:rsIn,unused:regRs.size-rsIn,out:rsOut,noReg:false,
+      src:'capacity_view_sp — реестр мощностей'}
+    :{total:usedRs.size,used:usedRs.size,unused:0,out:0,noReg:true,
+      src:'реестр мощностей не загружен — по операциям'};
+  const regRt=new Set(capRows.filter(c=>c.cat==='route').map(legC).filter(k=>k!=='\u2192'));
+  const usedRt=new Set(opsAll.filter(o=>o.type==='movement'&&nz(o.v)).map(leg).filter(k=>k!=='\u2192'));
+  const rtIn=[...regRt].filter(k=>usedRt.has(k)).length;
+  const RT=regRt.size
+    ?{total:regRt.size,used:rtIn,unused:regRt.size-rtIn,noReg:false,src:'res_loc_loc — лимиты направлений'}
+    :{total:usedRt.size,used:usedRt.size,unused:0,noReg:true,src:'лимиты направлений не загружены — по операциям'};
+  /* Справочника поставщиков в выгрузке нет: «всего» — это упомянутые в операциях,
+     «задействовано» — те, у кого есть закупка с ненулевым объёмом */
+  const allVd=new Set(opsAll.map(o=>o.vd).filter(Boolean));
+  const usedVd=new Set(opsAll.filter(o=>o.type==='procurement'&&o.vd&&nz(o.v)).map(o=>o.vd));
+  const vdIn=[...allVd].filter(v=>usedVd.has(v)).length;
+  const VD={total:allVd.size,used:vdIn,unused:allVd.size-vdIn,noReg:false,
+    src:'упоминания в операциях — справочника поставщиков нет'};
+  const sh=(u,t)=>t>0?u/t:0;
+  const unRows=[
+    {cat:'Маршруты (направления)',total:RT.total,used:RT.used,unused:RT.unused,sh:sh(RT.unused,RT.total),src:RT.src},
+    {cat:'Ресурсы',total:RES.total,used:RES.used,unused:RES.unused,sh:sh(RES.unused,RES.total),src:RES.src},
+    {cat:'Поставщики',total:VD.total,used:VD.used,unused:VD.unused,sh:sh(VD.unused,VD.total),src:VD.src}];
+  const unTot=unRows.reduce((a,r)=>a+r.total,0),
+        unUsed=unRows.reduce((a,r)=>a+r.used,0),
+        unFree=unRows.reduce((a,r)=>a+r.unused,0);
   const K=[
     ['Заказов в выборке',nf(O.length),'после верхних фильтров',''],
     ['Операций в выборке',nf(Ops.length),'после верхних фильтров',''],
     ['Активная таблица',isOrd?'Заказы спроса':'Операции',isOrd?'уровень order_id':'уровень order_operation_id',''],
-    ['Возможности','Сортировка, поиск, фильтры','мультивыбор по любому столбцу','']
+    ['Возможности','Сортировка, поиск, фильтры','мультивыбор по любому столбцу',''],
+    ['Не задействовано в плане',nf(unFree),
+      `${nf(unUsed)} из ${nf(unTot)} в реестрах задействовано`,unFree?'mid':'',
+      'Маршруты, ресурсы и поставщики, которые есть в реестре, но не получили объёма в плане. '+
+      '«Всего» — из реестра (capacity_view_sp, res_loc_loc), а не из операций. '+
+      'Разбор по категориям и источник каждого реестра — в карточке «Что не задействовано в плане».']
   ];
   const ordCols=[
     {k:'id',t:'#',num:1,left:1},
@@ -3812,6 +4048,14 @@ function tabRAW(){
   ];
   const html=`
   ${kpisHtml(K)}
+  <div class="card w"><h3>Что не задействовано в плане</h3>
+    <div class="sub">Маршруты, ресурсы и поставщики из реестров, которым план не дал объёма. Считается по всей выгрузке, без верхних фильтров</div>
+    ${lg('#rUn',[[CH.ok,'Задействовано'],[CH.dim,'Не задействовано']])}<canvas id="rUn"></canvas>
+    <div id="rUnTbl"></div>
+    ${RT.noReg?`<div class="dt-info" style="margin-top:8px">Лимиты направлений (<code>res_loc_loc</code>) не загружены — «всего маршрутов» считать не от чего: в выгрузке ${nf(RT.total)} плечо перемещений, и все они задействованы по определению.</div>`:''}
+    ${RES.noReg?`<div class="dt-info" style="margin-top:8px">Реестр мощностей (<code>capacity_view_sp</code>) не загружен — «всего ресурсов» взято из операций, поэтому незадействованных ресурсов не видно.</div>`:''}
+    ${RES.out?`<div class="dt-info" style="margin-top:8px">⚠ ${nf(RES.out)} ресурса(ов) встречаются в операциях, но отсутствуют в реестре мощностей — их фонд, загрузка и узкие места не считаются. Проверьте <code>capacity_view_sp</code>.</div>`:''}
+  </div>
   <div class="card w">
     <div class="seg" style="margin-bottom:12px">
       <button class="btn ${isOrd?'p':''}" id="rawBtnOrd">Заказы спроса (${nf(O.length)})</button>
@@ -3821,6 +4065,21 @@ function tabRAW(){
   </div>`;
   setTimeout(()=>{
     $('#rawBtnOrd').onclick=()=>{RAW_VIEW='orders';render()};
+    chBars('#rUn',H('#rUn',250,0.5),unRows.map(r=>r.cat),
+      [{c:CH.ok,v:unRows.map(r=>r.used)},{c:CH.dim,v:unRows.map(r=>r.unused)}],
+      v=>nf(v),
+      i=>`<b>${unRows[i].cat}</b><br>Всего в реестре: ${nf(unRows[i].total)}<br>`
+        +`Задействовано: <b>${nf(unRows[i].used)}</b><br>`
+        +`Не задействовано: <b>${nf(unRows[i].unused)}</b> (${pc(unRows[i].sh)})<br>`
+        +`Источник «всего»: ${unRows[i].src}`,null,0,1);
+    dtable('#rUnTbl',[
+      {k:'cat',t:'Категория',left:1},
+      {k:'total',t:'Всего в реестре',num:1,f:v=>nf(v)},
+      {k:'used',t:'Задействовано',num:1,f:v=>nf(v)},
+      {k:'unused',t:'Не задействовано',num:1,f:v=>nf(v),cls:v=>v>0?'neg':'pos'},
+      {k:'sh',t:'Не задействовано, %',num:1,f:v=>pc(v),cls:v=>v>=.5?'neg':v>0?'mid':''},
+      {k:'src',t:'Источник «всего»',left:1,f:v=>String(v||'—')}
+    ],unRows,{key:'raw_unused',h:160,csv:1,name:'unused_registry'});
     $('#rawBtnOps').onclick=()=>{RAW_VIEW='ops';render()};
     dtable('#rawTbl',isOrd?ordCols:opsCols,isOrd?O:Ops,{
       key:isOrd?'raw_orders':'raw_ops',
@@ -3837,11 +4096,34 @@ function tabRAW(){
 }
 
 /* ═════════ 14.0b. БЛОК: МОЩНОСТИ ═══════════ */
+/* Фильтр раздела «Мощности» по виду ресурса (колонка «Вид ресурса: наименование»
+   выгрузки → поле resType). Пустой список = все виды; выбранные виды складываются
+   (можно один, несколько или все). Выбор запоминается между перезагрузками. */
+const CAPS_RT_KEY='inplan_caps_restype';
+let CAPS_RT=(function(){try{const v=JSON.parse(localStorage.getItem(CAPS_RT_KEY)||'[]');
+  return Array.isArray(v)?v.map(String).filter(Boolean):[]}catch(e){return[]}})();
+function capsRTToggle(v){
+  if(v==null||v==='')CAPS_RT=[];
+  else{const i=CAPS_RT.indexOf(String(v));i<0?CAPS_RT.push(String(v)):CAPS_RT.splice(i,1);}
+  try{localStorage.setItem(CAPS_RT_KEY,JSON.stringify(CAPS_RT))}catch(e){}
+  render();
+}
+
 function tabCAPS(){
-  const cap=DS.capacity||[], plan=DS.capacityPlan||[];
+  const capAll=DS.capacity||[], planAll=DS.capacityPlan||[];
+  /* Переключатель фильтрует раздел целиком — KPI, все графики и реестр, а не только
+     таблицу: иначе «средняя утилизация» считалась бы по всему парку и противоречила
+     тому, что показано ниже. План ФРВ (rescapacity) вида ресурса не несёт, поэтому
+     его ограничиваем ресурсами выбранного вида. */
+  const rtList=[...new Set(capAll.map(c=>c.resType||'—'))]
+    .sort((a,b)=>String(a).localeCompare(String(b),'ru'));
+  const rtOn=CAPS_RT.filter(v=>rtList.indexOf(v)>=0);      // значения устаревшей выгрузки отбрасываем
+  const cap=rtOn.length?capAll.filter(c=>rtOn.indexOf(c.resType||'—')>=0):capAll;
+  const rsKeep=new Set(cap.map(c=>c.rs));
+  const plan=rtOn.length?planAll.filter(p=>rsKeep.has(p.rs)):planAll;
   const agg=DS.agg||{}, t=agg.totals||{};
   /* ── Деградация: нет capacity_view_sp и rescapacity — показываем машино-часы из операций ── */
-  if(!cap.length && !plan.length){
+  if(!capAll.length && !planAll.length){
     const O=fOps().filter(r=>r.type==='production'&&r.rc>0);
     if(!O.length) return '<div class="empty"><h2>Данных о мощностях нет</h2><p>Таблицы <code>capacity_view_sp</code> и <code>rescapacity</code> не загружены, машино-часы в операциях отсутствуют.</p></div>';
     const byRs=grp(O,r=>r.rs||r.pl,v=>({rc:S(v,r=>r.rc),v:S(v,r=>r.v),pl:v[0].pl})).sort((a,b)=>b.rc-a.rc);
@@ -3896,7 +4178,22 @@ function tabCAPS(){
     ['План ФРВ (rescapacity)',planAvail?nf(planAvail)+' ч':'—',expansion?nf(expansion)+' ч расширения':'плановые мощности не загружены',planAvail?'':'mid'],
     ['Расхождение план/факт',planAvail?pc(planAvail?Math.abs(avail-planAvail)/planAvail:0):'—',planAvail?(avail>=planAvail?'факт ≥ плана':'фонд меньше плана'):'нужен rescapacity',planAvail&&Math.abs(avail-planAvail)/planAvail>.1?'mid':'pos']
   ];
+  const rtBar=rtList.length?`
+  <div class="rt-filter" role="group" aria-label="Фильтр раздела по виду ресурса">
+    <span class="rt-t">Вид ресурса</span>
+    <button class="chip${rtOn.length?'':' on'}" data-rt="" aria-pressed="${!rtOn.length}"
+      title="Показать все виды ресурсов">Все <b>${nf(capAll.length)}</b></button>
+    ${rtList.map((r,i)=>{const n=capAll.filter(c=>(c.resType||'—')===r).length,on=rtOn.indexOf(r)>=0;
+      return `<button class="chip${on?' on':''}" data-rt="${esc(r)}" aria-pressed="${on}"
+        title="Клик — оставить только этот вид; повторный клик — убрать из выбранных"><i style="background:${PAL[i%PAL.length]}"></i>${esc(r)} <b>${nf(n)}</b></button>`}).join('')}
+    ${rtOn.length?`<button class="chip rm" data-rt="" title="Снять фильтр по виду ресурса">Сбросить ✕</button>
+    <span class="rt-note">Показано ${nf(cap.length)} из ${nf(capAll.length)} ресурс-периодов</span>`:''}
+  </div>`:'';
   const html=`
+  ${rtBar}
+  ${capAll.length&&!cap.length?`<div class="card w"><div class="dq w"><span class="tag">Внимание</span>
+    <div class="m">Под выбранные виды ресурса (${rtOn.map(esc).join(', ')}) в <code>capacity_view_sp</code> нет ни одного ресурс-периода — итоги раздела пустые.
+    <button class="btn" id="rtClear">Показать все виды</button></div></div>`:''}
   ${kpisHtml(K)}
   <div class="grid">
     <div class="card"><h3>Топ ресурсов по утилизации</h3><div class="sub">Загрузка от доступного фонда. Клик — фильтр по заводу</div><canvas id="cs1"></canvas></div>
@@ -3906,9 +4203,12 @@ function tabCAPS(){
     <div class="card"><h3>${plan.length?'План ФРВ против факта по ресурсам':'Загрузка по площадкам'}</h3>
       <div class="sub">${plan.length?'Синяя точка — план (rescapacity), вторая — факт (capacity_view_sp)':'Часы по площадкам, топ-8'}</div>
       ${plan.length?'':lg('#cs4',[[CH.d1,'Доступно'],[CH.warn,'Загрузка']])}<canvas id="cs4"></canvas></div>
-    <div class="card w"><h3>Реестр мощностей и узких мест</h3><div class="sub">capacity_view_sp по ресурсам и периодам. Сортировка и мультифильтры</div><div id="cs5"></div></div>
+    <div class="card w"><h3>Реестр мощностей и узких мест</h3><div class="sub">capacity_view_sp по ресурсам и периодам${rtOn.length?` · вид ресурса: ${rtOn.map(esc).join(', ')}`:''}. Сортировка и мультифильтры</div><div id="cs5"></div></div>
   </div>`;
   setTimeout(()=>{
+    /* Переключатель вида ресурса: клик по чипу пересчитывает весь раздел */
+    $$('#main .rt-filter .chip').forEach(b=>b.onclick=()=>capsRTToggle(b.dataset.rt||null));
+    const rtClear=$('#rtClear');if(rtClear)rtClear.onclick=()=>capsRTToggle(null);
     /* cap может быть пустым, если загрузился только rescapacity: chH требует массив,
        иначе items.map падает и весь блок остаётся пустым */
     const capTop=cap.slice().sort((a,b)=>b.util-a.util).slice(0,10);
@@ -3955,7 +4255,7 @@ function tabCAPS(){
   },0);
   return html+summary('Резюме: мощности',[
     {t:'Выводы',i:[
-      `Средняя утилизация фонда — <span class="h">${pc(util)}</span>: загружено ${nf(load)} ч из ${nf(avail)} ч доступных.`,
+      `Средняя утилизация фонда — <span class="h">${pc(util)}</span>: загружено ${nf(load)} ч из ${nf(avail)} ч доступных${rtOn.length?` по видам ресурса <span class="h">${rtOn.map(esc).join(', ')}</span> (${nf(cap.length)} из ${nf(capAll.length)} ресурс-периодов)`:''}.`,
       bnL.length?`Узких мест (≥90%): <span class="h">${nf(bnL.length)}</span>, из них ${critL.length} перегружены на 100%+ — объём физически не размещается без расшивки.`:`Перегруженных ресурсов нет — план размещается в фонд.`,
       maint?`Ремонты и простои занимают <span class="h">${nf(maint)} ч</span> (${pc(maint/Math.max(avail,1))} фонда).`:`Ремонты в данных не выделены.`,
       planAvail?`Расхождение плана ФРВ (rescapacity) и факта — <span class="h">${pc(planAvail?Math.abs(avail-planAvail)/planAvail:0)}</span>: при отклонении свыше 10% проверить вход прогона.`:`Плановые мощности (rescapacity) не загружены — «план vs факт» недоступен.`]},
@@ -4002,12 +4302,15 @@ function tabCOST(){
   ];
   const lmPenWarn=LM_MODE==='penalty'&&!lmRef().hasPen;
   const html=`
-  <div class="dq ${lmPenWarn?'w':(hasRates?'i':'w')}" style="margin-bottom:14px"><span class="tag">Источник</span>
-    <div class="m">${lmPenWarn
+  ${srcFold(lmPenWarn?'w':(hasRates?'i':'w'),
+    lmPenWarn?'метод «Ставка штрафа» активен, но справочник ставок не загружен'
+    :hasRates?`ставки из ${pen.length?'demand_cost':'demand_cost_ti'} · штрафы по всей схеме`
+             :`справочник ставок не загружен · база «${LM_BASES[T.base].t}»`,
+    `${lmPenWarn
       ?`Метод «Ставка штрафа» активен, но справочник <code>demand_cost</code>/<code>demand_cost_ti</code> не загружен — упущенная маржа пока 0. Загрузите ставки либо верните метод «Маржа заказа».`
       :hasRates
       ?`Ставки: <code>${pen.length?'demand_cost (периодные)':'demand_cost_ti (безпериодные)'}</code>. Штрафы считаны как ставка × неудовлетворённый объём${pen.length&&penFlat.length?' (периодные ставки перекрывают безпериодные)':''} и относятся ко всей схеме (не режутся фильтрами).`
-      :`Таблицы ставок не загружены — показана только упущенная маржа (база «${LM_BASES[T.base].t}»).`}</div></div>
+      :`Таблицы ставок не загружены — показана только упущенная маржа (база «${LM_BASES[T.base].t}»).`}`)}
   ${lmRowHtml()}
   ${kpisHtml(K)}
   <div class="grid">
@@ -4075,7 +4378,10 @@ let TREE_METRIC_MODE='vol';
 let TREE_OP_TYPE_FILTER='all';
 let TREE_FOCUSED_KEY=null;
 let BOM_AGG_THRESHOLD_PCT=1.0;
-let RES_LAYOUT_MODE='plants'; // 'plants' | 'grid' | 'focus'
+/* Режим раскладки карточек мощностей в «Цепочке заказа»: 'plants' | 'focus'.
+   Третий режим «Сетка» удалён по запросу владельца (2026-09-16): он дублировал
+   «Площадки» без группировки и растягивал канвас в длинную простыню. */
+let RES_LAYOUT_MODE='plants';
 
 function drawBox(x,bx,by,bw,bh,r){
   if(x.roundRect){x.beginPath();x.roundRect(bx,by,bw,bh,r)}
@@ -4934,7 +5240,7 @@ function drawModeResourceChain(g, ops, ord, isLogistics=false){
   };
 
   // ════════ РЕЖИМ 1: Группировка по площадкам (plants) ════════
-  if(RES_LAYOUT_MODE === 'plants'){
+  if(RES_LAYOUT_MODE !== 'focus'){   /* 'plants' и любое неизвестное значение */
     const p = {l: 16, r: 16, t: 20, b: 20};
     const plantMap = new Map();
     chainNodes.forEach(n => {
@@ -4992,24 +5298,7 @@ function drawModeResourceChain(g, ops, ord, isLogistics=false){
     });
   }
 
-// ════════ РЕЖИМ 3: Адаптивная матрица мощностей (grid) ════════
-  else if(RES_LAYOUT_MODE === 'grid'){
-    const p = {l: 16, r: 16, t: 16, b: 16};
-    const cardW = 230, cardH = 58, gap = 10;
-    const availW = w - p.l - p.r;
-    const numCols = Math.max(1, Math.min(5, Math.floor((availW + gap) / (cardW + gap))));
-    const actCardW = (availW - (numCols - 1) * gap) / numCols;
-
-    chainNodes.forEach((node, i) => {
-      const col = i % numCols;
-      const row = Math.floor(i / numCols);
-      const bx = p.l + col * (actCardW + gap);
-      const by = p.t + row * (cardH + gap);
-      drawResCard(node, bx, by, actCardW, cardH);
-    });
-  }
-
-  // ════════ РЕЖИМ 4: Фокус на узких местах и блокировках (focus) ════════
+  // ════════ РЕЖИМ 3: Фокус на узких местах и блокировках (focus) ════════
   else if(RES_LAYOUT_MODE === 'focus'){
     const p = FOCUS_PAD;
     /* bnNodes уже отсортированы в chainNodesFor: сначала блокировки, затем по
@@ -5219,8 +5508,7 @@ function tabTREE(){
         </div>
         ${isCustomMode?`
         <div class="seg" style="margin-left:4px">
-          <button class="btn ${RES_LAYOUT_MODE==='plants'?'p':''}" id="rlPlants" data-tip="По площадкам (группировка по заводам и складам)" style="font-size:12px;padding:5px 8px">🏭 Площадки</button>
-          <button class="btn ${RES_LAYOUT_MODE==='grid'?'p':''}" id="rlGrid" data-tip="Сетка карточек с автопереносом" style="font-size:12px;padding:5px 8px">⊞ Сетка</button>
+          <button class="btn ${RES_LAYOUT_MODE!=='focus'?'p':''}" id="rlPlants" data-tip="По площадкам (группировка по заводам и складам)" style="font-size:12px;padding:5px 8px">🏭 Площадки</button>
           <button class="btn ${RES_LAYOUT_MODE==='focus'?'p':''}" id="rlFocus" data-tip="Фокус на узких местах и блокировках (≥90% / const=0)" style="font-size:12px;padding:5px 8px">🛑 Фокус</button>
         </div>`:''}
         ${TREE_VIEW_MODE==='bom'?`
@@ -5306,7 +5594,6 @@ function tabTREE(){
     $('#vmProdRes').onclick=()=>{TREE_VIEW_MODE='prod_res';TREE_OP_TYPE_FILTER='all';TREE_FOCUSED_KEY=null;render()};
     $('#vmLogRes').onclick=()=>{TREE_VIEW_MODE='log_res';TREE_OP_TYPE_FILTER='all';TREE_FOCUSED_KEY=null;render()};
     if($('#rlPlants'))$('#rlPlants').onclick=()=>{RES_LAYOUT_MODE='plants';render()};
-    if($('#rlGrid'))$('#rlGrid').onclick=()=>{RES_LAYOUT_MODE='grid';render()};
     if($('#rlFocus'))$('#rlFocus').onclick=()=>{RES_LAYOUT_MODE='focus';render()};
     const setOp=t=>{TREE_OP_TYPE_FILTER=t;TREE_FOCUSED_KEY=null;render()};
     if($('#fltOpAll'))$('#fltOpAll').onclick=()=>setOp('all');
@@ -5334,9 +5621,6 @@ function tabTREE(){
       if(RES_LAYOUT_MODE === 'focus'){
         const nFocus = Math.min(cn.bn.length || Math.min(4, cn.nodes.length), FOCUS_MAX);
         reqH = focusHeight(cw, nFocus);
-      } else if(RES_LAYOUT_MODE === 'grid'){
-        const cols = Math.max(1, Math.min(5, Math.floor((cw - 32 + 10) / (230 + 10))));
-        reqH = Math.max(200, Math.ceil(cn.nodes.length / cols) * 68 + 40);
       } else {
         /* «Площадки»: группы по заводам раскладываются по кратчайшей колонке —
            считаем высоту той колонки, что окажется самой длинной */
@@ -5963,7 +6247,20 @@ if(bTheme)bTheme.onclick=()=>{
    вместо inline-onclick — значения из загруженных файлов не исполняются как код) */
 document.addEventListener('click',e=>{
   const g=e.target.closest('[data-goto-order]');
-  if(g){SELECTED_ORDER_ID=+g.dataset.gotoOrder;TREE_FOCUSED_KEY=null;go('tree');return}
+  if(g){
+    SELECTED_ORDER_ID=+g.dataset.gotoOrder;TREE_FOCUSED_KEY=null;
+    /* Ссылка может попросить конкретный режим цепочки: переход из «Спрос и
+       покрытие» (в т.ч. с заказа, у которого найдено узкое место) открывает
+       «Этапы цепи» в тоннах — общий вид цепочки, а не тот режим, который
+       случайно остался включённым после прошлого просмотра. */
+    const want=g.dataset.treeMode;
+    if(want&&(want==='stages'||want==='swimlanes'||want==='bom'||want==='waterfall'||want==='prod_res'||want==='log_res')){
+      TREE_VIEW_MODE=want;
+      if(want==='stages')TREE_METRIC_MODE='vol';       // «Этапы цепи (тонны)»
+      if(want==='waterfall'||want==='prod_res'||want==='log_res')TREE_OP_TYPE_FILTER='all';
+    }
+    go('tree');return;
+  }
   const j=e.target.closest('[data-rca-jump]');
   if(j){CapacityRCA.drillDownToOrder(+j.dataset.ord,j.dataset.rs,j.dataset.mode||'prod_res')}
 });

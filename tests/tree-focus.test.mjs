@@ -133,7 +133,8 @@ async function loadApp(seed = {}) {
       if (orderId != null) window.eval(`SELECTED_ORDER_ID=${Number(orderId)};render()`);
       window.document.getElementById('vmProdRes').click();
       await new Promise((r) => setTimeout(r, 60));
-      const btn = layout === 'focus' ? 'rlFocus' : layout === 'grid' ? 'rlGrid' : 'rlPlants';
+      /* режим «Сетка» удалён из приложения (задача владельца 2026-09-16) */
+      const btn = layout === 'focus' ? 'rlFocus' : 'rlPlants';
       window.document.getElementById(btn).click();
       await new Promise((r) => setTimeout(r, 80));
     },
@@ -247,11 +248,19 @@ test('карточки «Фокуса» не обрезаются: высота 
   assert.ok(rows > 1, 'проверка осмысленна только при переносе в несколько строк');
 });
 
-test('режимы «Сетка» и «Площадки» тоже не обрезают карточки', async (t) => {
+test('режим «Площадки» не обрезает карточки, а режим «Сетка» удалён', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
 
-  for (const layout of ['grid', 'plants']) {
+  /* «Сетка» удалена целиком: ни кнопки, ни ветки отрисовки, ни оценки высоты */
+  assert.equal(ctx.document.getElementById('rlGrid'), null,
+    'кнопки «Сетка» больше нет');
+  assert.ok(!/'grid'/.test(ctx.ev(`String(typeof RES_LAYOUT_MODE !== 'undefined' ? RES_LAYOUT_MODE : '')`)),
+    'текущий режим раскладки — не «Сетка»');
+  const src = ctx.ev(`document.documentElement.innerHTML`);
+  assert.ok(!/id="rlGrid"/.test(src), 'в разметке нет #rlGrid');
+
+  for (const layout of ['plants']) {
     await ctx.openFocus(layout);
     const d = ctx.drawn();
     assert.equal(d.gridHits, d.nodes,
@@ -296,6 +305,7 @@ test('если карточек больше, чем влезает в канв�
   const ctx = await loadApp();
   t.after(ctx.close);
 
+  const origN = ctx.ev(`DS.capacity.length`);
   const total = ctx.ev(`(function(){
     const base = DS.capacity.slice(0, 6);
     for (let i = 0; i < 40; i++)
@@ -309,7 +319,7 @@ test('если карточек больше, чем влезает в канв�
   assert.ok(total > 200, `реестр мощностей раздут до ${total} строк`);
 
   ctx.window.__CANVAS_W = 60;        // узкий канвас → одна колонка → много строк
-  await ctx.openFocus('grid');
+  await ctx.openFocus('plants');
   const d = ctx.drawn();
   const warn = ctx.document.getElementById('treeClipWarn');
   assert.ok(warn, 'в блоке есть место для предупреждения об обрезке');
@@ -328,7 +338,8 @@ test('если карточек больше, чем влезает в канв�
 
   // и наоборот: на обычном широком канвасе демо-набора ничего не обрезано
   ctx.window.__CANVAS_W = 1240;
-  await ctx.openFocus('grid');
+  ctx.ev(`DS.capacity = DS.capacity.slice(0, ${origN}); render()`);   // возвращаем реестр
+  await ctx.openFocus('plants');
   const d2 = ctx.drawn();
   assert.ok(d2.gridBottom <= d2.cssH + 1,
     `на нормальной ширине все карточки влезли (${d2.gridBottom} ≤ ${d2.cssH})`);
