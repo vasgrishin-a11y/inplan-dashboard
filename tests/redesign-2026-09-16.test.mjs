@@ -312,6 +312,36 @@ test('узкое место открывает «Этапы цепи» зака�
   assert.ok(g.focus, 'с фокусом на узком месте');
 });
 
+/* ───────── 6b. Спрос и покрытие: «Свод спроса» в конце раздела ───────── */
+
+test('«Свод спроса» перенесён в конец блока, после резюме', async (t) => {
+  const ctx = await loadApp();
+  t.after(ctx.close);
+  await ctx.go('dm', 300);
+
+  const main = ctx.document.querySelector('#main');
+  const recon = main.querySelector('table.rec');
+  assert.ok(recon, 'карточка-сверка «Свод спроса» на месте');
+
+  const sum = main.querySelector('.sum');
+  assert.ok(sum, 'резюме раздела отрисовано');
+
+  /* Порядок в документе: резюме идёт раньше свода */
+  const pos = sum.compareDocumentPosition(recon);
+  assert.ok(pos & ctx.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    '«Свод спроса» расположен после блока «Резюме: спрос и покрытие»');
+
+  /* И это последний содержательный блок раздела */
+  const tail = main.querySelector('.recon-tail');
+  assert.ok(tail, 'свод вынесен в отдельный завершающий блок');
+  assert.ok(tail.contains(recon), 'таблица тождеств лежит в этом блоке');
+
+  /* Свод больше не стоит вторым в сетке графиков */
+  const firstGrid = main.querySelector('.grid:not(.recon-tail)');
+  assert.ok(!firstGrid.querySelector('table.rec'),
+    'в основной сетке графиков свода больше нет');
+});
+
 /* ─────────────────── 7. Логистика: мультивыбор и масштаб ─────────────────── */
 
 test('логистика: виды транспорта выбираются мультивыбором, у графа есть масштаб', async (t) => {
@@ -345,23 +375,91 @@ test('логистика: виды транспорта выбираются м�
   })())`));
   assert.ok(allLegs > 0, 'в выбранных видах транспорта есть плечи');
 
-  /* Масштаб графа: кнопки +, − и «Вся цепочка» */
-  for (const id of ['lgZoomIn', 'lgZoomOut', 'lgZoomFit']) {
-    assert.ok(ctx.document.getElementById(id), `есть кнопка масштаба #${id}`);
+  /* Панель графа: кнопки +/− убраны, осталась только «Вся цепочка».
+     Камера живёт под ключом '#l3' (селектор), а не 'l3'. */
+  for (const id of ['lgZoomIn', 'lgZoomOut']) {
+    assert.equal(ctx.document.getElementById(id), null, `кнопка масштаба #${id} убрана`);
   }
-  ctx.ev("flowReset('l3')");
-  const k0 = ctx.ev("flowView('l3').k");
-  ctx.document.getElementById('lgZoomIn').click();
-  await ctx.tick(120);
-  const k1 = ctx.ev("flowView('l3').k");
-  assert.ok(k1 > k0, `приближение увеличивает масштаб (${k0} → ${k1})`);
-  ctx.document.getElementById('lgZoomOut').click();
-  await ctx.tick(120);
-  const k2 = ctx.ev("flowView('l3').k");
-  assert.ok(k2 < k1, `отдаление уменьшает масштаб (${k1} → ${k2})`);
-  ctx.document.getElementById('lgZoomFit').click();
-  await ctx.tick(120);
-  assert.equal(ctx.ev("flowView('l3').k"), 0, '«Вся цепочка» возвращает автоподбор масштаба');
+  const fit = ctx.document.getElementById('lgZoomFit');
+  assert.ok(fit, 'кнопка «Вся цепочка» на месте');
+
+  /* Камера не тронута и узел не выбран — сбрасывать нечего, кнопка погашена */
+  ctx.ev("flowReset('#l3')");
+  ctx.ev('render()');
+  await ctx.tick(240);
+  assert.equal(ctx.document.getElementById('lgZoomFit').disabled, true,
+    'без изменений вида кнопка неактивна, а не «мертва»');
+
+  /* После зума колесом кнопка оживает и реально возвращает автоподбор */
+  ctx.ev("flowView('#l3').k=2.5");
+  ctx.ev('render()');
+  await ctx.tick(240);
+  const fit2 = ctx.document.getElementById('lgZoomFit');
+  assert.equal(fit2.disabled, false, 'изменённый масштаб активирует кнопку');
+  fit2.click();
+  await ctx.tick(200);
+  assert.equal(ctx.ev("flowView('#l3').k"), 0, '«Вся цепочка» возвращает автоподбор масштаба');
+});
+
+/* ───────── 7b. Логистика: сквозная цепочка при выборе узла ───────── */
+
+test('выбор узла на графе потоков показывает всю сквозную цепочку, а не соседей', async (t) => {
+  const ctx = await loadApp();
+  t.after(ctx.close);
+  await ctx.go('lg', 300);
+
+  /* Берём узел из середины сети — завод, у которого есть и снабжение, и сбыт */
+  const pick = JSON.parse(ctx.ev(`JSON.stringify((function(){
+    const O=fOps().filter(r=>r.type==='movement');
+    const legs=[...new Set(O.map(r=>r.fr+'>'+r.to))].map(s=>({fr:s.split('>')[0],to:s.split('>')[1]}));
+    const plants=[...new Set(legs.map(l=>l.fr).concat(legs.map(l=>l.to)))]
+      .filter(n=>n.startsWith('Plant_')
+        && legs.some(l=>l.to===n) && legs.some(l=>l.fr===n));
+    return plants[0]||null;
+  })())`));
+  assert.ok(pick, 'в демо-наборе есть транзитный завод с входом и выходом');
+
+  /* Транзитивное замыкание должно быть строго шире круга прямых соседей */
+  const counts = JSON.parse(ctx.ev(`JSON.stringify((function(){
+    const O=fOpsChain?fOps().filter(r=>r.type==='movement'):[];
+    const legs=[...new Set(O.map(r=>r.fr+'>'+r.to))].map(s=>({fr:s.split('>')[0],to:s.split('>')[1]}));
+    const n=${JSON.stringify(pick)};
+    const neigh=new Set([n]);
+    legs.forEach(l=>{if(l.fr===n)neigh.add(l.to);if(l.to===n)neigh.add(l.fr)});
+    const ch=flowChainOf(legs,n);
+    return {neighbours:neigh.size, chain:ch.nodes.size};
+  })())`));
+  assert.ok(counts.chain > counts.neighbours,
+    `сквозная цепочка шире прямых соседей (цепочка ${counts.chain} против соседей ${counts.neighbours})`);
+
+  /* Клик по узлу: раздел переходит в режим сквозной цепочки */
+  ctx.ev(`(function(){
+    const O=fOpsChain().filter(r=>r.type==='movement');
+    return O.length;
+  })()`);
+  ctx.ev(`F.nd=[${JSON.stringify(pick)}];LG_FLOW_LAYER='all';render()`);
+  await ctx.tick(320);
+
+  const note = ctx.document.querySelector('.chain-note');
+  assert.ok(note, 'под графом появилось пояснение о сквозной цепочке');
+  assert.match(note.textContent, /сквозная цепочка/i, 'пояснение говорит о сквозной цепочке');
+
+  /* Ключевая проверка: показатели считаются по ВСЕЙ цепочке заказов узла,
+     а не только по операциям, касающимся узла (как делал fOps). */
+  const cmp = JSON.parse(ctx.ev(`JSON.stringify({
+    touching: fOps().filter(r=>r.type==='movement').length,
+    chain: fOpsChain().filter(r=>r.type==='movement').length
+  })`));
+  assert.ok(cmp.chain > cmp.touching,
+    `цепочка охватывает больше операций, чем касающиеся узла (${cmp.chain} против ${cmp.touching})`);
+
+  /* «Вся цепочка» снимает выделение и возвращает прежний контур */
+  const fitBtn = ctx.document.getElementById('lgZoomFit');
+  assert.equal(fitBtn.disabled, false, 'при выбранном узле кнопка активна');
+  fitBtn.click();
+  await ctx.tick(300);
+  assert.deepEqual(JSON.parse(ctx.ev('JSON.stringify(F.nd)')), [], 'выделение узла снято');
+  assert.equal(ctx.document.querySelector('.chain-note'), null, 'пояснение убрано');
 });
 
 /* ─────────────────── 8. Сравнение версий: визуал ─────────────────── */
