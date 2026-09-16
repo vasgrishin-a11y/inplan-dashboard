@@ -236,8 +236,13 @@ test('карточка «Неограниченный спрос» подпис�
   const sub = card.querySelector('.s').textContent;
   assert.match(sub, /заказ/, 'в подписи — количество заказов');
   assert.ok(!/demand_coverage, вся схема/.test(sub), 'техническая подпись убрана из карточки');
-  assert.ok(/demand_coverage/i.test(card.getAttribute('title') || ''),
-    'источник переехал в title-подсказку карточки');
+  /* Подсказка живёт на значке «?», а не на карточке: наведение на карточку
+     больше не показывает пояснение (задача владельца 2026-09-16) */
+  const q = card.querySelector('.kpi-q');
+  assert.ok(q, 'у карточки есть значок «?»');
+  assert.ok(/demand_coverage/i.test(q.getAttribute('data-help') || ''),
+    'источник переехал в подсказку значка «?»');
+  assert.equal(card.getAttribute('data-help'), null, 'на самой карточке подсказки нет');
   assert.ok(parseNum(card.querySelector('.v').textContent) > 0, 'значение в тоннах показано');
 });
 
@@ -376,7 +381,7 @@ test('в блоке «Общий» есть график упущенной ма
   assert.match(ctx.document.getElementById('o8sub').textContent, /период/i, 'подпись комбинированного разреза');
 });
 
-test('упущенная маржа одна и та же в блоках «Общий», «Спрос и покрытие», «Экономика отказов»', async (t) => {
+test('упущенная маржа одна и та же в блоках «Общий» и «Спрос и покрытие»', async (t) => {
   const ctx = await loadApp({ [LM_BASE_KEY]: 'unc', [LM_MODE_KEY]: 'prod' });
   t.after(ctx.close);
 
@@ -387,10 +392,8 @@ test('упущенная маржа одна и та же в блоках «Об
   };
   const ov = await read('ov');
   const dm = await read('dm');
-  const cost = await read('cost');
   assert.ok(ov > 0, 'упущенная маржа ненулевая');
   assert.ok(close(ov, dm, 0.01), `Общий (${ov}) = Спрос и покрытие (${dm})`);
-  assert.ok(close(ov, cost, 0.01), `Общий (${ov}) = Экономика отказов (${cost})`);
 });
 
 /* Проверки цепочки заказа и режима «Фокус» — в tests/tree-focus.test.mjs:
@@ -415,7 +418,10 @@ test('сохранённая версия хранит непокрытый сп
 
   ctx.ev("go('vs')");
   await ctx.tick(60);
-  const note = ctx.document.querySelector('#main .dt-info').textContent;
+  /* Подпись о замороженной базе — тонкая пояснительная строка вкладки
+     (раньше жила в служебной строке таблицы .dt-info) */
+  const note = [...ctx.document.querySelectorAll('#main .thin-note, #main .dt-info')]
+    .map((el) => el.textContent).join(' ');
   assert.match(note, /базе «Дефицит плана»/,
     'в сравнении версий прямо сказано, по какой базе заморожена упущенная маржа');
   const tbl = ctx.document.getElementById('v3');

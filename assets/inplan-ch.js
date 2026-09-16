@@ -1199,6 +1199,10 @@ CHX.tabVS = function(){
       <div class="sub">Дельта считается к базе «${esc(base.label)}». Зелёный — улучшение с точки зрения бизнеса,
         ★ — лучшая версия по строке</div><div id="vsMat"></div></div>`:''}
     ${VS_VIEW==='profile'?`
+    <div class="card w"><h3>Радар версий</h3>
+      <div class="sub">Лучшее значение по каждой оси задаёт длину луча: наружу — сильнее.
+      Дефицит, штрафы и логистика инвертированы (меньше — дальше от центра)</div>
+      <canvas id="vsProR"></canvas></div>
     <div class="card w"><h3>Профиль версий</h3>
       <div class="sub">Значения нормированы к лучшей версии по каждой метрике (100% = лучшая)</div>
       <canvas id="vsPro"></canvas></div>`:''}
@@ -1262,6 +1266,17 @@ CHX.tabVS = function(){
 
     /* ── Профиль: нормировка к лучшей версии ── */
     if(VS_VIEW==='profile'){
+      const rdef = [['mar','Валовая маржа',1,bn],['sl','Service Level',1,pc],
+        ['mpt','Маржа/т',1,v=>nf(v)+' ₽'],['capUtil','Загрузка мощностей',1,pc],
+        ['unm','Дефицит',-1,v=>nf(v)+' т'],['penNonDel','Штрафы',-1,bn],['mv','Логистика',-1,bn]];
+      const raxes = rdef.map(([k,name,dir,fmt])=>{
+        const mx = Math.max(...rows.map(r=>Math.abs(r[k])||0),1e-9);
+        const norm = v => { const t = (Math.abs(v[k])||0)/mx; return dir>0 ? t : 1-t };
+        return {t:name,f:fmt,vOf:v=>v[k],norm:rows.map(norm)};
+      });
+      chRadar('#vsProR', H('#vsProR',320,0.5), raxes,
+        rows.slice(0,6).map((r,i)=>({name:r.label,c:PAL[i%PAL.length],
+          vals:raxes.map(ax=>ax.norm[i]),raw:raxes.map(ax=>ax.vOf(r))})));
       const keys = ['mar','sl','mpt','capUtil'];
       const names = ['Маржа','Service Level','Маржа/т','Загрузка мощностей'];
       const inv = ['unm','penNonDel','mv'];
@@ -1305,13 +1320,15 @@ CHX.tabVS = function(){
         - (target.mv-base.mv) - (target.st-base.st));
       if(Math.abs(resid) > Math.abs(target.mar)*1e-6)
         steps.splice(6,0,['Прочее / нераспределённое', resid, '']);
-      const labs = steps.map(s=>s[0]);
-      const vals = steps.map(s=>s[1]);
-      chBars('#vsWf', H('#vsWf',300,0.4), labs,
-        [{c:CH.d1, v:vals.map(v=>Math.abs(v))}],
-        v=>nf(v/1e9,2)+' млрд',
-        i=>`<b>${esc(labs[i])}</b><br>${vals[i]>=0?'+':''}${bn(vals[i])}`,
-        null, 1, 1);
+      /* Мост: уровни базы и версии + шаги-дельты между ними — видно направление
+         изменения, чего столбцы абсолютных значений не показывали. */
+      const wfItems = steps.map(([k,v,kind])=>{
+        if(kind==='base'||kind==='total')return {k,v,type:'total',c:kind==='base'?CH.d1:CH.d3};
+        return {k,v,type:'delta'};
+      });
+      chWaterfall('#vsWf', H('#vsWf',320,0.45), wfItems, v=>bn(Math.abs(v)),
+        i=>`<b>${esc(wfItems[i].k)}</b><br>`+(wfItems[i].type==='total'?bn(wfItems[i].v):
+          `${wfItems[i].v>=0?'+':'−'}${bn(Math.abs(wfItems[i].v))} к марже`), null);
     }
 
     /* ── Heatmap: отклонение от базы по разрезу ── */

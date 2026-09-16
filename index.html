@@ -150,6 +150,14 @@ header{background:var(--scp-surface);border-bottom:1px solid var(--scp-line-2);
 .btn-rail-menu svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 h1{font:600 28px/34px 'Open Sans',sans-serif;margin:0;color:var(--scp-text)}
 .h-sub{font-size:12px;line-height:16px;color:var(--scp-text-3);margin-top:2px}
+/* Активная версия в шапке: мелким текстом, всегда видна */
+.h-ver{font-size:11.5px;line-height:15px;color:var(--scp-text-3);margin-top:4px;
+  display:flex;align-items:center;gap:6px;max-width:min(520px,42vw)}
+.h-ver .hv-t{font-weight:600;color:var(--scp-text-2);text-transform:uppercase;
+  letter-spacing:.5px;font-size:10.5px;flex:0 0 auto}
+.h-ver .hv-v{font-weight:600;color:var(--scp-text-2);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.h-ver .hv-s{color:var(--scp-text-3);flex:0 0 auto}
 .hdr-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
   background:var(--scp-surface);border:1px solid var(--scp-ctrl);border-radius:var(--r-s);
@@ -218,16 +226,26 @@ h1{font:600 28px/34px 'Open Sans',sans-serif;margin:0;color:var(--scp-text)}
 
 /* ═══════════════ КОНТЕНТ ═══════════════ */
 main{padding:20px 32px 72px;flex:1}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:12px;margin-bottom:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(208px,1fr));gap:12px;margin-bottom:16px;
+  align-items:stretch}
+/* Карточка KPI — фиксированная структура (задача владельца 2026-09-16):
+   заголовок всегда ровно две строки, значение — одна строка (кегль подбирается
+   скриптом fitKpiValues, переносов нет), подпись — до двух строк. Благодаря
+   равным зонам цифры во всех карточках ряда стоят на одной базовой линии и не
+   «скачут» от разной длины названий. */
 .kpi{background:var(--scp-surface);border:1px solid var(--scp-line-2);border-radius:var(--r-m);
-  padding:14px 16px}
-.kpi .t{font-size:13px;line-height:18px;color:var(--scp-text-2)}
+  padding:14px 16px;display:flex;flex-direction:column}
+.kpi .t{font-size:13px;line-height:18px;color:var(--scp-text-2);min-height:36px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .kpi .v{font:700 28px/34px 'Open Sans',sans-serif;color:var(--scp-text);margin-top:6px;
-  letter-spacing:-.4px}
-.kpi .s{font-size:12px;line-height:16px;color:var(--scp-text-3);margin-top:3px}
-/* Карточка с пояснением: значок «?» — фокусируемая точка входа для клавиатуры,
-   само пояснение показывается тем же тултипом #tip, что и у графиков */
-.kpi.has-h{cursor:help}
+  letter-spacing:-.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;line-height:16px;color:var(--scp-text-3);margin-top:3px;min-height:32px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* Пояснение показывается ТОЛЬКО при наведении или фокусе на значке «?»
+   (раньше data-help висел и на карточке — подсказка выскакивала при наведении
+   на любое место карточки и дублировалась нативным title) */
+.kpi.has-h{cursor:default}
 .kpi-q{display:inline-block;width:15px;height:15px;margin-left:5px;border-radius:50%;
   background:var(--scp-line-2);color:var(--scp-text-3);font:700 10px/15px 'Open Sans',sans-serif;
   text-align:center;vertical-align:1px;cursor:help}
@@ -344,6 +362,11 @@ tbody tr:hover{background:var(--scp-b-50)}
 .rt-filter .rt-note{font-size:12px;color:var(--scp-text-3);margin-left:auto}
 .tag{font-size:11px;padding:2px 8px;border-radius:9999px;background:var(--scp-n-50);
   color:var(--scp-text-2);border:1px solid var(--scp-line-2)}
+/* Бейдж узкого места + шестерёнка «перейти в мощности»: основное действие —
+   цепочка заказа в тоннах, второстепенное — цепочка лимитов мощности */
+.tag-wrap{display:inline-flex;align-items:center;gap:4px}
+.tag.gear{padding:2px 6px;cursor:pointer;color:var(--scp-text-3);background:transparent}
+.tag.gear:hover{border-color:var(--scp-accent);color:var(--scp-accent)}
 select{background:var(--scp-surface);color:var(--scp-text);border:1px solid var(--scp-ctrl);
   border-radius:var(--r-s);padding:7px 10px;font:400 13px 'Open Sans',sans-serif}
 select:focus{outline:none;border-color:var(--scp-accent)}
@@ -364,15 +387,47 @@ input[type=number]{font-family:'Open Sans',sans-serif}
   display:none;max-width:300px;box-shadow:0 4px 15px #00000040}
 #tip b{color:var(--scp-accent-2)}
 #tip code{background:#333;padding:1px 4px;border-radius:3px;font-size:11px}
-/* ── Строка выбора метода упущенной маржи: рендерится только в блоках,
-   где упущенная маржа участвует в расчётах (Общий / Спрос / Экономика отказов).
+/* ── Строка выбора метода и базы упущенной маржи: рендерится только в блоках,
+   где упущенная маржа участвует в расчётах («Общий», «Спрос и покрытие»).
    В остальных блоках и в панели фильтров её нет — не занимает место. ── */
-.lmrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;
-  padding:7px 12px;background:var(--scp-surface);border:1px solid var(--scp-line-2);
-  border-radius:var(--r-m)}
-.lmrow .fbar-lbl{margin:0}
-.lmrow-note{font-size:12px;line-height:16px;color:var(--scp-text-3)}
-@media(max-width:920px){.lmrow-note{display:none}}
+.lmrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-2px 0 12px}
+.lm-head{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--scp-text-3)}
+.lm-half{display:flex;align-items:center;gap:7px;min-width:0}
+.lm-lbl{font-size:11.5px;color:var(--scp-text-3)}
+.lm-div{width:1px;height:18px;background:var(--scp-line-2);margin:0 2px}
+.lmrow .seg{padding:1px}
+.lmrow .seg .btn{padding:4px 9px;font-size:12px}
+.lm-info{display:inline-block;width:15px;height:15px;border-radius:50%;background:var(--scp-line-2);
+  color:var(--scp-text-3);font:700 10px/15px 'Open Sans',sans-serif;text-align:center;
+  vertical-align:1px;cursor:help;flex:0 0 auto}
+.lm-info::after{content:'?'}
+.lm-info:hover,.lm-info:focus{background:var(--scp-accent);color:#fff;outline:none}
+/* Тонкая пояснительная строка вместо карточки-плашки */
+.thin-note{font-size:12px;line-height:16px;color:var(--scp-text-3);margin:0 0 12px}
+/* Вердикт-борд сравнения версий: блок плана → чья версия лучше */
+.vboard{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(196px,1fr))}
+.vb{border:1px solid var(--scp-line-2);border-radius:var(--r-m);padding:10px 12px;background:var(--scp-n-50)}
+.vb.ok{border-color:var(--scp-ok);background:var(--scp-ok-bg,var(--scp-n-50))}
+.vb.bad{border-color:var(--scp-err);background:var(--scp-err-bg)}
+.vb-t{font-size:12px;line-height:16px;color:var(--scp-text-2);font-weight:600}
+.vb-v{display:flex;align-items:baseline;gap:7px;margin:5px 0 4px;font:700 16px/22px 'Open Sans',sans-serif;
+  color:var(--scp-text);font-variant-numeric:tabular-nums}
+.vb-arr{color:var(--scp-text-3);font-weight:400}
+.vb-b{color:var(--scp-accent)}
+.vb-d{font-size:11.5px;line-height:15px;color:var(--scp-text-3)}
+.vb-badge{display:inline-block;padding:1px 7px;border-radius:9999px;border:1px solid var(--scp-line-2);
+  font-weight:600;color:var(--scp-text-2);background:var(--scp-surface)}
+.vb.ok .vb-badge{color:var(--scp-ok);border-color:var(--scp-ok)}
+.vb.bad .vb-badge{color:var(--scp-err);border-color:var(--scp-err)}
+/* Панель масштаба графа потоков: −, +, «вся цепочка» и подсказка по жестам */
+.flow-tools{display:flex;align-items:center;gap:6px;margin:0 0 8px}
+.flow-tools .btn{padding:4px 10px;font-size:12.5px;line-height:18px}
+.flow-hint{font-size:11.5px;color:var(--scp-text-3)}
+@media(max-width:920px){.flow-hint{display:none}}
+.tbar-note{font-size:12px;color:var(--scp-text-3)}
+.tbar-link{color:var(--scp-accent);cursor:pointer;font-weight:600}
+.tbar-link:hover{text-decoration:underline}
 /* Богатая подсказка метода: как считается, бизнес-смысл, когда применять, ограничения */
 #lmTip{position:fixed;z-index:960;display:none;pointer-events:none;max-width:430px;
   background:var(--scp-n-900);color:#fff;border-radius:var(--r-m);padding:12px 14px;
@@ -394,6 +449,18 @@ input[type=number]{font-family:'Open Sans',sans-serif}
 .dq.i{border-left:4px solid var(--scp-ok);background:#fafffc}
 .dq .m{flex:1}
 /* «Источник и методика» — свёрнутый блок в начале разделов (srcFold) */
+/* Тонкая строка-предупреждение (вместо справочного блока «Источник») */
+details.src-warn{margin:0 0 12px;font-size:12px;line-height:16px}
+details.src-warn>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;
+  gap:7px;max-width:100%;color:var(--scp-text-2);padding:3px 0;user-select:none}
+details.src-warn>summary::-webkit-details-marker{display:none}
+details.src-warn>summary::before{content:'▸';font-size:11px;color:var(--scp-text-3)}
+details.src-warn[open]>summary::before{content:'▾'}
+details.src-warn>summary:hover{color:var(--scp-accent)}
+details.src-warn>summary .sf-b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.src-warn>summary .tag{color:var(--scp-warn);border-color:var(--scp-warn)}
+details.src-warn[open]>summary{margin-bottom:8px}
+details.src-warn .dq{margin:0}
 details.src-fold{margin:0 0 12px}
 details.src-fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
   max-width:100%;font-size:11.5px;line-height:1.35;color:var(--scp-text-3);padding:5px 11px;
@@ -513,6 +580,11 @@ details.src-fold .dq{margin:0}
         <div>
           <h1 id="pgTitle">Общий</h1>
           <div class="h-sub" id="pgSub">Результат планирования спроса</div>
+          <!-- Активная версия всегда на виду (задача владельца 2026-09-16).
+               Раньше имя датасета жило в #stat по центру шапки и исчезало после
+               загрузки файла: там фиксировалось сообщение о загрузке, и понять,
+               какой прогон сейчас на экране, было нечем. -->
+          <div class="h-ver" id="pgVer"></div>
         </div>
       </div>
       <div class="stat" id="stat"></div>
@@ -766,22 +838,33 @@ let DS=null, TAB='ov', STAT_PIN=false; // true — в #stat зафиксиров
 const F={p:[],ch:[],cl:[],pr:[],pi:[],pl:[],vd:[],tm:[],nd:[]};
 const clearF=()=>Object.keys(F).forEach(k=>F[k]=[]);
 const LBL={p:'Период',ch:'Канал',cl:'Клиент',pr:'Продукт',pi:'Приоритет',pl:'Завод',vd:'Поставщик',tm:'Транспорт',nd:'Узел сети'};
+/* Навигация (задача владельца 2026-09-16):
+   • «Экономика отказов» удалена как самостоятельный раздел — её выводы (штрафы
+     против упущенной маржи) остались в подсказках показателей, а расчёт ставок —
+     в методе «Ставка штрафа» упущенной маржи;
+   • «Сравнение версий» перенесена в освободившуюся позицию (после «Запасов»);
+   • «Данные» и «Качество данных» объединены в один раздел с переключателем
+     вида внутри (DATA_VIEW: 'dq' — проверки, 'raw' — таблицы и реестры).
+   Старые идентификаторы вкладок ('cost', 'dq', 'raw') поддержаны в go(), чтобы
+   не ломались внешние ссылки, автосохранённое состояние и накопленные тесты. */
 const TABS=[['ov','Общий'],['dm','Спрос и покрытие'],['tree','Цепочка заказа'],
   ['lg','Логистика'],['pd','Производство'],['caps','Мощности'],['pc','Закупки'],['st','Запасы'],
-  ['cost','Экономика отказов'],['raw','Данные'],['vs','Сравнение версий'],['dq','Качество данных']];
+  ['vs','Сравнение версий'],['data','Данные и качество']];
 const TSUB={ov:'Финансовый результат и структура портфеля',
   dm:'Водопад спроса: неограниченный → ограниченный → отгрузка → дефицит, RCA по заказам',
   tree:'Разузлование цепочки пополнения по заказу',lg:'Перемещения, плечи и тарифы',
   pd:'Переделы, ресурсы и рецепты',pc:'Закупки сырья и поставщики',st:'Хранение и пролёживание',
-  raw:'Детальные таблицы заказов и операций',vs:'Сопоставление версий планов',dq:'Проверки инвариантов и полноты данных'};
+  vs:'Сопоставление версий планов: профиль, мост изменений, теплокарта',data:'Качество данных, реестры и детальные таблицы'};
 TSUB.caps='План и факт мощностей, ремонты, узкие места';
-TSUB.cost='Штрафы за непоставку и опоздание против упущенной маржи';
-TSUB.vs='Сопоставление версий планов из ClickHouse';
+/* Вид объединённого раздела «Данные и качество»: 'dq' — проверки, 'raw' — таблицы */
+let DATA_VIEW='dq';
 const TMAP={mv:'movement',pd:'production',pc:'procurement',st:'stock'};
 const TCLASS={RAIL:'Транспорт',TRUCK:'Транспорт',SHIP:'Транспорт',SHIPCONTAN:'Транспорт',SUPTRAN:'Транспорт',
   INTERNAL:'Внутризаводское',PORTHANDL:'Терминал/перевалка',PLANTFCA:'Условие поставки',LASTMILE:'Последняя миля'};
 let LG_FLOW_LAYER='distrib'; // 'distrib' | 'interplant' | 'inbound' | 'all'
-let LG_FLOW_TM='all'; // 'all' | 'RAIL' | 'TRUCK' | 'SHIP' | ...
+/* Виды транспорта на графе потоков: мультивыбор. Пустой массив = все виды
+   (раньше было одно значение LG_FLOW_TM — переключение «или/или»). */
+let LG_FLOW_TMS=[];
 
 /* ═══════════════ 3. УТИЛИТЫ ═══════════════ */
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
@@ -877,11 +960,11 @@ function lmRate(o){
   }
 }
 const lmVal=o=>o.unm*lmRate(o);
-/* ── Строка выбора метода и базы упущенной маржи рендерится в блоках, где она
-   считается через lmVal/lmS (Общий, Спрос и покрытие, Экономика отказов) —
-   см. lmRowHtml() в разделе 3.6. В остальных блоках строки нет: метод и база
-   там ни на что не влияют. ── */
-const LM_TABS=['ov','dm','cost'];
+/* ── Строка выбора метода и базы рендерится в блоках, где упущенная маржа
+   считается через lmVal/lmS («Общий», «Спрос и покрытие») — см. lmRowHtml()
+   в разделе 3.6. В остальных блоках строки нет: метод и база там ни на что не
+   влияют. ── */
+const LM_TABS=['ov','dm'];
 /* Оценка упущенной маржи под произвольным методом (для подсказки):
    на время расчёта подменяем LM_MODE и гарантируем возврат.
    Активная база учитывается: масштаб «непокрытый спрос / дефицит плана» —
@@ -1130,7 +1213,10 @@ function covReconHtml(B,T,mrgp){
     <tbody>${rows}${money}</tbody></table>`;
 }
 /* Строка выбора метода и базы: рендерится только в блоках, где упущенная маржа
-   считается через lmVal/lmS (Общий, Спрос и покрытие, Экономика отказов). */
+   считается через lmVal/lmS (Общий, Спрос и покрытие). Одна компактная строка из
+   двух частей — «Метод» и «База» — без рамки и фона: настройка не должна
+   конкурировать с KPI за внимание. Пояснения (в том числе объём непокрытого
+   спроса и масштаб) — во всплывающей подсказке на значке «?». */
 function lmRowHtml(){
   const B=LM_B,T=LM_T;
   const note=(B&&T)
@@ -1138,12 +1224,21 @@ function lmRowHtml(){
       ?`Непокрытый спрос ${nf(B.gapTotal)} т = ${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана · масштаб ×${nf(T.k,2)} к дефициту плана`
       :`Дефицит плана ${nf(B.gapPlan)} т${T.uncAvail?` · по непокрытому спросу (${nf(B.gapTotal)} т) было бы ${bn(T.lmUnc)}`:` · ${B.uncWhy}`}`)
     :'';
-  return `<div class="lmrow"><span class="fbar-lbl">Упущенная маржа · метод</span>
-    <div class="seg" id="lmSeg" role="group" aria-label="Метод расчёта упущенной маржи"></div>
-    <span class="lmrow-note">Пересчитывает KPI, графики и таблицы блока · наведите на метод — описание расчёта</span></div>
-  <div class="lmrow"><span class="fbar-lbl">Упущенная маржа · база</span>
-    <div class="seg" id="lmBaseSeg" role="group" aria-label="База расчёта упущенной маржи"></div>
-    <span class="lmrow-note">${note}</span></div>`;
+  const baseHelp=[
+    `База расчёта: <b>${esc((LM_BASES[LM_BASE]||LM_BASES.plan).t)}</b>`,
+    note?esc(note):'',
+    'Переключатели пересчитывают KPI, графики и таблицы блока. Наведите на метод или базу — покажем формулу, бизнес-смысл и ограничения.'
+  ].filter(Boolean).join('<br>');
+  return `<div class="lmrow">
+    <span class="lm-head">Упущенная маржа</span>
+    <span class="lm-half"><span class="lm-lbl">Метод</span>
+      <div class="seg" id="lmSeg" role="group" aria-label="Метод расчёта упущенной маржи"></div>
+      <span class="lm-info" id="lmSegInfo" role="img" tabindex="0" data-help="Методы отличаются ставкой, по которой оценивается непокрытый объём. Активный метод выделен. Наведите на любую кнопку метода — покажем формулу, бизнес-смысл, когда применять и ограничение." aria-label="Как выбирать метод оценки упущенной маржи"></span></span>
+    <span class="lm-div" aria-hidden="true"></span>
+    <span class="lm-half"><span class="lm-lbl">База</span>
+      <div class="seg" id="lmBaseSeg" role="group" aria-label="База расчёта упущенной маржи"></div>
+      <span class="lm-info" id="lmBaseInfo" role="img" tabindex="0" data-help="${esc(baseHelp)}" aria-label="Что входит в базу расчёта"></span></span>
+  </div>`;
 }
 /* Подсказка базы — тот же #lmTip, что и у методов */
 function lmBaseTipHtml(k){
@@ -1939,7 +2034,10 @@ function bind(c){
       TIP.style.left=L+'px';TIP.style.top=T+'px';c.style.cursor=hit.cb?'pointer':'default'}
     else{TIP.style.display='none';c.style.cursor='default'}};
   c.onmouseleave=()=>TIP.style.display='none';
-  c.onclick=e=>{const b=c.getBoundingClientRect(),mx=e.clientX-b.left,my=e.clientY-b.top;
+  c.onclick=e=>{
+    /* после перетаскивания (масштабируемые графы) клик не считается выбором */
+    if(c._dragEndAt&&Date.now()-c._dragEndAt<300)return;
+    const b=c.getBoundingClientRect(),mx=e.clientX-b.left,my=e.clientY-b.top;
     const hit=(c._h||[]).find(r=>mx>=r.x&&mx<=r.x+r.w&&my>=r.y&&my<=r.y+r.h);if(hit&&hit.cb)hit.cb()};
 }
 function yAxis(x,w,h,p,max,fmt,n=5){x.strokeStyle=CH.grid;x.lineWidth=1;x.fillStyle=CH.axis;
@@ -2193,7 +2291,49 @@ const TM_ICONS={
   SUPTRAN:'🚚 Доставка сырья'
 };
 
+/* ── Камера графа потоков: масштаб и сдвиг для каждого канваса отдельно.
+   k=0 — авторежим «видно всю цепочку»: масштаб подбирается так, чтобы в окно
+   канваса поместился весь граф (раньше лишние плечи просто отбрасывались).
+   Пользователь может приблизить, отдалить, сдвинуть перетаскиванием и вернуть
+   общий вид кнопкой или двойным кликом. ── */
+const FLOW_VIEW={};
+function flowView(id){return FLOW_VIEW[id]||(FLOW_VIEW[id]={k:0,tx:0,ty:0,fit:1})}
+function flowReset(id){FLOW_VIEW[id]={k:0,tx:0,ty:0,fit:1}}
+function flowAttach(c,id){
+  if(c._flowWired)return;c._flowWired=true;
+  const redraw=()=>{if(REDRAW[id])REDRAW[id]()};
+  const zoomAt=(mx,my,f)=>{
+    const v=flowView(id),k0=v.k||v.fit||1,k1=Math.max(.2,Math.min(4,k0*f));
+    v.tx=mx-(mx-v.tx)*(k1/k0);v.ty=my-(my-v.ty)*(k1/k0);v.k=k1;redraw();
+  };
+  c.addEventListener('wheel',e=>{
+    const r=c.getBoundingClientRect();
+    e.preventDefault();
+    zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.18:1/1.18);
+  },{passive:false});
+  let drag=null;
+  c.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    const v=flowView(id);drag={x:e.clientX,y:e.clientY,tx:v.tx,ty:v.ty,moved:false};
+    c.style.cursor='grabbing';
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!drag)return;
+    const v=flowView(id);
+    v.tx=drag.tx+(e.clientX-drag.x);v.ty=drag.ty+(e.clientY-drag.y);
+    if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3)drag.moved=true;
+    redraw();
+  });
+  window.addEventListener('mouseup',()=>{
+    if(!drag)return;
+    const moved=drag.moved;drag=null;c.style.cursor='default';
+    /* перетаскивание не должно «проваливаться» в клик по узлу/плечу */
+    if(moved)c._dragEndAt=Date.now();
+  });
+  c.addEventListener('dblclick',()=>{flowReset(id);redraw()});
+}
 function chFlow(id,h,legsList,fmt,cb){
+  REDRAW[id]=()=>chFlow(id,h,legsList,fmt,cb);
   const g=cv(id,h);if(!g)return;const{c,x,w}=g;
   if(!legsList.length){
     x.fillStyle=CH.axis;x.textAlign='center';x.font='13px '+FNT;
@@ -2312,7 +2452,19 @@ function chFlow(id,h,legsList,fmt,cb){
   const numCols=Math.max(presentStages.length,1);
   const colW=(w-p.l-p.r)/numCols;
   const cardW=Math.min(colW*0.84,210),cardH=38;
-  const availH=h-p.t-p.b;
+  /* «Мир» графа выше окна канваса, если в колонке много узлов: карточки не
+     сжимаются до нечитаемых, а камера показывает цепочку (авто) и позволяет
+     приблизить нужный участок. */
+  const NODE_STEP=44;
+  const maxColNodes=Math.max(1,...presentStages.map(st=>allNodes.filter(n=>n.stage===st).length));
+  const worldH=Math.max(h,maxColNodes*NODE_STEP+p.t+p.b);
+  const availH=worldH-p.t-p.b;
+  /* камера: по умолчанию — вписать весь граф в окно */
+  const view=flowView(id);
+  const fit=Math.min(1,h/worldH);
+  view.fit=fit;
+  const zk=view.k||fit,ztx=view.tx,zty=view.ty;
+  x.transform(zk,0,0,zk,ztx,zty);
 
   // Отрисовка колонок стадий
   x.font='600 11px '+FNT;x.textAlign='center';
@@ -2322,7 +2474,7 @@ function chFlow(id,h,legsList,fmt,cb){
     x.fillStyle=stageColors[stIdx]||CH.txt;
     x.fillText(STAGE_TITLES[stIdx]||`Этап ${stIdx+1}`,cx,p.t-20);
     x.strokeStyle=CH.grid;x.lineWidth=1;x.setLineDash([3,3]);
-    x.beginPath();x.moveTo(cx,p.t-8);x.lineTo(cx,h-p.b);x.stroke();x.setLineDash([]);
+    x.beginPath();x.moveTo(cx,p.t-8);x.lineTo(cx,worldH-p.b);x.stroke();x.setLineDash([]);
   });
 
   // Расчет позиций карточек
@@ -2478,9 +2630,71 @@ function chFlow(id,h,legsList,fmt,cb){
       cb?()=>cb(n.id):null);
   });
 
+  /* Хиты — в экранных координатах: содержимое рисуется в мировых, поэтому
+     пересчитываем прямоугольники под текущую камеру. */
+  if(zk!==1||ztx||zty)
+    c._h=c._h.map(r=>({...r,x:r.x*zk+ztx,y:r.y*zk+zty,w:r.w*zk,h:r.h*zk}));
+  flowAttach(c,id);
   bind(c);
 }
 
+/* Радар профилей: сравнивает версии по нескольким осям сразу.
+   axes=[{t,f}] — подпись и формат значения; series=[{name,c,vals,raw}],
+   vals — нормированные 0..1 значения (инверсия для «меньше — лучше» делается
+   вызывающим кодом), raw — исходные числа для подсказки. */
+function chRadar(id,h,axes,series){
+  REDRAW[id]=()=>chRadar(id,h,axes,series);
+  const g=cv(id,h);if(!g)return;const{c,x,w}=g;
+  if(!axes.length||!series.length){
+    x.fillStyle=CH.axis;x.textAlign='center';x.font='13px '+FNT;
+    x.fillText('Нет данных для профиля версий',w/2,h/2);bind(c);return;
+  }
+  const cx=w/2,cy=h/2,R=Math.max(58,Math.min(w/2-110,h/2-40));
+  const N=axes.length,ang=i=>-Math.PI/2+2*Math.PI*i/N;
+  [.25,.5,.75,1].forEach(t=>{
+    x.beginPath();
+    for(let i=0;i<N;i++){const a=ang(i),px=cx+Math.cos(a)*R*t,py=cy+Math.sin(a)*R*t;
+      i?x.lineTo(px,py):x.moveTo(px,py)}
+    x.closePath();x.strokeStyle=CH.grid;x.lineWidth=1;x.stroke();
+  });
+  x.font='11px '+FNT;
+  axes.forEach((ax,i)=>{
+    const a=ang(i),px=cx+Math.cos(a)*R,py=cy+Math.sin(a)*R;
+    x.strokeStyle=CH.grid;x.beginPath();x.moveTo(cx,cy);x.lineTo(px,py);x.stroke();
+    const lx=cx+Math.cos(a)*(R+14),ly=cy+Math.sin(a)*(R+14);
+    x.fillStyle=CH.lab;
+    x.textAlign=Math.abs(Math.cos(a))<.3?'center':(Math.cos(a)>0?'left':'right');
+    x.textBaseline=Math.abs(Math.sin(a))<.3?'middle':(Math.sin(a)>0?'top':'bottom');
+    const words=String(ax.t).split(' ');const lines=[];let cur='';
+    words.forEach(wd=>{const t=cur?cur+' '+wd:wd;
+      if(x.measureText(t).width>112&&cur){lines.push(cur);cur=wd}else cur=t});
+    if(cur)lines.push(cur);
+    const off=Math.sin(a)>0?4:-4;
+    lines.forEach((ln,li)=>x.fillText(ln,lx,ly+off+(li-(lines.length-1)/2)*13));
+  });
+  series.forEach(s=>{
+    const pt=(i)=>{const a=ang(i),v=Math.max(0,Math.min(1,s.vals[i]||0));
+      return [cx+Math.cos(a)*R*v,cy+Math.sin(a)*R*v]};
+    x.beginPath();
+    s.vals.forEach((_,i)=>{const[px,py]=pt(i);i?x.lineTo(px,py):x.moveTo(px,py)});
+    x.closePath();x.fillStyle=rgba(s.c,.16);x.fill();
+    x.strokeStyle=s.c;x.lineWidth=2;x.stroke();
+    s.vals.forEach((_,i)=>{const[px,py]=pt(i);
+      x.beginPath();x.arc(px,py,3.4,0,7);x.fillStyle=s.c;x.fill()});
+  });
+  axes.forEach((ax,i)=>{
+    const a=ang(i);
+    series.forEach(s=>{
+      const v=Math.max(0,Math.min(1,s.vals[i]||0));
+      const px=cx+Math.cos(a)*R*v,py=cy+Math.sin(a)*R*v;
+      reg(c,px-10,py-10,20,20,
+        `<b>${esc(ax.t)}</b><br>`+series.map(z=>
+          `${esc(z.name)}: <b>${ax.f?ax.f(z.raw[i]):z.raw[i]}</b>`).join('<br>')
+        +`<br><span style="color:var(--scp-text-3)">Длина луча нормирована к лучшему значению из двух версий</span>`,null);
+    });
+  });
+  bind(c);
+}
 function chDumbbell(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w}=g;
   const p={l:126,r:100,t:10,b:10},max=Math.max(...items.flatMap(i=>[i.a,i.b]),1)*1.1,row=(h-p.t-p.b)/Math.max(items.length,1);
   items.forEach((it,i)=>{const y=p.t+row*(i+.5),X=v=>p.l+(w-p.l-p.r)*v/max;
@@ -2498,15 +2712,16 @@ function chDumbbell(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w
 /* KPI-сетка. k=[заголовок, значение, подпись, класс значения, title-подсказка].
    Подпись (k[2]) может содержать разметку (<br>, <code>) — не экранируется;
    title экранируется, потому что в него попадают имена источников из данных. */
-/* Сворачиваемая строка «Источник и методика» (задача владельца 2026-09-16):
-   техническая справка больше не стоит первой строкой разделов «Спрос и
-   покрытие» и «Экономика отказов». Краткая суть видна в заголовке свёрнутого
-   блока; если состояние проблемное (нет demand_coverage, активны фильтры, метод
-   без ставок), блок раскрывается сам — прятать предупреждение нельзя. */
+/* Строка-предупреждение вместо справочного блока (задача владельца 2026-09-16):
+   справка «Источник и методика» убрана из верхней части разделов — она дублировала
+   подсказки «?» у показателей и занимала первый экран. Но если состояние данных
+   проблемное (нет demand_coverage, активны фильтры, нет ставок), предупреждение
+   остаётся тонкой строкой и раскрывается по клику: прятать его нельзя. */
 function srcFold(sev,brief,body){
-  return `<details class="src-fold"${sev==='i'?'':' open'}>
-    <summary><span class="tag">${sev==='i'?'Источник':'Внимание'}</span><span class="sf-b">${brief}</span></summary>
-    <div class="dq ${sev}"><div class="m">${body}</div></div></details>`;
+  if(sev==='i')return '';
+  return `<details class="src-warn">
+    <summary><span class="tag">Внимание</span><span class="sf-b">${brief}</span></summary>
+    <div class="dq w"><div class="m">${body}</div></div></details>`;
 }
 /* Реестр пояснений к расчётным показателям: как считается число и откуда данные.
    Ключ — заголовок карточки KPI; ключ вида «вкладка|заголовок» имеет приоритет
@@ -2575,15 +2790,9 @@ const METRIC_HELP={
  'Складских узлов':'Число различных локаций хранения (<code>pl</code>) в операциях <code>stock</code>.',
  'Максимальное пролёживание':'Наибольшее число периодов подряд, которые партия продукта лежит на одном складе (цепочка операций хранения).',
  'Средняя длина хранения':'<b>Σ периодов хранения / число партий</b> (партия = продукт × склад).',
- /* ── Экономика отказов ── */
- 'Штраф за непоставку':'<b>Σ (unm × ставка непоставки)</b>, ₽. Ставка — <code>non_delivery</code> из справочника <code>demand_cost</code>/<code>demand_cost_ti</code> по продукту и локации.',
- 'Штраф за опоздание':'<b>Σ (объём с опозданием × ставка опоздания × число периодов опоздания)</b>, ₽.',
- 'Суммарные потери':'<b>Упущенная маржа + штраф за непоставку + штраф за опоздание</b> — полная цена отказа, ₽.',
- 'Штрафы к упущенной марже':'<b>(Штраф за непоставку + Штраф за опоздание) / Упущенная маржа</b>: во сколько раз штрафы превышают упущенную маржу.',
- 'Заказов с дефицитом':'Число заказов с <b>unm > 0</b> в выборке.',
- 'Записей в справочнике ставок':'Строк справочника штрафов, загруженных в выгрузке (<code>demand_cost</code> / <code>demand_cost_ti</code>).',
- 'Средняя ставка непоставки':'Среднее значение ставки <code>non_delivery</code> по справочнику, ₽/т.',
- 'cost|Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽ — та же величина, что на вкладках «Общий» и «Спрос и покрытие», но без влияния фильтров вкладки: здесь это база для сравнения со штрафами.',
+ /* ── Ставки штрафов (справочник demand_cost) ── */
+ 'Ставка непоставки':'<b>non_delivery</b> из справочника <code>demand_cost</code>/<code>demand_cost_ti</code> по продукту и локации, ₽/т. Используется методом оценки упущенной маржи «Ставка штрафа»: непокрытый объём оценивается договорной неустойкой.',
+ 'Ставка опоздания':'Ставка <code>late_delivery</code> × число периодов опоздания, ₽/т — договорная потеря за срыв срока поставки.',
  /* ── Версии ── */
  'vs|Упущенная маржа':'Упущенная маржа, замороженная в снапшоте версии базовым методом «маржа заказа» и по базе «дефицит плана». Переключатели метода и базы на неё не действуют.',
  'Упущенная маржа по непокрытому спросу':'<b>Σ (непокрытый спрос от неограниченного × ставка маржи)</b>, восстановленная из сохранённых объёмов версии той же замороженной ставкой, ₽.',
@@ -2626,14 +2835,39 @@ function kpisHtml(K){
   return `<div class="kpis">`+K.map(k=>{
     const h=[metricHelp(k[0]),k[4]||''].filter(Boolean).join('<br>');
     const plain=h?h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim():'';
-    return `<div class="kpi${h?' has-h':''}"${h?` data-help="${esc(h)}" title="${esc(plain)}"`:''}>`
+    const title=String(k[0]).replace(/<[^>]+>/g,'');
+    /* Значок «?» — единственная точка, где появляется подсказка: data-help висит
+       на нём, а не на карточке (иначе подсказка выскакивала при наведении на
+       любое место карточки). `title` не ставим сознательно: нативный тултип
+       браузера дублировал бы кастомный #tip. Полный текст доступен скринридеру
+       через aria-label значка, а визуально — по наведению на «?». */
+    return `<div class="kpi${h?' has-h':''}">`
       +`<div class="t">${k[0]}`
-      /* Знак «?» рисуется через ::after, чтобы textContent заголовка карточки
-         оставался чистым названием показателя (его читают тесты и скринридеры) */
-      +(h?`<span class="kpi-q" role="img" tabindex="0" data-help="${esc(h)}" title="${esc(plain)}" aria-label="Как считается «${esc(String(k[0]).replace(/<[^>]+>/g,''))}»: ${esc(plain)}"></span>`:'')
+      +(h?`<span class="kpi-q" role="img" tabindex="0" data-help="${esc(h)}" aria-label="Как считается «${esc(title)}»: ${esc(plain)}"></span>`:'')
       +`</div><div class="v ${k[3]||''}">${k[1]}</div>`
       +`<div class="s">${k[2]}</div></div>`;
   }).join('')+`</div>`;
+}
+/* Значение KPI всегда в одну строку: если не помещается — уменьшаем кегль
+   (текст не переносится и не режется, базовые линии во всех карточках ряда
+   остаются совпадающими, потому что line-height фиксирован в CSS). */
+function fitKpiValues(){
+  /* Кегль значения подбирается на весь РЯД карточек, а не на одну карточку:
+     иначе длинная цифра ужималась бы, а соседние оставались крупными, и ряд
+     выглядел бы рвано. Раскладка grid кладёт в один ряд карточки с одинаковым
+     offsetTop — по нему и группируем. */
+  const rows=new Map();
+  $$('#main .kpi .v').forEach(el=>{
+    el.style.fontSize='';
+    const box=el.clientWidth;
+    if(!box)return;                       /* jsdom и скрытые вкладки — пропускаем */
+    let size=28;
+    while(size>15&&el.scrollWidth>box+1)size-=1;
+    const k=el.parentElement?Math.round(el.parentElement.offsetTop)+'/'+Math.round(el.parentElement.offsetHeight):'_';
+    const r=rows.get(k)||{els:[],size:28};
+    r.els.push(el);r.size=Math.min(r.size,size);rows.set(k,r);
+  });
+  rows.forEach(r=>{if(r.size<28)r.els.forEach(el=>el.style.fontSize=r.size+'px')});
 }
 function summary(title,blocks){
   return `<div class="sum"><h4>${title}</h4>`+blocks.map(b=>
@@ -2677,15 +2911,6 @@ function tabOV(){
   ${lmRowHtml()}
   ${kpisHtml(K)}
   <div class="grid">
-    <div class="card w"><h3>Упущенная маржа по периодам и продуктам</h3>
-      <div class="sub" id="o8sub"></div>
-      <div class="seg" id="o8dim" role="group" aria-label="Разрез упущенной маржи" style="margin:2px 0 10px">
-        <button type="button" class="btn" data-lmdim="period">Периоды</button>
-        <button type="button" class="btn" data-lmdim="prod">Продукты</button>
-        <button type="button" class="btn" data-lmdim="pp">Период × продукт</button>
-      </div>
-      <canvas id="o8" role="img" aria-label="Упущенная маржа в выбранном разрезе"></canvas>
-      <p class="rec-note" id="o8note"></p></div>
     <div class="card"><h3>Выручка, себестоимость и маржа по периодам</h3><div class="sub">Клик по периоду — фильтр. Значения в млрд ₽</div>
       ${lg('#o1',[[CH.d1,'Выручка'],[CH.d5,'Себестоимость'],[CH.d3,'Маржа']])}
       <canvas id="o1"></canvas></div>
@@ -2695,6 +2920,15 @@ function tabOV(){
     <div class="card"><h3>Маржа на тонну и объём</h3><div class="sub">Размер пузыря — валовая маржа. Верх справа — ядро бизнеса</div><canvas id="o4"></canvas></div>
     <div class="card"><h3>Топ продуктов по марже</h3><div class="sub">Клик — фильтр по продукту</div><canvas id="o5"></canvas></div>
     <div class="card"><h3>Парето заказов по марже</h3><div class="sub">Тёмные столбцы формируют 80% результата</div><canvas id="o6"></canvas></div>
+    <div class="card w"><h3>Упущенная маржа по периодам и продуктам</h3>
+      <div class="sub" id="o8sub"></div>
+      <div class="seg" id="o8dim" role="group" aria-label="Разрез упущенной маржи" style="margin:2px 0 10px">
+        <button type="button" class="btn" data-lmdim="period">Периоды</button>
+        <button type="button" class="btn" data-lmdim="prod">Продукты</button>
+        <button type="button" class="btn" data-lmdim="pp">Период × продукт</button>
+      </div>
+      <canvas id="o8" role="img" aria-label="Упущенная маржа в выбранном разрезе"></canvas>
+      <p class="rec-note" id="o8note"></p></div>
     <div class="card w"><h3>Заказы спроса</h3><div class="sub">Уровень order_id, дедуплицировано. Клик по заголовку — сортировка, значок ▾ — мультифильтр</div><div id="o7"></div></div>
   </div>`;
   setTimeout(()=>{
@@ -2983,7 +3217,9 @@ function tabDM(){
         if(!r.hasData)return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
         if(!r.prodBottleneck)return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
         const b=r.prodBottleneck;
-        return `<span class="tag" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Открыть цепочку производственных мощностей">🛑 ${esc(b.rsName)}: ${pc(b.util)} ↗</span>`}},
+        return `<span class="tag-wrap">`
+          +`<span class="tag" data-goto-order="${o.id}" data-tree-mode="stages" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Открыть цепочку заказа №${o.id}: этапы цепи в тоннах">🛑 ${esc(b.rsName)}: ${pc(b.util)} ↗</span>`
+          +`<span class="tag gear" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" title="Открыть цепочку производственных мощностей заказа №${o.id} с фокусом на лимите">⚙</span></span>`}},
       {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{const r=rcaFor(o);
         if(!r.hasData)return 'Базовый режим';
         if(r.logBottleneck){const b=r.logBottleneck;return b.isBlocked?`⛔ Блок: ${b.rsName}`:`📦 ${b.rsName} (${pc(b.util)})`}
@@ -2995,7 +3231,12 @@ function tabDM(){
           :`<span class="tag" style="color:var(--scp-text-3)" title="В res_loc / capacity_view_sp нет лимитов маршрутов для плеч этого заказа">◌ Лимиты не заданы</span>`;
         const b=r.logBottleneck,icon=b.isBlocked?'⛔':'📦',txt=b.isBlocked?`Блок: ${esc(b.rsName)}`:`${esc(b.rsName)}: ${pc(b.util)}`;
         const st=b.isBlocked?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)':'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)';
-        return `<span class="tag" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" style="${st};font-weight:600;cursor:pointer" title="Открыть цепочку логистических лимитов">${icon} ${txt} ↗</span>`}},
+        /* Клик по бейджу открывает заказ в разделе «Цепочка заказа» → «Этапы цепи»
+           в тоннах (задача владельца 2026-09-16). Прежний переход в «Мощности»
+           остался доступен шестерёнкой — она не конкурирует с основным действием. */
+        return `<span class="tag-wrap">`
+          +`<span class="tag" data-goto-order="${o.id}" data-tree-mode="stages" style="${st};font-weight:600;cursor:pointer" title="Открыть цепочку заказа №${o.id}: этапы цепи в тоннах">${icon} ${txt} ↗</span>`
+          +`<span class="tag gear" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" title="Открыть цепочку логистических мощностей заказа №${o.id} с фокусом на лимите">⚙</span></span>`}},
       {k:'lostRev',t:'Потер. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v),cls:()=>'neg'},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>lmS(o),f:v=>mln(v),cls:()=>'neg'}
     ],defOrders,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
@@ -3068,14 +3309,21 @@ function tabLG(){
   else if(LG_FLOW_LAYER==='interplant') flowLegs = flowLegs.filter(l=>l.layer==='interplant');
   else if(LG_FLOW_LAYER==='inbound') flowLegs = flowLegs.filter(l=>l.layer==='inbound');
 
-  // Доступные виды транспорта для активного контура
+  /* Виды транспорта — МУЛЬТИВЫБОР: можно оставить один, несколько или все.
+     Пустой список выбранных = «все виды». Значения, которых нет в активном
+     контуре, отбрасываем, чтобы фильтр не «залипал» на пустом результате. */
   const availTms = uq(flowLegs,l=>l.tm);
-  if(LG_FLOW_TM!=='all'&&!availTms.includes(LG_FLOW_TM)) LG_FLOW_TM='all';
+  LG_FLOW_TMS = LG_FLOW_TMS.filter(t=>availTms.includes(t));
+  const tmSel = LG_FLOW_TMS;
+  const flowLegsAll = flowLegs.slice();
+  const tmCount = new Map(availTms.map(t=>[t,flowLegsAll.filter(l=>l.tm===t).length]));
+  if(tmSel.length) flowLegs = flowLegs.filter(l=>tmSel.includes(l.tm));
 
-  if(LG_FLOW_TM!=='all') flowLegs = flowLegs.filter(l=>l.tm===LG_FLOW_TM);
-
+  /* Ограничение «первые 32 плеча» убрано: граф больше не теряет часть цепочки.
+     Если объектов много, камера по умолчанию вписывает всю сеть в окно, а
+     масштаб и перетаскивание дают рассмотреть нужный участок. */
+  const dispFlowLegs = flowLegs;
   const hasClientFilter = F.cl.length>0||F.pr.length>0;
-  const dispFlowLegs = hasClientFilter ? flowLegs : flowLegs.slice(0,32);
 
   const html=`
   ${kpisHtml(K)}
@@ -3084,7 +3332,7 @@ function tabLG(){
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
         <div>
           <h3>Потоки сети: откуда и куда</h3>
-          <div class="sub" style="margin-bottom:0">Толщина потока — тонны. Наведите на иконку транспорта, чтобы увидеть перемещаемый продукт:</div>
+          <div class="sub" style="margin-bottom:0">Толщина потока — тонны. Видов транспорта можно выбрать несколько; если сеть не помещается — приблизьте нужный участок. Наведение на иконку транспорта показывает перемещаемый продукт:</div>
         </div>
         <div class="seg">
           <button class="btn ${LG_FLOW_LAYER==='distrib'?'p':''}" id="lgLayerDistrib">🚚 Дистрибуция клиентам</button>
@@ -3093,10 +3341,19 @@ function tabLG(){
           <button class="btn ${LG_FLOW_LAYER==='all'?'p':''}" id="lgLayerAll">🌐 Сквозная сеть</button>
         </div>
       </div>
-      <div class="tbar" style="margin-bottom:10px">
+      <div class="tbar" style="margin-bottom:8px">
         <span class="tbar-lbl">Вид транспорта:</span>
-        <button class="chip ${LG_FLOW_TM==='all'?'on':''}" data-ltm="all">Все виды (${flowLegs.length})</button>
-        ${availTms.map(t=>`<button class="chip ${LG_FLOW_TM===t?'on':''}" data-ltm="${esc(t)}">${TM_ICONS[t]||t}</button>`).join('')}
+        <button class="chip ${tmSel.length?'':'on'}" data-ltm="all"
+          title="Снять выбор видов — показать все виды транспорта">Все виды <b>${nf(flowLegsAll.length)}</b></button>
+        ${availTms.map(t=>`<button class="chip ${tmSel.includes(t)?'on':''}" data-ltm="${esc(t)}"
+          aria-pressed="${tmSel.includes(t)}" title="Клик — добавить или убрать вид; можно выбрать несколько">${TM_ICONS[t]||t} <b>${nf(tmCount.get(t)||0)}</b></button>`).join('')}
+        ${tmSel.length?`<span class="tbar-note">Показано ${nf(flowLegs.length)} плеч · выбрано видов: ${tmSel.length} · <a id="lgTmClear" class="tbar-link">сбросить</a></span>`:''}
+      </div>
+      <div class="flow-tools" role="group" aria-label="Масштаб графа потоков">
+        <button class="btn" id="lgZoomOut" title="Отдалить" aria-label="Отдалить">−</button>
+        <button class="btn" id="lgZoomIn" title="Приблизить" aria-label="Приблизить">+</button>
+        <button class="btn" id="lgZoomFit" title="Вписать всю цепочку в окно">⤢ Вся цепочка</button>
+        <span class="flow-hint">Колесо — масштаб · перетаскивание — сдвиг · двойной клик — вся цепочка</span>
       </div>
       <canvas id="l3"></canvas>
     </div>
@@ -3108,16 +3365,42 @@ function tabLG(){
   </div>`;
 
   setTimeout(()=>{
-    // Слушатели переключателя контуров
-    if($('#lgLayerDistrib'))$('#lgLayerDistrib').onclick=()=>{LG_FLOW_LAYER='distrib';LG_FLOW_TM='all';render()};
-    if($('#lgLayerInter'))$('#lgLayerInter').onclick=()=>{LG_FLOW_LAYER='interplant';LG_FLOW_TM='all';render()};
-    if($('#lgLayerInbound'))$('#lgLayerInbound').onclick=()=>{LG_FLOW_LAYER='inbound';LG_FLOW_TM='all';render()};
-    if($('#lgLayerAll'))$('#lgLayerAll').onclick=()=>{LG_FLOW_LAYER='all';LG_FLOW_TM='all';render()};
+    /* Слушатели переключателя контуров. Смена контура сбрасывает и виды
+       транспорта, и камеру графа: набор плеч меняется целиком. */
+    const setLayer=l=>{LG_FLOW_LAYER=l;LG_FLOW_TMS=[];flowReset('l3');render()};
+    if($('#lgLayerDistrib'))$('#lgLayerDistrib').onclick=()=>setLayer('distrib');
+    if($('#lgLayerInter'))$('#lgLayerInter').onclick=()=>setLayer('interplant');
+    if($('#lgLayerInbound'))$('#lgLayerInbound').onclick=()=>setLayer('inbound');
+    if($('#lgLayerAll'))$('#lgLayerAll').onclick=()=>setLayer('all');
 
-    // Слушатели переключателя вида транспорта
+    // Мультивыбор вида транспорта: клик добавляет/убирает вид
     $$('[data-ltm]').forEach(b=>{
-      b.onclick=()=>{LG_FLOW_TM=b.dataset.ltm;render()};
+      b.onclick=()=>{
+        const t=b.dataset.ltm;
+        if(t==='all')LG_FLOW_TMS=[];
+        else{
+          const i=LG_FLOW_TMS.indexOf(t);
+          i<0?LG_FLOW_TMS.push(t):LG_FLOW_TMS.splice(i,1);
+        }
+        flowReset('l3');
+        render();
+      };
     });
+    const tmClear=$('#lgTmClear');
+    if(tmClear)tmClear.onclick=()=>{LG_FLOW_TMS=[];flowReset('l3');render()};
+
+    // Кнопки масштаба графа потоков
+    const zoomFlow=f=>{
+      const cvs=$('#l3');if(!cvs)return;
+      const v=flowView('l3'),k0=v.k||v.fit||1,k1=Math.max(.2,Math.min(4,k0*f));
+      const cx=(cvs.clientWidth||600)/2,cy=(cvs.clientHeight||400)/2;
+      v.tx=cx-(cx-v.tx)*(k1/k0);v.ty=cy-(cy-v.ty)*(k1/k0);v.k=k1;
+      if(REDRAW['l3'])REDRAW['l3']();
+    };
+    const zIn=$('#lgZoomIn'),zOut=$('#lgZoomOut'),zFit=$('#lgZoomFit');
+    if(zIn)zIn.onclick=()=>zoomFlow(1.25);
+    if(zOut)zOut.onclick=()=>zoomFlow(1/1.25);
+    if(zFit)zFit.onclick=()=>{flowReset('l3');if(REDRAW['l3'])REDRAW['l3']()};
 
     // Динамический расчёт адаптивной высоты канваса под плотность узлов
     const nodesInFlow = new Set();
@@ -3478,7 +3761,19 @@ function snap(ds){
   const cov=((ds.agg||{}).totals||{}).cov||{};
   const demUnc=num(cov.demUnc)||(num(cov.ff)+num(cov.uf));
   const sal=S(o,x=>x.sal),unm=S(o,x=>x.unm);
+  /* Разрезы для визуального сравнения версий (радар, мост дельт, теплокарта):
+     верхушка продуктов и матрица «продукт × период» по валовой марже. Храним
+     только то, что нужно для графиков (20 продуктов, 12 строк матрицы), чтобы
+     снапшот оставался лёгким. У снапшотов прошлых сессий этих полей нет —
+     вкладка сравнения это отдельно проговаривает. */
+  const byProd=grp(o,x=>x.prod,v=>({rev:S(v,z=>z.rev),mar:S(v,z=>z.mar),sal:S(v,z=>z.sal),unm:S(v,z=>z.unm)}))
+    .sort((a,b)=>Math.abs(b.mar)-Math.abs(a.mar)).slice(0,20)
+    .map(r=>({k:r.k,rev:r.rev,mar:r.mar,sal:r.sal,unm:r.unm}));
+  const ppRows=byProd.slice(0,12).map(r=>r.k);
+  const ppCols=uq(o,x=>x.p);
+  const ppM=ppRows.map(p=>ppCols.map(c0=>S(o.filter(x=>x.prod===p&&x.p===c0),x=>x.mar)));
   return {name:ds.name,ts:ds.ts,orders:o.length,
+    byProd,pp:{rows:ppRows,cols:ppCols,m:ppM},
     rev:S(o,x=>x.rev),cost:S(o,x=>x.cost),mar:S(o,x=>x.mar),dem:S(o,x=>x.dem),sal,unm,
     lm:S(o,x=>x.unm*x.mpt),full:o.filter(x=>!(x.unm>1e-9)).length,
     demUnc,gap:demUnc>0?Math.max(0,demUnc-sal):unm,notPlanned:demUnc>0?Math.max(0,demUnc-S(o,x=>x.dem)):0,
@@ -3558,6 +3853,9 @@ function fmtTs(ts){if(!ts)return '';const d=new Date(ts);const p=n=>String(n).pa
    «Версий для сравнения меньше двух», даже если пользователь сохранил свои
    версии кнопкой в шапке — локальное сравнение было недостижимо. Теперь CH-схемы
    в приоритете только когда их действительно ≥2, иначе — сохранённые снапшоты. */
+/* Что показывает теплокарта «продукт × период» в сравнении версий:
+   'delta' — разница B − A (по умолчанию: видно, где версии расходятся) */
+let VS_HEAT='delta';
 function tabVsRoute(){
   const chv=(window.CHX&&CHX.versions)||[];
   if(chv.length>1&&window.CHX.tabVS)return CHX.tabVS();
@@ -3596,30 +3894,132 @@ function tabVS(){
     ['Заказов',A.orders,B.orders,v=>nf(v),0],['Заводов задействовано',A.plants,B.plants,v=>nf(v),0],
     ['Поставщиков',A.vendors,B.vendors,v=>nf(v),0]];
   const opt=(sel)=>list.map((v,i)=>`<option value="${i}" ${((sel===0?iB:iA)===i)?'selected':''}>${esc(v.name)}${v.ts?(' | '+fmtTs(v.ts)):''}</option>`).join('');
+
+  /* ── Оси радара: «больше — лучше» (dir=1) и «меньше — лучше» (dir=-1).
+     Лучшее из двух значений задаёт длину луча, поэтому профиль читается как
+     «у какой версии какая сторона сильнее». ── */
+  const slOf=v=>(v.dem?v.sal/v.dem:0), mptOf=v=>(v.sal?v.mar/v.sal:0);
+  const axes=[
+    {t:'Валовая маржа',dir:1,f:bn,vOf:v=>v.mar},
+    {t:'Service Level',dir:1,f:pc,vOf:slOf},
+    {t:'Маржа на тонну',dir:1,f:v=>nf(v)+' ₽/т',vOf:mptOf},
+    {t:'Логистика',dir:-1,f:bn,vOf:v=>v.mv},
+    {t:'Производство',dir:-1,f:bn,vOf:v=>v.pd},
+    {t:'Закупки',dir:-1,f:bn,vOf:v=>v.pc},
+    {t:'Хранение',dir:-1,f:bn,vOf:v=>v.st},
+    {t:'Дефицит, т',dir:-1,f:nf,vOf:v=>v.unm}
+  ].map(ax=>{
+    const a0=Math.abs(ax.vOf(A)),b0=Math.abs(ax.vOf(B)),mx=Math.max(a0,b0)||1;
+    const norm=v=>{const t=Math.abs(ax.vOf(v))/mx;return ax.dir>0?t:1-t};
+    return {t:ax.t,dir:ax.dir,f:ax.f,vOf:ax.vOf,norm:[norm(A),norm(B)]};
+  });
+
+  /* ── Мост изменений: маржа A + дельта выручки − дельты затрат = маржа B.
+     «Прочее» — невязка между себестоимостью заказа и суммой операций по типам:
+     без неё мост не сходился бы. ── */
+  const dPd=d(A.pd,B.pd),dMv=d(A.mv,B.mv),dPc=d(A.pc,B.pc),dSt=d(A.st,B.st),dRev=d(A.rev,B.rev);
+  const restCost=(dRev-d(A.mar,B.mar))-(dPd+dMv+dPc+dSt);
+  const wf=[
+    {k:'Маржа A',v:A.mar,type:'total',c:CH.d1},
+    {k:'Выручка',v:dRev,type:'delta'},
+    {k:'Производство',v:-dPd,type:'delta'},
+    {k:'Логистика',v:-dMv,type:'delta'},
+    {k:'Закупки',v:-dPc,type:'delta'},
+    {k:'Хранение',v:-dSt,type:'delta'},
+    {k:'Прочие затраты',v:-restCost,type:'delta'},
+    {k:'Маржа B',v:B.mar,type:'total',c:CH.d3}
+  ];
+
+  /* ── Вердикт-борд: где именно выигрывает A, а где B ── */
+  const vblocks=[
+    ['Финансы (маржа)',A.mar,B.mar,1,bn,'маржа выше'],
+    ['Service Level',slOf(A),slOf(B),1,pc,'обслуживание выше'],
+    ['Маржа на тонну',mptOf(A),mptOf(B),1,v=>nf(v)+' ₽',1,'удельная маржа выше'],
+    ['Дефицит',A.unm,B.unm,-1,v=>nf(v)+' т','дефицит меньше'],
+    ['Логистика',A.mv,B.mv,-1,bn,'затраты ниже'],
+    ['Производство',A.pd,B.pd,-1,bn,'затраты ниже'],
+    ['Закупки',A.pc,B.pc,-1,bn,'затраты ниже'],
+    ['Хранение',A.st,B.st,-1,bn,'затраты ниже']
+  ];
+  const vboard=vblocks.map(([t,a,b,dir,fmt,why])=>{
+    const good=(b-a)*dir;
+    const cls=good>0?'ok':good<0?'bad':'flat';
+    const badge=good>0?'Версия B':good<0?'Версия A':'паритет';
+    const pp=dir>0&&(t==='Service Level')?nf((b-a)*100,1)+' п.п.':(a?(pc(Math.abs(b/a-1))):'—');
+    return `<div class="vb ${cls}"><div class="vb-t">${t}</div>
+      <div class="vb-v"><span class="vb-a">${fmt(a)}</span><span class="vb-arr">→</span><span class="vb-b">${fmt(b)}</span></div>
+      <div class="vb-d"><span class="vb-badge">${badge}</span> · ${good===0?'без изменений':(good>0?'B':'A')+' — '+why} · ${pp}</div></div>`;
+  }).join('');
+
+  /* ── Теплокарта «продукт × период»: A, B или разница B − A ── */
+  const ppA=A.pp||null,ppB=B.pp||null,ppOk=!!(ppA&&ppB);
+  const heat=ppOk?(function(){
+    const rs=[...new Set([...ppA.rows,...ppB.rows])];
+    const cs=[...new Set([...ppA.cols,...ppB.cols])].sort((x,y)=>x-y);
+    const get=(m,p,c0)=>{const i=m.rows.indexOf(p),j=m.cols.indexOf(c0);
+      return (i<0||j<0)?0:(m.m[i][j]||0)};
+    const byImpact=rs.slice().sort((x,y)=>{
+      const ix=cs.reduce((s0,c0)=>s0+Math.abs(get(ppB,x,c0)-get(ppA,x,c0)),0);
+      const iy=cs.reduce((s0,c0)=>s0+Math.abs(get(ppB,y,c0)-get(ppA,y,c0)),0);
+      return iy-ix;
+    }).slice(0,10);
+    return {rows:byImpact,cols:cs,get};
+  })():null;
+
   const html=`
   <div class="frow">
     <div class="fg"><label>Версия A (база)</label><select id="vsA">${opt(1)}</select></div>
     <div class="fg"><label>Версия B (сравниваемая)</label><select id="vsB">${opt(0)}</select></div>
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
-  <div class="dt-info" style="margin-bottom:10px">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий», «Спрос», «Экономика отказов» на историю версий не действуют. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</div>
+  <p class="thin-note">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий» и «Спрос и покрытие» на историю версий не действуют. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</p>
   ${kpisHtml([['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
-       ['Изменение Service Level',pc(d(A.sal/A.dem,B.sal/B.dem)),'процентных пунктов',(B.sal/B.dem)>=(A.sal/A.dem)?'pos':'neg'],
-       ['Изменение маржи на тонну',nf(d(A.mar/A.sal,B.mar/B.sal))+' ₽',pc(r(A.mar/A.sal,B.mar/B.sal)),d(A.mar/A.sal,B.mar/B.sal)>=0?'pos':'neg'],
+       ['Изменение Service Level',pc(d(slOf(A),slOf(B))),'процентных пунктов',slOf(B)>=slOf(A)?'pos':'neg'],
+       ['Изменение маржи на тонну',nf(d(mptOf(A),mptOf(B)))+' ₽',pc(r(mptOf(A),mptOf(B))),d(mptOf(A),mptOf(B))>=0?'pos':'neg'],
        ['Изменение упущенной маржи',bn(d(A.lm,B.lm)),pc(r(A.lm,B.lm)),d(A.lm,B.lm)<=0?'pos':'neg'],
        ...(lmUncBoth?[['Изменение полной цены отказа',bn(d(lmUA,lmUB)),pc(r(lmUA,lmUB)),d(lmUA,lmUB)<=0?'pos':'neg']]:[]),
        ['Изменение логистики',bn(d(A.mv,B.mv)),pc(r(A.mv,B.mv)),d(A.mv,B.mv)<=0?'pos':'neg']])}
   <div class="grid">
+    <div class="card"><h3>Профиль версий: радар</h3>
+      <div class="sub">Лучшее из двух значений задаёт длину луча: наружу — сильнее. Затраты и дефицит инвертированы (меньше — дальше от центра)</div>
+      ${lg('#v4',[[CH.d1,'Версия A'],[CH.d4,'Версия B']])}<canvas id="v4"></canvas></div>
+    <div class="card"><h3>Мост изменений: от маржи A к марже B</h3>
+      <div class="sub">Из чего сложилась разница: выручка против блоков затрат. Столбцы — вклад в изменение маржи</div>
+      <canvas id="v5"></canvas></div>
+    <div class="card w"><h3>Вердикт по блокам плана</h3>
+      <div class="sub">Слева — значение версии A, справа — версии B. Подсвечено, чья версия выигрывает по блоку</div>
+      <div class="vboard">${vboard}</div></div>
     <div class="card"><h3>Ключевые показатели: A и B</h3><div class="sub">Синяя точка — версия A, вторая точка — версия B</div><canvas id="v1"></canvas></div>
     <div class="card"><h3>Структура затрат по блокам</h3><div class="sub">Сравнение состава себестоимости. Клик по легенде — скрыть версию</div>
       ${lg('#v2',[[CH.d1,'Версия A'],[CH.d4,'Версия B']])}<canvas id="v2"></canvas></div>
+    <div class="card w"><h3>Тепловая карта «продукт × период»</h3>
+      <div class="sub">Валовая маржа по продуктам и периодам: версия A, версия B или разница B − A. Клик по строке — фильтр по продукту</div>
+      ${ppOk?`<div class="seg" id="vsHeatMode" role="group" aria-label="Что показывает тепловая карта" style="margin:2px 0 10px">
+        <button type="button" class="btn ${VS_HEAT==='delta'?'p':''}" data-vh="delta">Разница B − A</button>
+        <button type="button" class="btn ${VS_HEAT==='a'?'p':''}" data-vh="a">Версия A</button>
+        <button type="button" class="btn ${VS_HEAT==='b'?'p':''}" data-vh="b">Версия B</button>
+      </div><canvas id="v7"></canvas>`
+      :`<p class="thin-note">Разрез «продукт × период» появился в снапшотах версий после обновления — сохраните версии заново, чтобы увидеть тепловую карту. Пока сравнение опирается на итоговые показатели.</p>`}</div>
     <div class="card w"><h3>Полная таблица отличий</h3><div class="sub">Зелёный — улучшение с точки зрения бизнеса. Сортировка и фильтр по оценке</div><div id="v3"></div></div>
   </div>`;
   setTimeout(()=>{
     $('#vsA').onchange=e=>{sessionStorage.setItem('vA',e.target.value);render()};
     $('#vsB').onchange=e=>{sessionStorage.setItem('vB',e.target.value);render()};
     $('#vsClr').onclick=()=>{if(confirm('Удалить все сохранённые версии?')){localStorage.removeItem('sop_vers');render()}};
+    $$('#vsHeatMode .btn').forEach(b=>{
+      b.onclick=()=>{if(b.dataset.vh===VS_HEAT)return;VS_HEAT=b.dataset.vh;render()};
+    });
+    /* радар профилей */
+    chRadar('#v4',H('#v4',300,0.6),axes,[
+      {name:'Версия A',c:CH.d1,vals:axes.map(ax=>ax.norm[0]),raw:axes.map(ax=>ax.vOf(A))},
+      {name:'Версия B',c:CH.d4,vals:axes.map(ax=>ax.norm[1]),raw:axes.map(ax=>ax.vOf(B))}
+    ]);
+    /* мост изменений */
+    chWaterfall('#v5',H('#v5',300,0.6),wf,v=>bn(Math.abs(v)),
+      i=>`<b>${wf[i].k}</b><br>${wf[i].type==='total'?bn(wf[i].v):`${wf[i].v>=0?'+':'−'}${bn(Math.abs(wf[i].v))} к марже`}`
+        +(wf[i].k==='Прочие затраты'?'<br><span style="color:var(--scp-text-3)">Не разложено по типам операций: себестоимость заказа минус сумма операций</span>':''),
+      null);
     const norm=[['Выручка',A.rev,B.rev],['Себестоимость',A.cost,B.cost],['Валовая маржа',A.mar,B.mar],
       ['Упущенная маржа',A.lm,B.lm],
       ...(lmUncBoth?[['Полная цена отказа',lmUA,lmUB]]:[]),
@@ -3631,6 +4031,24 @@ function tabVS(){
     chBars('#v2',H('#v2',260,0.45),cats,[{c:CH.d1,v:[A.pd,A.mv,A.pc,A.st]},{c:CH.d4,v:[B.pd,B.mv,B.pc,B.st]}],
       v=>nf(v/1e9,1)+' млрд',i=>{const a=[A.pd,A.mv,A.pc,A.st][i],b=[B.pd,B.mv,B.pc,B.st][i];
       return `<b>${cats[i]}</b><br>Версия A: ${bn(a)}<br>Версия B: ${bn(b)}<br>Изменение: ${bn(b-a)} (${pc(r(a,b))})`},null);
+    /* теплокарта: A, B или разница */
+    if(ppOk){
+      const mat=heat.rows.map(p=>heat.cols.map(c0=>{
+        const a0=heat.get(ppA,p,c0),b0=heat.get(ppB,p,c0);
+        return VS_HEAT==='a'?a0:VS_HEAT==='b'?b0:(b0-a0);
+      }));
+      const fmtCell=VS_HEAT==='delta'?(v=>v?nf(v/1e6,1):'0'):(v=>nf(v/1e6,0));
+      chHeat('#v7',H('#v7',300,0.5),heat.rows,heat.cols.map(c0=>'P'+c0),mat,
+        v=>mln(v),p=>setF('pr',p),fmtCell);
+      const host=$('#v7');
+      if(host&&host.parentElement&&!host.parentElement.querySelector('.rec-note')){
+        const note=document.createElement('p');note.className='rec-note';
+        note.innerHTML=VS_HEAT==='delta'
+          ?'<b>Как читать:</b> зелёные/красные значения — рост или падение валовой маржи по продукту и периоду относительно версии A; пустое место — позиции не было ни в одной из версий.'
+          :`<b>Как читать:</b> маржа выбранной версии по продукту и периоду, млн ₽.`;
+        host.parentElement.appendChild(note);
+      }
+    }
     const vrows=rows.map(x=>{const dd=d(x[1],x[2]),rl=r(x[1],x[2]);
       const good=x[4]===0?0:(dd*x[4]>0?1:dd===0?0:-1);
       return {n:x[0],a:x[1],b:x[2],dl:dd,rl:dd?rl:0,good,fmt:x[3]}});
@@ -3642,7 +4060,7 @@ function tabVS(){
       {k:'rl',t:'Изменение, %',num:1,f:v=>v?pc(v):'—',cls:(v,r0)=>r0.good>0?'pos':r0.good<0?'neg':''},
       {k:'good',t:'Оценка',num:1,flt:1,
        f:v=>v>0?'<span class="pos">лучше</span>':v<0?'<span class="neg">хуже</span>':'—'}
-    ],vrows,{key:'vs_diff',sort:'n',dir:'asc',h:430});
+    ],vrows,{key:'vs_diff',sort:'n',dir:'asc',h:380});
   },0);
   const verdict=[];
   const cmp=(name,a,b,dir)=>{const dd=(b-a)*dir;verdict.push({name,better:dd>0?'B':dd<0?'A':'='})};
@@ -3654,17 +4072,19 @@ function tabVS(){
       `Валовая маржа ${d(A.mar,B.mar)>=0?'выросла':'снизилась'} на <span class="h">${bn(Math.abs(d(A.mar,B.mar)))}</span> (${pc(Math.abs(r(A.mar,B.mar)))}) при переходе от A к B.`,
       `Service Level ${(B.sal/B.dem)>=(A.sal/A.dem)?'улучшился':'ухудшился'}: ${pc(A.sal/A.dem)} против <span class="h">${pc(B.sal/B.dem)}</span>. Неудовлетворённый спрос ${d(A.unm,B.unm)<=0?'сократился':'вырос'} на ${nf(Math.abs(d(A.unm,B.unm)))} т.`,
       `Себестоимость ${d(A.cost,B.cost)<=0?'снизилась':'выросла'} на ${bn(Math.abs(d(A.cost,B.cost)))}. Маржа на тонну ${d(A.mar/A.sal,B.mar/B.sal)>=0?'выросла':'упала'} на ${nf(Math.abs(d(A.mar/A.sal,B.mar/B.sal)))} ₽/т.`,
-      `Наибольший сдвиг в структуре затрат: ${(()=>{const ar=[['производство',A.pd,B.pd],['логистика',A.mv,B.mv],['закупки',A.pc,B.pc],['хранение',A.st,B.st]].sort((x,y)=>Math.abs(y[2]-y[1])-Math.abs(x[2]-x[1]))[0];return `<span class="h">${ar[0]}</span> — с ${bn(ar[1])} до ${bn(ar[2])}`})()}.`]},
+      `Наибольший сдвиг в структуре затрат: ${(()=>{const ar=[['производство',A.pd,B.pd],['логистика',A.mv,B.mv],['закупки',A.pc,B.pc],['хранение',A.st,B.st]].sort((x,y)=>Math.abs(y[2]-y[1])-Math.abs(x[2]-x[1]))[0];return `<span class="h">${ar[0]}</span> — с ${bn(ar[1])} до ${bn(ar[2])}`})()}.`,
+      `Мост изменений: маржа ${bn(A.mar)} → <span class="h">${bn(B.mar)}</span>; вклад выручки ${dRev>=0?'+':'−'}${bn(Math.abs(dRev))}, вклад затрат ${(dPd+dMv+dPc+dSt+restCost)>=0?'−':'+'}${bn(Math.abs(dPd+dMv+dPc+dSt+restCost))}.`].filter(Boolean)},
     {t:'Какой вариант эффективнее по блокам',i:verdict.map(v=>
-      `<b>${v.name}</b>: ${v.better==='='?'без изменений':`выигрывает версия <span class="h">${v.better}</span>`}`)},
+      `<b>${v.name}</b>: ${v.better==='='?'без изменений':`выигрывает версия <span class="h">${v.better}</span>`}`).concat([
+      `Сводно по радару и вердикт-борду: <span class="h">${winB>winA?'версия B':winA>winB?'версия A':'паритет'}</span> (B — ${winB}, A — ${winA} из ${verdict.length} блоков).`])},
     {t:'Итоговый вывод и рекомендации',i:[
-      winB>winA?`<span class="h">Версия B предпочтительнее</span> — лучше по ${winB} блокам из ${verdict.length}. Её можно принимать за базовый план при условии, что рост показателей не достигнут за счёт нереалистичных допущений: проверьте блок «Качество данных».`
+      winB>winA?`<span class="h">Версия B предпочтительнее</span> — лучше по ${winB} блокам из ${verdict.length}. Её можно принимать за базовый план при условии, что рост показателей не достигнут за счёт нереалистичных допущений: проверьте блок «Данные и качество».`
         :winA>winB?`<span class="h">Версия A предпочтительнее</span> — лучше по ${winA} блокам из ${verdict.length}. Изменения в версии B ухудшили результат, необходимо разобрать, какие вводные вызвали регресс.`
         :`Версии сопоставимы по числу выигранных блоков — решение принимать по приоритетному блоку: обычно маржа, затем Service Level.`,
       `Если маржа выросла, а Service Level упал — это перераспределение объёма в пользу дорогих позиций. Управленческое решение: приемлемо ли снижение обслуживания клиентов ради маржи.`,
       `Если снизилась логистика, но выросло хранение — затраты просто переехали между статьями. Сравнивать нужно сумму, а не отдельные блоки.`,
-      `Фиксировать версию перед каждым значимым изменением вводных: мощности, тарифы, цены. Так эффект каждого решения будет измерим.`]}]);
-}
+      `Разницу по конкретным продуктам и периодам ищите на тепловой карте «продукт × период»: столбец — период, строка — продукт, цвет — рост или падение маржи относительно базы.`,
+      `Фиксировать версию перед каждым значимым изменением вводных: мощности, тарифы, цены. Так эффект каждого решения будет измерим.`]}]);}
 
 /* ═══════════════ 15. БЛОК: КАЧЕСТВО ДАННЫХ ═══════════════ */
 function tabDQ(){
@@ -3886,9 +4306,8 @@ function tabDQ(){
   const SEV={e:['Критично',CH.err],w:['Предупреждение','#c47512'],i:['Норма',CH.ok]};
 
   const html=`
-  <div class="dq i" style="margin-bottom:14px"><span class="tag">Область анализа</span>
-    <div class="m">Проверки выполняются по <b>всему загруженному набору</b>: ${o.length} заказов и ${ops.length} операций.
-    Они не зависят от активных фильтров — качество данных оценивается целиком.</div></div>
+  <p class="thin-note">Проверки выполняются по <b>всему загруженному набору</b> (${o.length} заказов, ${ops.length} операций)
+  и не зависят от верхних фильтров: качество данных оценивается целиком.</p>
   ${kpisHtml([['Индекс качества данных',score+' из 100',errs+' критических, '+warns+' предупреждений',score>=75?'pos':score>=50?'mid':'neg'],
        ['Проверок выполнено',nf(ch.length),oks+' пройдено успешно',''],
        ['Заказов в наборе',nf(o.length),uq(o,x=>x.p).length+' периодов | '+uq(o,x=>x.prod).length+' продуктов',''],
@@ -4095,6 +4514,29 @@ function tabRAW(){
   ]);
 }
 
+/* ═══════════ 15.2. БЛОК: ДАННЫЕ И КАЧЕСТВО ═══════════
+   Раньше это были две вкладки — «Данные» и «Качество данных»: чтобы понять,
+   можно ли доверять цифрам и посмотреть исходные строки, приходилось прыгать
+   между разделами. Теперь один раздел с переключателем вида: «Качество данных»
+   (проверки инвариантов и полноты) и «Таблицы и реестры» (детальные таблицы
+   заказов/операций и что не задействовано в плане). Оба вида считаются по всему
+   загруженному набору и не зависят от верхних фильтров. */
+function tabDATA(){
+  const seg=`<div class="seg" id="dataView" role="group" aria-label="Вид раздела «Данные и качество»" style="margin-bottom:12px">
+    <button type="button" class="btn ${DATA_VIEW==='dq'?'p':''}" data-dv="dq" aria-pressed="${DATA_VIEW==='dq'}">Проверки качества</button>
+    <button type="button" class="btn ${DATA_VIEW==='raw'?'p':''}" data-dv="raw" aria-pressed="${DATA_VIEW==='raw'}">Таблицы и реестры</button>
+  </div>`;
+  return seg+(DATA_VIEW==='raw'?tabRAW():tabDQ());
+}
+/* Кнопки вида переключают только содержимое раздела — навигация остаётся на
+   «Данные и качество», TAB не меняется */
+function dataViewWire(){
+  const seg=$('#dataView');if(!seg)return;
+  $$('#dataView .btn').forEach(b=>{
+    b.onclick=()=>{const v=b.dataset.dv;if(v===DATA_VIEW)return;DATA_VIEW=v;render()}
+  });
+}
+
 /* ═════════ 14.0b. БЛОК: МОЩНОСТИ ═══════════ */
 /* Фильтр раздела «Мощности» по виду ресурса (колонка «Вид ресурса: наименование»
    выгрузки → поле resType). Пустой список = все виды; выбранные виды складываются
@@ -4265,111 +4707,6 @@ function tabCAPS(){
       `Держать узкие места под контролем до согласования плана: загрузка ≥90% — кандидат на инвестиции или изменение маршрута.`]}]);
 }
 
-/* ═══════════ 14.0c. БЛОК: ЭКОНОМИКА ОТКАЗОВ ═════════ */
-function tabCOST(){
-  const agg=DS.agg||{}, t=agg.totals||{};
-  const pen=DS.penalty||[], penFlat=DS.penaltyFlat||[];
-  const D=fOrders();
-  const hasRates=pen.length>0||penFlat.length>0;
-  /* lm считаем из заказов под текущими фильтрами активным методом и активной базой
-     (lmS = lmVal × масштаб базы): раньше брали серверный t.lm по всей схеме без
-     фильтров, и KPI на одной карточке смешивали фильтрованное (заказы) и
-     нефилтрованное (маржа). */
-  const {B,T}=lmState(D);
-  const lm=T.lm;
-  const penNonDel=num(t.penaltyNonDel)||0, penLate=num(t.penaltyLate)||0;
-  const mar=num(t.mar)||S(D,o=>o.mar);
-  const defOrd=D.filter(o=>o.unm>0);
-  const fActive=Object.values(F).some(a=>a.length);
-  /* Базa «Непокрытый спрос» может дать потери и без дефицитных заказов
-     (спрос не принят в план) — тогда блок не пустой. */
-  if(!hasRates && !defOrd.length && !(lm>0))
-    return '<div class="empty"><h2>Экономика отказов неприменима</h2><p>Таблицы <code>demand_cost</code>/<code>demand_cost_ti</code> не загружены, а дефицитов в плане нет.</p></div>';
-  const rateSrc=pen.length?pen:penFlat;
-  const rates=rateSrc.slice().sort((a,b)=>(b.nonDel||0)-(a.nonDel||0)).slice(0,9);
-  const prLm=grp(defOrd,o=>o.prod,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm)}))
-    .sort((a,b)=>b.lm-a.lm);
-  const K=[
-    ['Упущенная маржа',bn(lm),lmKpiSub(T)+(fActive?'<br>под фильтрами':''),lm?'neg':'',
-      `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`],
-    ['Штраф за непоставку',hasRates?bn(penNonDel):'нет ставок',hasRates?'ставка × дефицитный объём':'справочник demand_cost не загружен',hasRates&&penNonDel?'neg':'mid'],
-    ['Штраф за опоздание',hasRates?bn(penLate):'нет ставок',hasRates?'поздние отгрузки × ставка × периоды':'',hasRates&&penLate?'mid':''],
-    ['Суммарные потери',bn(lm+penNonDel+penLate),mar?pc((lm+penNonDel+penLate)/mar)+' валовой маржи':'','neg'],
-    ['Штрафы к упущенной марже',lm?pc((penNonDel+penLate)/lm):'—','во сколько раз штраф ниже ценности спроса',''],
-    ['Заказов с дефицитом',nf(defOrd.length)+' из '+D.length,pc(D.length?defOrd.length/D.length:0)+' портфеля',''],
-    ['Записей в справочнике ставок',nf(pen.length+penFlat.length),pen.length?'периодные перекрывают безпериодные':'только безпериодные (demand_cost_ti)',hasRates?'':'mid'],
-    ['Средняя ставка непоставки',hasRates?nf(S(rateSrc,r=>r.nonDel||0)/Math.max(rateSrc.length,1))+' ₽/т':'—','средняя по справочнику','']
-  ];
-  const lmPenWarn=LM_MODE==='penalty'&&!lmRef().hasPen;
-  const html=`
-  ${srcFold(lmPenWarn?'w':(hasRates?'i':'w'),
-    lmPenWarn?'метод «Ставка штрафа» активен, но справочник ставок не загружен'
-    :hasRates?`ставки из ${pen.length?'demand_cost':'demand_cost_ti'} · штрафы по всей схеме`
-             :`справочник ставок не загружен · база «${LM_BASES[T.base].t}»`,
-    `${lmPenWarn
-      ?`Метод «Ставка штрафа» активен, но справочник <code>demand_cost</code>/<code>demand_cost_ti</code> не загружен — упущенная маржа пока 0. Загрузите ставки либо верните метод «Маржа заказа».`
-      :hasRates
-      ?`Ставки: <code>${pen.length?'demand_cost (периодные)':'demand_cost_ti (безпериодные)'}</code>. Штрафы считаны как ставка × неудовлетворённый объём${pen.length&&penFlat.length?' (периодные ставки перекрывают безпериодные)':''} и относятся ко всей схеме (не режутся фильтрами).`
-      :`Таблицы ставок не загружены — показана только упущенная маржа (база «${LM_BASES[T.base].t}»).`}`)}
-  ${lmRowHtml()}
-  ${kpisHtml(K)}
-  <div class="grid">
-    <div class="card"><h3>Структура потерь: маржа против штрафов</h3><div class="sub">Из чего складывается цена отказа. Упущенная маржа — по базе «${LM_BASES[T.base].t}»${T.k!==1?` (×${nf(T.k,2)} к дефициту плана)`:''}</div><canvas id="ct1"></canvas></div>
-    <div class="card"><h3>Топ продуктов по упущенной марже</h3><div class="sub">Клик — фильтр по продукту</div><canvas id="ct2"></canvas></div>
-    <div class="card"><h3>Топ ставок штрафа за непоставку</h3><div class="sub">Товар × локация, ₽ за тонну дефицита</div><canvas id="ct3"></canvas></div>
-    <div class="card"><h3>Парето заказов по упущенной марже</h3><div class="sub">Тёмные столбцы формируют 80% потерь</div><canvas id="ct4"></canvas></div>
-    <div class="card w"><h3>Справочник ставок отказов</h3><div class="sub">Сортировка и мультифильтры по товару, локации и потоку</div><div id="ct5"></div></div>
-  </div>`;
-  setTimeout(()=>{
-    chBars('#ct1',H('#ct1',260,0.45),
-      ['Упущенная маржа','Штраф: непоставка','Штраф: опоздание'],
-      [{c:CH.d5,v:[lm,penNonDel,penLate]}],v=>bn(v),
-      i=>`<b>${['Упущенная маржа','Штраф за непоставку','Штраф за опоздание'][i]}</b><br>${bn([lm,penNonDel,penLate][i])}`,null,1,1);
-    if(prLm.length)
-      chH('#ct2',H('#ct2',270,0.52),prLm.slice(0,9).map((p,i)=>({k:p.k,v:p.lm,c:PAL[i%PAL.length],
-        tip:`<b>${p.k}</b><br>Упущенная маржа: ${bn(p.lm)}<br>Дефицит: ${nf(p.unm)} т`})),bn,it=>setF('pr',it.k));
-    else{const g=cv('#ct2',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
-      g.x.fillText('Дефицитов под текущими фильтрами нет',g.w/2,100)}}
-    if(rates.length)
-      chH('#ct3',H('#ct3',270,0.52),rates.map(r=>({k:[r.item,r.loc].filter(Boolean).join(' · ')||'—',
-        v:r.nonDel||0,c:CH.d4,
-        tip:`<b>${r.item||'—'} @ ${r.loc||'—'}</b><br>Поток: ${r.stream||'—'}<br>Ставка непоставки: ${nf(r.nonDel)} ₽/т<br>Ставка опоздания: ${nf(r.lateRate)} ₽/т × ${nf(r.latePeriods)} пер.`})),
-        v=>nf(v)+' ₽/т',null);
-    else{const g=cv('#ct3',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
-      g.x.fillText('Ставки не загружены',g.w/2,100)}}
-    if(defOrd.length)
-      chPareto('#ct4',H('#ct4',280,0.5),defOrd.slice().sort((a,b)=>lmS(b)-lmS(a))
-        .map(o=>({k:`#${o.id} ${o.prod}`,v:lmS(o)})),bn,null);
-    else{const g=cv('#ct4',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
-      g.x.fillText('Дефицитов нет — потери нулевые',g.w/2,100)}}
-    dtable('#ct5',[
-      {k:'item',t:'Товар',left:1,flt:1},
-      {k:'loc',t:'Локация',left:1,flt:1},
-      {k:'dt',t:'Тип спроса',num:1,flt:1},
-      {k:'stream',t:'Поток',left:1,flt:1},
-      {k:'nonDel',t:'Ставка непоставки, ₽/т',num:1,f:v=>nf(v)},
-      {k:'lateRate',t:'Ставка опоздания, ₽/т',num:1,f:v=>nf(v)},
-      {k:'latePeriods',t:'Периодов опоздания',num:1,f:v=>nf(v,1)},
-      {k:'priority',t:'Приоритет (demand_cost_ti)',num:1,flt:1,f:v=>v?nf(v):'—',
-        title:'Приоритет из справочника ставок, а не из заказа: у заказа приоритет — demandtype'},
-      {k:'quota',t:'Квота',num:1,f:v=>v?nf(v):'—'},
-      {k:'grain',t:'Источник',flt:1,f:v=>v==='period'?'demand_cost':'demand_cost_ti'}
-    ],rateSrc,{key:'cost_rates',sort:'nonDel',dir:'desc',h:330,csv:1,name:'penalty_rates'});
-  },0);
-  return html+summary('Резюме: экономика отказов',[
-    {t:'Выводы',i:[
-      `Суммарные потери плана — <span class="h">${bn(lm+penNonDel+penLate)}</span>, из них упущенная маржа ${bn(lm)} по базе «${LM_BASES[T.base].t}»${mar?` (${pc(lm/Math.max(mar,1))} валовой маржи)`:''}${T.uncAvail?`; по дефициту плана — ${bn(T.lmPlan)}, по непокрытому спросу — ${bn(T.lmUnc)}`:''}.`,
-      hasRates?`Штрафы по справочнику — <span class="h">${bn(penNonDel+penLate)}</span>. ${lm>(penNonDel+penLate)*10?'Упущенная маржа многократно превышает штрафы: тарифы в модели занижены относительно реальной ценности спроса — оптимизатор «экономит» на обслуживании клиентов.':'Штрафы сопоставимы с упущенной маржей — тарифная настройка сбалансирована.'}`
-        :`Ставки не загружены: штрафы не оцениваются, решение о приемлемости дефицита принимается только по упущенной марже.`,
-      defOrd.length?`Дефицит затрагивает <span class="h">${nf(defOrd.length)}</span> из ${D.length} заказов; топ-позиция потерь — <span class="h">${(prLm[0]||{k:'—'}).k}</span>.`:`Дефицитов нет.`]},
-    {t:'Рекомендации',i:[
-      hasRates&&lm>(penNonDel+penLate)*3
-        ?`Пересмотреть ставки nondelcostrate: заниженный штраф заставляет оптимизатор отказывать маржинальному спросу. Ставка должна отражать упущенную маржу на тонну, а не договорную неустойку.`
-        :`Использовать справочник ставок как есть: текущая настройка согласована с ценностью спроса.`,
-      `Проверить, что ставки заданы для всех значимых товарно-локационных комбинаций: отсутствие ставки = нулевой штраф, и оптимизатор игнорирует такой спрос.`,
-      `Сверять упущенную маржу с разделом «Спрос и покрытие»: расхождение между вкладками говорит о выбранном методе оценки (переключатель в панели фильтров), а не об ошибке данных.`
-    ]}]);
-}
 
 /* ════════ 15.2. БЛОК: ЦЕПОЧКА ЗАКАЗА ═════════ */
 let SELECTED_ORDER_ID=null;
@@ -6205,12 +6542,53 @@ async function loadFiles(fileList){
   }
 }
 /* ═══════════════ 17. РЕНДЕР И ИНИЦИАЛИЗАЦИЯ ═══════════════ */
-function go(tab){TAB=tab;render()}
+/* Переход по вкладке. Старые идентификаторы сохранены как алиасы:
+   'cost' (раздел удалён) → «Общий»; 'dq'/'raw' (разделы объединены) →
+   «Данные и качество» с соответствующим видом внутри. */
+function go(tab){
+  if(tab==='dq'||tab==='raw'){DATA_VIEW=(tab==='raw')?'raw':'dq';tab='data'}
+  if(tab==='cost')tab='ov';
+  TAB=tab;render();
+}
+/* Подпись активной версии в шапке: техническое имя схемы (если подключён
+   ClickHouse) либо имя загруженного файла/демо-набора. Полное имя — в title. */
+function verCaption(){
+  if(!DS)return null;
+  /* Версии ClickHouse живут в CHX.versions, но после перезагрузки страницы
+     коннектор восстанавливает их позже — до этого момента пользуемся снимком
+     DS._chVersions, иначе в шапке «пропадала» активная схема. */
+  const chv=((window.CHX&&CHX.versions&&CHX.versions.length)?CHX.versions:(DS._chVersions||[]));
+  let tech='',label='',kind='файл';
+  if(chv.length){
+    const base=chv.find(v=>v.isBase)||chv[0];
+    tech=base?String(base.id||''):'';
+    label=base?String(base.label||''):'';
+    if(label===tech)label='';              /* сценарий не расшифрован — не дублируем */
+    kind='ClickHouse';
+  }else if(DS._demo){kind='демо-набор'}
+  else if(DS.src==='clickhouse'){kind='ClickHouse'}
+  return {name:String(DS.name||'Датасет'),tech,label,kind};
+}
+/* Подпись активной версии в шапке: имя набора (или понятное имя версии, если
+   сценарий расшифрован) + тип источника + техническое имя схемы. Живёт вне
+   #stat, поэтому не исчезает после загрузки файла и не перекрывается
+   сообщениями о состоянии подключения. */
+function paintVerCaption(){
+  const el=$('#pgVer');if(!el)return;
+  if(!DS){el.innerHTML='';return}
+  const v=verCaption();
+  const main=v.label||v.name;
+  const tail=[v.kind,v.label&&v.label!==v.name?v.name:'',v.tech?'схема '+v.tech:''].filter(Boolean);
+  el.innerHTML=`<span class="hv-t">Активная версия</span>`
+    +`<span class="hv-v" title="${esc([v.label,v.name,v.tech].filter(Boolean).join(' · '))}">${esc(main)}</span>`
+    +`<span class="hv-s">· ${esc(tail.join(' · '))}</span>`;
+}
 function render(){
   if(!DS){
     $('#nav').innerHTML='';$('#fpanel').style.display='none';
     $('#pgTitle').textContent='Данные не загружены';
     $('#pgSub').textContent='';
+    paintVerCaption();
     $('#main').innerHTML='<div class="empty"><h2>Данные не загружены</h2>'
       +'<p>Нажмите кнопку загрузки в шапке и выберите файл со структурой листа <code>marking_demand</code>.</p></div>';
     STAT_PIN=false;
@@ -6224,15 +6602,18 @@ function render(){
   const cur=TABS.find(t=>t[0]===TAB)||TABS[0];
   $('#pgTitle').textContent=cur[1];
   $('#pgSub').textContent=TSUB[TAB]||'';
+  paintVerCaption();
   fillSelects();
   const V={ov:tabOV,dm:tabDM,tree:tabTREE,lg:tabLG,pd:tabPD,caps:tabCAPS,
-    pc:tabPC,st:tabST,cost:tabCOST,raw:tabRAW,
-    vs:tabVsRoute, dq:tabDQ};
-  try{$('#main').innerHTML=(V[TAB]||tabOV)();decorateCards()}
+    pc:tabPC,st:tabST,data:tabDATA,
+    vs:tabVsRoute, dq:tabDQ, raw:tabRAW};
+  try{$('#main').innerHTML=(V[TAB]||tabOV)();decorateCards();fitKpiValues()}
   catch(err){$('#main').innerHTML=`<div class="empty"><h2 class="neg">Ошибка отрисовки блока</h2><p>${esc(err.message)}</p></div>`;console.error(err)}
   /* строка методов упущенной маржи живёт в контенте релевантных блоков (LM_TABS):
      после пересборки #main перевешиваем обработчики; в остальных блоках #lmSeg нет */
   lmSegBuild();
+  /* переключатель вида объединённого раздела «Данные и качество» */
+  dataViewWire();
   if(!STAT_PIN)
     $('#stat').innerHTML=`${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций | периоды ${uq(DS.orders,o=>o.p).sort((a,b)=>a-b).join(', ')}`;
 }

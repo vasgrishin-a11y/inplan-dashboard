@@ -318,41 +318,32 @@ test('фильтр по виду ресурса переживает перез�
 
 /* ─────────── 4. Инфостроки «Источник» свёрнуты ─────────── */
 
-test('строки «Источник» свёрнуты, а предупреждения — раскрыты', async (t) => {
+test('справочные строки «Источник» убраны, а предупреждения остались тонкой строкой', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
 
-  for (const tab of ['dm', 'cost']) {
-    await ctx.go(tab, 160);
-    const fold = ctx.document.querySelector('#main details.src-fold');
-    assert.ok(fold, `в «${tab}» инфострока свёрнута в <details>`);
-    const sum = fold.querySelector('summary');
-    assert.ok(sum, 'есть <summary> — по нему раскрывают детали');
-    const tag = sum.querySelector('.tag');
-    assert.ok(tag, 'в свёрнутом виде виден тег строки');
-    const brief = sum.querySelector('.sf-b');
-    assert.ok(brief && brief.textContent.trim().length > 10,
-      'в свёрнутом виде видна суть, а не только слово «Источник»');
-    const body = fold.querySelector('.dq .m');
-    assert.ok(body && body.textContent.trim().length > 20, 'полный текст строки сохранён внутри');
-
-    const sev = [...(fold.querySelector('.dq') || {}).classList || []].filter((c) => c !== 'dq')[0];
-    const isOpen = fold.hasAttribute('open');
-    if (sev === 'i') {
-      assert.equal(isOpen, false, `«${tab}»: обычная инфострока по умолчанию свёрнута`);
-    } else {
-      assert.equal(isOpen, true, `«${tab}»: предупреждение (${sev}) прятать нельзя — оно раскрыто`);
-    }
-  }
-
-  /* В «Спрос и покрытие» при базе «непокрытый спрос» строка информационная */
+  /* Без фильтров данные полные — справочных блоков в начале разделов нет */
   await ctx.go('dm', 160);
-  const fold = ctx.document.querySelector('#main details.src-fold');
-  assert.equal(fold.querySelector('.tag').textContent.trim(), 'Источник',
-    'свёрнутая строка помечена как «Источник»');
-  const looseSrc = [...ctx.document.querySelectorAll('#main > .dq')]
-    .filter((el) => /Источник/.test(el.textContent));
-  assert.deepEqual(looseSrc, [], 'несвёрнутого баннера «Источник» в начале раздела больше нет');
+  assert.equal(ctx.document.querySelector('#main details.src-fold'), null,
+    'блок «Источник и методика» из «Спрос и покрытие» убран');
+  assert.equal(ctx.document.querySelector('#main details.src-warn'), null,
+    'когда данные полные, предупреждать не о чем');
+  const looseSrc = [...ctx.document.querySelectorAll('#main .dq, #main .dq.i')]
+    .filter((el) => /^Источник/.test(el.textContent.trim()));
+  assert.deepEqual(looseSrc, [], 'несвёрнутого баннера «Источник» в начале раздела нет');
+
+  /* С активным фильтром неограниченный спрос недоступен — это предупреждение,
+     оно обязано остаться видимым (тонкой строкой, не карточкой) */
+  ctx.ev(`F.p=['0']; render()`);   // значения фильтров хранятся строками
+  await ctx.tick(120);
+  const warn = ctx.document.querySelector('#main details.src-warn');
+  assert.ok(warn, 'при неполных данных показано предупреждение');
+  const sum = warn.querySelector('summary');
+  assert.ok(sum && sum.querySelector('.sf-b').textContent.trim().length > 10,
+    'суть предупреждения видна в одну строку');
+  assert.ok(warn.querySelector('.dq .m').textContent.trim().length > 20,
+    'полный текст предупреждения доступен по клику');
+  ctx.ev(`clearF(); render()`);
 });
 
 /* ─────────── 5. Тултип-пояснение у каждого расчётного показателя ─────────── */
@@ -365,7 +356,7 @@ test('у расчётных KPI есть пояснение: формула и �
   const ctx = await loadApp();
   t.after(ctx.close);
 
-  const tabs = ['ov', 'dm', 'caps', 'cost', 'pd', 'pc', 'lg', 'st', 'raw', 'dq', 'tree'];
+  const tabs = ['ov', 'dm', 'caps', 'pd', 'pc', 'lg', 'st', 'raw', 'dq', 'tree'];
   let checked = 0, withHelp = 0;
   const missing = [];
 
@@ -380,7 +371,8 @@ test('у расчётных KPI есть пояснение: формула и �
       const title = card.querySelector('.t').textContent.trim();
       if (SERVICE_CARDS.has(title)) continue;
       checked++;
-      const help = card.getAttribute('data-help') || '';
+      const q = card.querySelector('.kpi-q');
+      const help = (q && q.getAttribute('data-help')) || card.getAttribute('data-help') || '';
       if (help.trim().length > 20) withHelp++;
       else missing.push(`${tab}: ${title}`);
     }
@@ -398,15 +390,17 @@ test('пояснение показывает формулу и источник
 
   const card = ctx.kpi('Средняя утилизация');
   assert.ok(card, 'карточка «Средняя утилизация» есть');
-  const help = card.getAttribute('data-help');
-  assert.match(help, /load/, 'в пояснении названы слагаемые формулы');
-  assert.match(help, /avail/, 'в пояснении назван знаменатель');
-  const plain = card.getAttribute('title');
-  assert.ok(plain && !/<[^>]+>/.test(plain), 'в title — тот же текст без разметки (его читают скринридеры)');
-
-  /* Значок «?» — точка входа с клавиатуры; заголовок карточки остаётся чистым */
+  /* Значок «?» — единственная точка входа: подсказка не висит на карточке
+     (иначе она выскакивала при наведении на любое место карточки) */
+  assert.equal(card.getAttribute('data-help'), null, 'на карточке нет data-help');
+  assert.equal(card.getAttribute('title'), null, 'нативный title убран — он дублировал кастомную подсказку');
   const q = card.querySelector('.kpi-q');
   assert.ok(q, 'у карточки есть значок «?»');
+  const help = q.getAttribute('data-help');
+  assert.match(help, /load/, 'в пояснении названы слагаемые формулы');
+  assert.match(help, /avail/, 'в пояснении назван знаменатель');
+  assert.ok((q.getAttribute('aria-label') || '').length > 20,
+    'у значка есть текстовая альтернатива без разметки');
   assert.equal(q.getAttribute('tabindex'), '0', 'значок достижим с клавиатуры');
   assert.ok((q.getAttribute('aria-label') || '').length > 20, 'у значка есть текстовая альтернатива');
   assert.equal(card.querySelector('.t').textContent.trim(), 'Средняя утилизация',
@@ -427,12 +421,16 @@ test('в сравнении версий у показателей тоже ес
 
   const cards = [...ctx.document.querySelectorAll('#main .kpi')];
   assert.ok(cards.length >= 5, `карточки сравнения версий отрисованы (${cards.length})`);
-  const missing = cards.filter((c) => (c.getAttribute('data-help') || '').length <= 20)
-    .map((c) => c.querySelector('.t').textContent.trim());
+  /* Пояснение живёт на значке «?», а не на карточке (карточка не должна
+     показывать подсказку при наведении на любое своё место). */
+  const missing = cards.filter((c) => {
+    const q = c.querySelector('.kpi-q');
+    return !q || (q.getAttribute('data-help') || '').length <= 20;
+  }).map((c) => c.querySelector('.t').textContent.trim());
   assert.deepEqual(missing, [], 'у всех показателей сравнения есть пояснение');
 });
 
-test('пояснение показывается наведением мыши и фокусом с клавиатуры', async (t) => {
+test('подсказка выскакивает только на значке «?», а не на карточке', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
   await ctx.go('ov', 140);
@@ -447,21 +445,33 @@ test('пояснение показывается наведением мыши 
   }));
 
   assert.notEqual(tip.style.display, 'block', 'до наведения тултип скрыт');
+
+  /* Наведение на САМУ карточку подсказку не показывает (раньше показывало
+     и дублировалось нативным title) */
   fire(card, 'mousemove', 320, 240);
   await ctx.tick(10);
-  assert.equal(tip.style.display, 'block', 'при наведении на карточку тултип показан');
+  assert.notEqual(tip.style.display, 'block',
+    'наведение на карточку не показывает подсказку — только значок «?»');
+  assert.equal(card.getAttribute('title'), null, 'нативного title у карточки нет');
+
+  /* Значок «?» — точка входа для мыши */
+  const q = card.querySelector('.kpi-q');
+  assert.ok(q, 'у карточки есть значок «?»');
+  fire(q, 'mousemove', 360, 250);
+  await ctx.tick(10);
+  assert.equal(tip.style.display, 'block', 'наведение на значок «?» показывает пояснение');
   assert.ok(tip.innerHTML.length > 20, 'в тултипе есть текст пояснения');
   assert.match(tip.innerHTML, /марж|Марж/, 'пояснение — про этот показатель');
   assert.ok(tip.style.left && tip.style.top, 'тултип позиционирован');
 
-  fire(card, 'mouseout');
+  fire(q, 'mouseout');
   await ctx.tick(10);
   assert.notEqual(tip.style.display, 'block', 'при уходе мыши тултип скрыт');
 
-  const q = card.querySelector('.kpi-q');
+  /* Клавиатура: фокус на значке тоже показывает пояснение */
   q.dispatchEvent(new ctx.window.FocusEvent('focusin', { bubbles: true }));
   await ctx.tick(10);
-  assert.equal(tip.style.display, 'block', 'фокус на значке «?» тоже показывает пояснение');
+  assert.equal(tip.style.display, 'block', 'фокус на значке «?» показывает пояснение');
   q.dispatchEvent(new ctx.window.FocusEvent('focusout', { bubbles: true }));
   await ctx.tick(10);
   assert.notEqual(tip.style.display, 'block', 'после снятия фокуса тултип скрыт');
@@ -476,7 +486,9 @@ test('во вкладке «Данные» видно, что не задейс�
 
   const kpi = ctx.kpi('Не задействовано в плане');
   assert.ok(kpi, 'KPI «Не задействовано в плане» есть');
-  assert.ok(kpi.getAttribute('data-help'), 'у KPI есть пояснение, как он считается');
+  const kq = kpi.querySelector('.kpi-q');
+  assert.ok(kq && (kq.getAttribute('data-help') || '').length > 20,
+    'у KPI есть пояснение, как он считается');
 
   const cv = ctx.document.getElementById('rUn');
   assert.ok(cv && cv.tagName === 'CANVAS', 'график незадействованных нарисован на канвасе');

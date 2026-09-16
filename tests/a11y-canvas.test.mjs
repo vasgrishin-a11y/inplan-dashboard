@@ -103,6 +103,11 @@ async function loadApp(seed = {}) {
     ev: (code) => window.eval(code),
     /** все канвасы вкладки: id, роль, альтернатива */
     async canvases(tab) {
+      /* «Сравнение версий» рисует графики только когда есть хотя бы одна
+         сохранённая версия — кладём снапшот текущего датасета в историю */
+      if (tab === 'vs') {
+        window.eval("localStorage.setItem('sop_vers', JSON.stringify([snap(DS)]))");
+      }
       window.eval(`go('${tab}')`);
       await new Promise((r) => setTimeout(r, 220));
       return [...window.document.querySelectorAll('#main canvas')].map((c) => ({
@@ -115,7 +120,10 @@ async function loadApp(seed = {}) {
   };
 }
 
-const TABS_WITH_CHARTS = ['ov', 'dm', 'tree', 'lg', 'pd', 'caps', 'pc', 'st', 'cost', 'dq'];
+/* «Экономика отказов» удалена, «Данные» и «Качество данных» объединены в один
+   раздел с двумя видами — проверяем оба вида ('dq' и 'raw') и обогащённое
+   «Сравнение версий». */
+const TABS_WITH_CHARTS = ['ov', 'dm', 'tree', 'lg', 'pd', 'caps', 'pc', 'st', 'vs', 'dq', 'raw'];
 
 test('у каждого графика на каждой вкладке есть роль и текстовая альтернатива', async (t) => {
   const ctx = await loadApp();
