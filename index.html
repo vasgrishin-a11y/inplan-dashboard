@@ -1832,6 +1832,17 @@ function canvasW(id){
 }
 function cv(id,h){
   const c=$(id);if(!c)return null;
+  /* a11y (CODE_AUDIT.md, C2): содержимого канваса для скринридера не существует,
+     поэтому каждому графику ставим role="img" и текстовую альтернативу из
+     заголовка и подписи карточки — они же объясняют, что нарисовано. Подпись
+     меняется при переключении разреза, поэтому пересчитываем на каждой отрисовке.
+     Данные графика продублированы таблицами в тех же блоках. */
+  const card=c.closest('.card');
+  const alt=[card&&card.querySelector('h3')&&card.querySelector('h3').textContent,
+             card&&card.querySelector('.sub')&&card.querySelector('.sub').textContent]
+    .filter(Boolean).join('. ').replace(/\s+/g,' ').trim();
+  c.setAttribute('role','img');
+  if(alt)c.setAttribute('aria-label',alt.slice(0,300));
   const r=Math.max(1,Math.min(devicePixelRatio||1,3));
   const w=canvasW(id);
   c.width=Math.round(w*r);c.height=Math.round(h*r);
