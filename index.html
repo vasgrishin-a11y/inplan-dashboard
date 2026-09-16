@@ -420,10 +420,22 @@ input[type=number]{font-family:'Open Sans',sans-serif}
   font-weight:600;color:var(--scp-text-2);background:var(--scp-surface)}
 .vb.ok .vb-badge{color:var(--scp-ok);border-color:var(--scp-ok)}
 .vb.bad .vb-badge{color:var(--scp-err);border-color:var(--scp-err)}
-/* Панель масштаба графа потоков: −, +, «вся цепочка» и подсказка по жестам */
+/* «Свод спроса» после резюме: отбивка от блока summary, чтобы сверка тождеств
+   читалась как завершающий раздел, а не как продолжение выводов */
+.recon-tail{margin-top:14px}
+/* Панель графа потоков: «Вся цепочка» и подсказка по жестам.
+   Кнопки +/− убраны (задача владельца): масштаб — колесом, сброс — кнопкой. */
 .flow-tools{display:flex;align-items:center;gap:6px;margin:0 0 8px}
 .flow-tools .btn{padding:4px 10px;font-size:12.5px;line-height:18px}
+.flow-tools .btn[disabled]{opacity:.45;cursor:default;background:var(--scp-surface);
+  border-color:var(--scp-line-2);color:var(--scp-text-3)}
+.flow-tools .btn[disabled]:hover{background:var(--scp-surface);border-color:var(--scp-line-2)}
 .flow-hint{font-size:11.5px;color:var(--scp-text-3)}
+/* Строка-пояснение под графом, когда выбран узел и показана сквозная цепочка */
+.chain-note{font-size:12px;line-height:17px;color:var(--scp-text-2);margin:0 0 8px;
+  padding:7px 11px;border-left:3px solid var(--scp-accent);border-radius:var(--r-s);
+  background:var(--scp-b-50,var(--scp-n-50))}
+.chain-note b{color:var(--scp-accent)}
 @media(max-width:920px){.flow-hint{display:none}}
 .tbar-note{font-size:12px;color:var(--scp-text-3)}
 .tbar-link{color:var(--scp-accent);cursor:pointer;font-weight:600}
@@ -865,6 +877,13 @@ let LG_FLOW_LAYER='distrib'; // 'distrib' | 'interplant' | 'inbound' | 'all'
 /* Виды транспорта на графе потоков: мультивыбор. Пустой массив = все виды
    (раньше было одно значение LG_FLOW_TM — переключение «или/или»). */
 let LG_FLOW_TMS=[];
+/* Ключ камеры/перерисовки графа потоков. chFlow регистрирует FLOW_VIEW и REDRAW
+   по переданному id, а id — это селектор '#l3'. Панель управления раньше
+   обращалась к 'l3' без решётки и молча промахивалась мимо обоих реестров. */
+const FLOW_ID='#l3';
+/* Контур, выбранный пользователем до клика по узлу: при выборе узла граф
+   автоматически расширяется до сквозной сети, а после снятия — возвращается. */
+let LG_LAYER_BEFORE_NODE=null;
 
 /* ═══════════════ 3. УТИЛИТЫ ═══════════════ */
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
@@ -1806,6 +1825,49 @@ function fOps(excludeKey=null){
   });
 }
 
+/* Операции СКВОЗНОЙ цепочки узла (задача владельца 2026-09-16).
+   fOps() при выбранном узле оставляет только операции, одним концом касающиеся
+   этого узла, — граф вырождался в «ближайших соседей». Здесь заказы отбираются
+   как обычно (fOrders учитывает F.nd: остаются заказы, чья цепочка проходит
+   через узел), но операции этих заказов НЕ режутся по узлу — поэтому видна вся
+   цепочка: поставщик → переделы → завод → порт → отгрузка → клиент.
+   Остальные фильтры (завод, поставщик, транспорт) продолжают действовать. */
+function fOpsChain(){
+  const ids = new Set(fOrders().map(o=>o.id));
+  return DS.ops.filter(r=>{
+    if(!ids.has(r.o)) return false;
+    if(F.pl.length &&
+       !(F.pl.includes(r.pl)||(r.type==='movement'&&(F.pl.includes(r.fr)||F.pl.includes(r.to))))) return false;
+    if(F.vd.length && !F.vd.includes(r.vd)) return false;
+    if(F.tm.length && !F.tm.includes(r.tm)) return false;
+    return true;
+  });
+}
+
+/* Транзитивное замыкание по направлению потока: от узла вверх (все предки —
+   поставщики и переделы) и вниз (все потомки — получатели, склады, клиенты).
+   Возвращает множества достижимых узлов и плеч. Обход в ширину, устойчив к
+   циклам в сети (узел-посредник, возвраты). */
+function flowChainOf(legsList,startNode){
+  const nodes=new Set(),legsIn=new Set();
+  if(!startNode)return {nodes,legs:legsIn};
+  nodes.add(startNode);
+  const walk=dir=>{
+    const q=[startNode],seen=new Set([startNode]);
+    while(q.length){
+      const cur=q.shift();
+      legsList.forEach(l=>{
+        const from=dir==='down'?l.fr:l.to, to=dir==='down'?l.to:l.fr;
+        if(from!==cur)return;
+        legsIn.add(l);nodes.add(to);
+        if(!seen.has(to)){seen.add(to);q.push(to)}
+      });
+    }
+  };
+  walk('down');walk('up');
+  return {nodes,legs:legsIn};
+}
+
 /* ═══════════════ 5. ФИЛЬТРЫ UI ═══════════════ */
 const POPQ={};
 function fillSelects(){
@@ -2491,9 +2553,13 @@ function chFlow(id,h,legsList,fmt,cb){
     });
   });
 
-  // Множество связанных с выбранным узлом
-  const isConnectedLeg = l => !activeSelectedNode || l.fr===activeSelectedNode || l.to===activeSelectedNode;
-  const isConnectedNode = n => !activeSelectedNode || n.id===activeSelectedNode || legsList.some(l=>(l.fr===activeSelectedNode&&l.to===n.id)||(l.to===activeSelectedNode&&l.fr===n.id));
+  /* Сквозная цепочка выбранного узла: транзитивное замыкание вверх и вниз по
+     потоку (родитель → дети → внуки …), а не одно колено соседей. Раньше здесь
+     подсвечивались только прямые соседи, из-за чего цепь «терялась» на втором
+     шаге. Плечи цепочки выделяются, всё остальное приглушается. */
+  const chainSel = activeSelectedNode ? flowChainOf(legsList,activeSelectedNode) : null;
+  const isConnectedLeg = l => !chainSel || chainSel.legs.has(l);
+  const isConnectedNode = n => !chainSel || chainSel.nodes.has(n.id);
 
   // Отрисовка лент потоков (Sankey Bezier)
   const maxLegVol=Math.max(...legsList.map(l=>l.v),1);
@@ -2501,7 +2567,9 @@ function chFlow(id,h,legsList,fmt,cb){
     const src=nodeMap.get(l.fr),dst=nodeMap.get(l.to);
     if(!src||!dst)return;
 
-    const isHl = activeSelectedNode ? (l.fr===activeSelectedNode || l.to===activeSelectedNode) : false;
+    /* Подсвечивается всё плечо сквозной цепочки, а не только примыкающее к
+       выбранному узлу: пользователь видит путь целиком от сырья до клиента. */
+    const isHl = activeSelectedNode ? isConnectedLeg(l) : false;
     const isDim = activeSelectedNode ? !isHl : false;
 
     let sx=src.x+src.w,sy=src.y+src.h/2;
@@ -3131,6 +3199,21 @@ function tabDM(){
     ['Заказов без дефицита',pc(full/D.length),`${full} из ${D.length}`,full/D.length>=.85?'pos':'mid']
   ];
 
+  /* «Свод спроса» — карточка-сверка тождеств. По задаче владельца (2026-09-16)
+     она переехала в самый конец раздела, ПОСЛЕ резюме: сначала выводы, потом
+     арифметическая проверка, на которую эти выводы ссылаются. Карточка вынесена
+     из сетки графиков и склеивается с summary() в конце функции. */
+  const reconCard=`<div class="grid recon-tail">
+    <div class="card w"><h3>Свод спроса: как складываются цифры</h3>
+      <div class="sub">Тождества между неограниченным спросом, планом, отгрузкой и непокрытым объёмом — проверка «бьётся / не бьётся»${B.demo?' · демо-агрегат (в демо нет demand_coverage)':''}</div>
+      ${covReconHtml(B,T,rev?mar/rev:0)}
+      <p class="rec-note"><b>Как читать:</b> неограниченный спрос — сколько всего хотели клиенты; ограниченный спрос — сколько оптимизатор принял в план;
+      «не принято в план» — спрос, отсечённый ограничениями до плана; «дефицит плана» — что не отгрузили из принятого;
+      «не покрыто всего» — сумма двух потерь, это и есть база упущенной маржи при выборе «Непокрытый спрос».
+      Строки «по построению» следуют из определений и расходятся только при ошибке данных; строки «сверка источников» независимо сравнивают
+      <code>demand_coverage</code> и <code>marking_demand</code>.</p></div>
+  </div>`;
+
   const html=`
   ${srcFold(useUnc?'i':'w',
     (B.demo?'демо-агрегат покрытия · ':'')+(useUnc
@@ -3144,14 +3227,6 @@ function tabDM(){
   <div class="grid">
     <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
       <div class="sub">Тонны. Синие столбцы — уровни, красные — потери на каждом шаге. Клик по «Дефицит плана» — к таблице ниже</div><canvas id="d0"></canvas></div>
-    <div class="card w"><h3>Свод спроса: как складываются цифры</h3>
-      <div class="sub">Тождества между неограниченным спросом, планом, отгрузкой и непокрытым объёмом — проверка «бьётся / не бьётся»${B.demo?' · демо-агрегат (в демо нет demand_coverage)':''}</div>
-      ${covReconHtml(B,T,rev?mar/rev:0)}
-      <p class="rec-note"><b>Как читать:</b> неограниченный спрос — сколько всего хотели клиенты; ограниченный спрос — сколько оптимизатор принял в план;
-      «не принято в план» — спрос, отсечённый ограничениями до плана; «дефицит плана» — что не отгрузили из принятого;
-      «не покрыто всего» — сумма двух потерь, это и есть база упущенной маржи при выборе «Непокрытый спрос».
-      Строки «по построению» следуют из определений и расходятся только при ошибке данных; строки «сверка источников» независимо сравнивают
-      <code>demand_coverage</code> и <code>marking_demand</code>.</p></div>
     <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду</div>
       ${lg('#d1',[[CH.d3,'Отгружено'],[CH.d5,'Дефицит'],[CH.warn,'Service Level']])}<canvas id="d1"></canvas></div>
     <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div><canvas id="d2"></canvas></div>
@@ -3260,12 +3335,18 @@ function tabDM(){
       `По каждому дефицитному заказу смотреть колонки RCA: перегруз производства, блокировка маршрута и сырьё — три разных управленческих решения.`,
       useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>demand_coverage</code>, чтобы водопад начинался с неограниченного спроса, а упущенная маржа считалась по непокрытому спросу, а не только по дефициту плана.`,
       covIds(B).filter(i=>!i.ok).length
-        ?`<span class="h">Тождества спроса не сходятся</span>: ${covIds(B).filter(i=>!i.ok).map(i=>i.t).join('; ')} — разбор в карточке «Свод спроса».`
-        :`Все тождества спроса сходятся — карточка «Свод спроса» подтверждает равенства числами.`]}]);
+        ?`<span class="h">Тождества спроса не сходятся</span>: ${covIds(B).filter(i=>!i.ok).map(i=>i.t).join('; ')} — разбор в карточке «Свод спроса» ниже.`
+        :`Все тождества спроса сходятся — карточка «Свод спроса» ниже подтверждает равенства числами.`]}])
+    +reconCard;
 }
 /* ═══════════════ 10. БЛОК: ЛОГИСТИКА ═══════════════ */
 function tabLG(){
-  const O=fOps().filter(r=>r.type==='movement');
+  /* Выбранный на графе узел. При выборе раздел переключается на СКВОЗНУЮ
+     цепочку: берутся все плечи заказов, проходящих через узел (fOpsChain),
+     а не только операции, касающиеся узла. Так KPI, графики и «Матрица плеч»
+     отвечают на вопрос «сколько стоит вся цепочка через этот объект». */
+  const selNode=F.nd.length?F.nd[0]:null;
+  const O=(selNode?fOpsChain():fOps()).filter(r=>r.type==='movement');
   if(!O.length)return '<div class="empty">Нет операций перемещения под текущими фильтрами</div>';
   const real=O.filter(r=>!r.stub);
   const cost=S(real,r=>r.cost),vol=S(O,r=>r.v);
@@ -3303,7 +3384,11 @@ function tabLG(){
    ['Строк-заглушек',pc(O.filter(r=>r.stub).length/O.length),'тариф не более 1 ₽/т','mid'],
    ['Уникальных плеч',nf(legs.length),'узлов сети: '+uq(O,r=>r.fr).length,'']];
 
-  // Фильтрация плеч под выбранный контур и вид транспорта
+  /* Фильтрация плеч под выбранный контур и вид транспорта.
+     При выборе узла контур автоматически раскрывается до сквозной сети (это
+     делается в обработчике клика, чтобы кнопка контура подсветилась и чтобы
+     пользователь мог потом сузить контур вручную): цепочка по определению
+     пересекает контуры — «Дистрибуция» скрыла бы снабжение того же завода. */
   let flowLegs = legs.filter(l=>l.fr&&l.to);
   if(LG_FLOW_LAYER==='distrib') flowLegs = flowLegs.filter(l=>l.layer==='distrib');
   else if(LG_FLOW_LAYER==='interplant') flowLegs = flowLegs.filter(l=>l.layer==='interplant');
@@ -3322,7 +3407,12 @@ function tabLG(){
   /* Ограничение «первые 32 плеча» убрано: граф больше не теряет часть цепочки.
      Если объектов много, камера по умолчанию вписывает всю сеть в окно, а
      масштаб и перетаскивание дают рассмотреть нужный участок. */
-  const dispFlowLegs = flowLegs;
+  /* Сквозная цепочка выбранного узла: транзитивное замыкание вверх и вниз по
+     потоку. Плечи, не входящие в цепочку (например, соседний завод, снабжающий
+     другого клиента), из графа убираются — остаётся именно цепь узла. */
+  const chain = selNode ? flowChainOf(flowLegs,selNode) : null;
+  const dispFlowLegs = chain ? flowLegs.filter(l=>chain.legs.has(l)) : flowLegs;
+  const chainNodeCount = chain ? chain.nodes.size : 0;
   const hasClientFilter = F.cl.length>0||F.pr.length>0;
 
   const html=`
@@ -3349,12 +3439,14 @@ function tabLG(){
           aria-pressed="${tmSel.includes(t)}" title="Клик — добавить или убрать вид; можно выбрать несколько">${TM_ICONS[t]||t} <b>${nf(tmCount.get(t)||0)}</b></button>`).join('')}
         ${tmSel.length?`<span class="tbar-note">Показано ${nf(flowLegs.length)} плеч · выбрано видов: ${tmSel.length} · <a id="lgTmClear" class="tbar-link">сбросить</a></span>`:''}
       </div>
-      <div class="flow-tools" role="group" aria-label="Масштаб графа потоков">
-        <button class="btn" id="lgZoomOut" title="Отдалить" aria-label="Отдалить">−</button>
-        <button class="btn" id="lgZoomIn" title="Приблизить" aria-label="Приблизить">+</button>
-        <button class="btn" id="lgZoomFit" title="Вписать всю цепочку в окно">⤢ Вся цепочка</button>
+      <div class="flow-tools" role="group" aria-label="Вид графа потоков">
+        <button class="btn" id="lgZoomFit" title="Показать всю сеть: сбросить масштаб и снять выделение узла">⤢ Вся цепочка</button>
         <span class="flow-hint">Колесо — масштаб · перетаскивание — сдвиг · двойной клик — вся цепочка</span>
       </div>
+      ${selNode?`<div class="chain-note">Выбран узел <b>${esc(selNode)}</b>: показана сквозная цепочка
+        (${nf(chainNodeCount)} ${plural(chainNodeCount,['объект','объекта','объектов'])}, ${nf(dispFlowLegs.length)} ${plural(dispFlowLegs.length,['плечо','плеча','плеч'])})
+        — все переделы выше и ниже по потоку, а не только ближайшие соседи. Показатели раздела считаются по заказам, проходящим через узел.
+        <a id="lgChainClear" class="tbar-link">снять выделение</a></div>`:''}
       <canvas id="l3"></canvas>
     </div>
     <div class="card"><h3>Затраты по виду транспорта</h3><div class="sub">Клик — фильтр по виду</div><canvas id="l1"></canvas></div>
@@ -3367,7 +3459,7 @@ function tabLG(){
   setTimeout(()=>{
     /* Слушатели переключателя контуров. Смена контура сбрасывает и виды
        транспорта, и камеру графа: набор плеч меняется целиком. */
-    const setLayer=l=>{LG_FLOW_LAYER=l;LG_FLOW_TMS=[];flowReset('l3');render()};
+    const setLayer=l=>{LG_FLOW_LAYER=l;LG_FLOW_TMS=[];flowReset(FLOW_ID);render()};
     if($('#lgLayerDistrib'))$('#lgLayerDistrib').onclick=()=>setLayer('distrib');
     if($('#lgLayerInter'))$('#lgLayerInter').onclick=()=>setLayer('interplant');
     if($('#lgLayerInbound'))$('#lgLayerInbound').onclick=()=>setLayer('inbound');
@@ -3382,25 +3474,39 @@ function tabLG(){
           const i=LG_FLOW_TMS.indexOf(t);
           i<0?LG_FLOW_TMS.push(t):LG_FLOW_TMS.splice(i,1);
         }
-        flowReset('l3');
+        flowReset(FLOW_ID);
         render();
       };
     });
     const tmClear=$('#lgTmClear');
-    if(tmClear)tmClear.onclick=()=>{LG_FLOW_TMS=[];flowReset('l3');render()};
+    if(tmClear)tmClear.onclick=()=>{LG_FLOW_TMS=[];flowReset(FLOW_ID);render()};
 
-    // Кнопки масштаба графа потоков
-    const zoomFlow=f=>{
-      const cvs=$('#l3');if(!cvs)return;
-      const v=flowView('l3'),k0=v.k||v.fit||1,k1=Math.max(.2,Math.min(4,k0*f));
-      const cx=(cvs.clientWidth||600)/2,cy=(cvs.clientHeight||400)/2;
-      v.tx=cx-(cx-v.tx)*(k1/k0);v.ty=cy-(cy-v.ty)*(k1/k0);v.k=k1;
-      if(REDRAW['l3'])REDRAW['l3']();
-    };
-    const zIn=$('#lgZoomIn'),zOut=$('#lgZoomOut'),zFit=$('#lgZoomFit');
-    if(zIn)zIn.onclick=()=>zoomFlow(1.25);
-    if(zOut)zOut.onclick=()=>zoomFlow(1/1.25);
-    if(zFit)zFit.onclick=()=>{flowReset('l3');if(REDRAW['l3'])REDRAW['l3']()};
+    /* Кнопка «Вся цепочка». Прежние +/− убраны: масштаб доступен колесом, а
+       кнопки дублировали жест и на вписанном графе визуально ничего не меняли.
+       ВАЖНО: камера и перерисовка регистрируются в chFlow под ключом '#l3'
+       (с решёткой) — раньше здесь использовался 'l3', поэтому REDRAW['l3'] был
+       undefined и ни одна кнопка панели не перерисовывала граф.
+       Кнопка возвращает обзор всей сети: сбрасывает камеру И снимает выделение
+       узла. Когда сбрасывать нечего — гаснет, чтобы не выглядеть сломанной. */
+    const zFit=$('#lgZoomFit');
+    if(zFit){
+      const v=flowView(FLOW_ID);
+      const camDirty=!!(v.k||v.tx||v.ty);
+      const canReset=camDirty||!!selNode;
+      zFit.disabled=!canReset;
+      if(!canReset)zFit.title='Уже показана вся сеть: масштаб не изменён и узел не выбран';
+      const clearNode=()=>{
+        F.nd=[];
+        if(LG_LAYER_BEFORE_NODE){LG_FLOW_LAYER=LG_LAYER_BEFORE_NODE;LG_LAYER_BEFORE_NODE=null}
+      };
+      zFit.onclick=()=>{
+        flowReset(FLOW_ID);
+        if(selNode){clearNode();render()}             // снятие узла — полная пересборка раздела
+        else if(REDRAW[FLOW_ID])REDRAW[FLOW_ID]();    // только камера — достаточно перерисовки
+      };
+      const chainClear=$('#lgChainClear');
+      if(chainClear)chainClear.onclick=()=>{flowReset(FLOW_ID);clearNode();render()};
+    }
 
     // Динамический расчёт адаптивной высоты канваса под плотность узлов
     const nodesInFlow = new Set();
@@ -3410,7 +3516,24 @@ function tabLG(){
     const autoGraphHeight = Math.max(380, Math.min(820, maxNodesInColEstimate * 52 + 90));
 
     // Отрисовка потоков
-    if(dispFlowLegs.length) chFlow('#l3',H('#l3',autoGraphHeight,0.36,360,820),dispFlowLegs,v=>nf(v)+' т',k=>setF('nd',k));
+    /* Клик по узлу: выделяем узел и раскрываем контур до сквозной сети, чтобы
+       цепочка была видна целиком. Прежний контур запоминается и возвращается
+       при снятии выделения. Повторный клик по тому же узлу снимает выбор. */
+    const onNodeClick=k=>{
+      const wasSel=F.nd.includes(String(k));
+      if(wasSel){
+        F.nd=[];
+        if(LG_LAYER_BEFORE_NODE){LG_FLOW_LAYER=LG_LAYER_BEFORE_NODE;LG_LAYER_BEFORE_NODE=null}
+      }else{
+        if(!F.nd.length&&LG_FLOW_LAYER!=='all')LG_LAYER_BEFORE_NODE=LG_FLOW_LAYER;
+        F.nd=[String(k)];
+        LG_FLOW_LAYER='all';
+      }
+      LG_FLOW_TMS=[];
+      flowReset(FLOW_ID);
+      render();
+    };
+    if(dispFlowLegs.length) chFlow(FLOW_ID,H(FLOW_ID,autoGraphHeight,0.36,360,820),dispFlowLegs,v=>nf(v)+' т',onNodeClick);
     else{const g=cv('#l3',200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;
       g.x.fillText('В выбранном контуре и виде транспорта нет перемещений',g.w/2,100)}}
 
