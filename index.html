@@ -2917,25 +2917,25 @@ function kpisHtml(K){
   }).join('')+`</div>`;
 }
 /* Значение KPI всегда в одну строку: если не помещается — уменьшаем кегль
-   (текст не переносится и не режется, базовые линии во всех карточках ряда
-   остаются совпадающими, потому что line-height фиксирован в CSS). */
+   только у этой карточки. Текст не переносится и не режется, а фиксированный
+   line-height сохраняет общую базовую линию карточек в ряду. */
 function fitKpiValues(){
-  /* Кегль значения подбирается на весь РЯД карточек, а не на одну карточку:
-     иначе длинная цифра ужималась бы, а соседние оставались крупными, и ряд
-     выглядел бы рвано. Раскладка grid кладёт в один ряд карточки с одинаковым
-     offsetTop — по нему и группируем. */
-  const rows=new Map();
+  /* Длинное значение не должно уменьшать соседние карточки. Раньше размер
+     подбирался по всему ряду: например, длинное название выбранного заказа
+     делало мелкими все остальные значения в «Цепочке заказа» и «Запасах».
+     Теперь каждая карточка начинается с базовых 28 px и ужимается отдельно. */
   $$('#main .kpi .v').forEach(el=>{
     el.style.fontSize='';
     const box=el.clientWidth;
     if(!box)return;                       /* jsdom и скрытые вкладки — пропускаем */
     let size=28;
-    while(size>15&&el.scrollWidth>box+1)size-=1;
-    const k=el.parentElement?Math.round(el.parentElement.offsetTop)+'/'+Math.round(el.parentElement.offsetHeight):'_';
-    const r=rows.get(k)||{els:[],size:28};
-    r.els.push(el);r.size=Math.min(r.size,size);rows.set(k,r);
+    el.style.fontSize=size+'px';
+    while(size>15&&el.scrollWidth>box+1){
+      size-=1;
+      el.style.fontSize=size+'px';
+    }
+    if(size===28)el.style.fontSize='';
   });
-  rows.forEach(r=>{if(r.size<28)r.els.forEach(el=>el.style.fontSize=r.size+'px')});
 }
 function summary(title,blocks){
   return `<div class="sum"><h4>${title}</h4>`+blocks.map(b=>
@@ -3180,7 +3180,9 @@ function tabDM(){
     ['Ограниченный спрос (план)',nf(dem)+' т',
       ordW(D.length)+(useUnc?` · принято ${pc(demUnc?dem/demUnc:0)} неограниченного спроса`:''),'',
       'Источник: demand_volume заказов marking_demand'],
-    ['Отгружено',nf(sal)+' т','Service Level '+pc(sl)+' к плану',sl>=.95?'pos':sl>=.8?'mid':'neg',
+    ['Отгружено',nf(sal)+' т',
+      `Service Level ${pc(sl)} к плану · ${full} из ${D.length} заказов без дефицита`,
+      sl>=.95?'pos':sl>=.8?'mid':'neg',
       'Источник: results_sale заказов marking_demand'],
     ['Дефицит плана',nf(unm)+' т',ordW(defOrders.length)+' с дефицитом',unm?'neg':'pos',
       'Ограниченный спрос − отгружено (unsatisfied_demand)'],
@@ -3195,8 +3197,7 @@ function tabDM(){
       'Источник: demandfullfilledlateqty (demand_coverage)'],
     ['Упущенная маржа',bn(lm),lmKpiSub(T)+'<br>упущенная выручка '+bn(lostRev),lm?'neg':'',
       `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`],
-    ['Маржинальность продаж',pc(rev?mar/rev:0),`Выручка ${bn(rev)} | Маржа ${bn(mar)}`,'pos'],
-    ['Заказов без дефицита',pc(full/D.length),`${full} из ${D.length}`,full/D.length>=.85?'pos':'mid']
+    ['Маржинальность продаж',pc(rev?mar/rev:0),`Выручка ${bn(rev)} | Маржа ${bn(mar)}`,'pos']
   ];
 
   /* «Свод спроса» — карточка-сверка тождеств. По задаче владельца (2026-09-16)
