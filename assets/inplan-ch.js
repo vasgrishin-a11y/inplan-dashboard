@@ -1077,42 +1077,64 @@ let VS_VIEW = 'matrix';   // matrix | profile | waterfall | heat
 let VS_DIM  = 'period';   // period | product | client
 let VS_TARGET = null;     // версия для waterfall
 
-/* Метрики версии: [ключ, название, направление (1 лучше больше), формат] */
+/* Метрики версии: [ключ, название, направление (1 лучше больше), формат, источник].
+   Источник — таблица ClickHouse, из которой реально считается строка: он выводится
+   тегом в матрице, чтобы спрос (demand_coverage) и план/затраты (marking_demand)
+   нельзя было перепутать. */
 const VS_METRICS = [
-  ['rev','Валовая выручка',1,bn],
-  ['cost','Себестоимость',-1,bn],
-  ['mar','Валовая маржа',1,bn],
-  ['mrg','Маржинальность',1,pc],
-  ['mpt','Маржа на тонну',1,v=>nf(v)+' ₽'],
-  ['demUnc','Неограниченный спрос, т',0,v=>nf(v)],
-  ['demLim','Ограниченный спрос, т',0,v=>nf(v)],
-  ['sal','План продаж, т',1,v=>nf(v)],
-  ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v)],
-  ['sl','Service Level',1,pc],
-  ['late','Отгружено с опозданием, т',-1,v=>nf(v)],
-  ['lm','Упущенная маржа (база: маржа/т заказа)',-1,bn],
-  ['penNonDel','Штраф за непоставку',-1,bn],
-  ['penLate','Штраф за опоздание',-1,bn],
-  ['pd','Затраты: производство',-1,bn],
-  ['mv','Затраты: логистика',-1,bn],
-  ['pcst','Затраты: закупки',-1,bn],
-  ['st','Затраты: хранение',-1,bn],
-  ['capUtil','Средняя загрузка мощностей',0,pc],
-  ['bn','Узких мест (≥90%)',-1,v=>nf(v)],
-  ['planAvail','Плановый ФРВ, ч',0,v=>nf(v)],
-  ['expansion','Расширение мощности, ч',0,v=>nf(v)],
-  ['orders','Заказов',0,v=>nf(v)]
+  ['rev','Валовая выручка',1,bn,'marking_demand'],
+  ['cost','Себестоимость',-1,bn,'marking_demand'],
+  ['mar','Валовая маржа',1,bn,'marking_demand'],
+  ['mrg','Маржинальность',1,pc,'marking_demand'],
+  ['mpt','Маржа на тонну',1,v=>nf(v)+' ₽','marking_demand'],
+  ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'demand_coverage'],
+  ['demLim','Ограниченный спрос, т',0,v=>nf(v),'demand_coverage'],
+  ['sal','План продаж, т',1,v=>nf(v),'marking_demand'],
+  ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v),'demand_coverage'],
+  ['sl','Service Level',1,pc,'marking_demand'],
+  ['late','Отгружено с опозданием, т',-1,v=>nf(v),'demand_coverage'],
+  ['lm','Упущенная маржа (база: маржа/т заказа)',-1,bn,'marking_demand'],
+  ['penNonDel','Штраф за непоставку',-1,bn,'demand_cost × demand_coverage'],
+  ['penLate','Штраф за опоздание',-1,bn,'demand_cost × demand_coverage'],
+  ['pd','Затраты: производство',-1,bn,'marking_demand'],
+  ['mv','Затраты: логистика',-1,bn,'marking_demand'],
+  ['pcst','Затраты: закупки',-1,bn,'marking_demand'],
+  ['st','Затраты: хранение',-1,bn,'marking_demand'],
+  ['capUtil','Средняя загрузка мощностей',0,pc,'capacity_view_sp'],
+  ['bn','Узких мест (≥90%)',-1,v=>nf(v),'capacity_view_sp'],
+  ['planAvail','Плановый ФРВ, ч',0,v=>nf(v),'rescapacity'],
+  ['expansion','Расширение мощности, ч',0,v=>nf(v),'rescapacity'],
+  ['orders','Заказов',0,v=>nf(v),'marking_demand']
 ];
 
+/* ── Строки спроса в сравнении версий идут ОДНОЙ базой — из demand_coverage ──
+     Неограниченный спрос, т   = fullfilleddemandqty + unfullfilleddemandqty
+                                 (покрытый + непокрытый)
+     Ограниченный спрос, т     = fullfilleddemandqty    — покрытый спрос
+     Неудовлетворённый спрос,т = unfullfilleddemandqty  — непокрытый спрос
+   Поэтому тождество «Неограниченный = Ограниченный + Неудовлетворённый» в матрице
+   сходится ровно: раньше первая строка приходила из demand_coverage, а две другие —
+   из marking_demand (demand_volume / unsatisfied_demand), то есть с другой базой
+   (план вместо спроса) и без фильтра по periodtype — три строки не складывались.
+
+   Фолбэк на marking_demand остаётся только для версий, у которых покрытия нет:
+   таблица не выгружена, запрос упал или в выбранной гранулярности (periodtype)
+   строк нет. Это другая база (план и дефицит внутри плана), поэтому версия
+   помечается covOk=false, а матрица предупреждает об этом явно. */
 function vsFlat(v){
   const a = v.agg || {}, t = a.totals || {}, cov = t.cov || {}, op = t.byOp || {};
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
-  const demUnc = num(cov.demUnc) || (num(cov.ff)+num(cov.uf));
+  const ff = num(cov.ff), uf = num(cov.uf);
+  const demUnc = (ff>0||uf>0) ? (ff+uf) : num(cov.demUnc);   // покрытый + непокрытый
+  const covOk = demUnc > 0;            // demand_coverage по этой версии посчитан
+  const demPlan = num(t.dem);          // ограниченный спрос ПЛАНА (marking_demand)
   return {
-    _v:v, label:v.label, id:v.id, isBase:v.isBase,
+    _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk,
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
-    demUnc, demLim: num(t.dem), sal, unm: num(t.unm),
-    sl: num(t.dem)?sal/num(t.dem):0, late: num(cov.late),
+    demUnc, demLim: covOk?ff:demPlan, sal, unm: covOk?uf:num(t.unm),
+    /* Service Level остаётся «отгружено / принято в план» по marking_demand:
+       на базе покрытия он выродился бы в ff/(ff+uf) и дублировал бы строки спроса. */
+    sl: demPlan?sal/demPlan:0, late: num(cov.late),
     lm: num(t.lm), penNonDel: num(t.penaltyNonDel), penLate: num(t.penaltyLate),
     pd:(op.production||{}).c||0, mv:(op.movement||{}).c||0,
     pcst:(op.procurement||{}).c||0, st:(op.stock||{}).c||0,
@@ -1168,6 +1190,17 @@ CHX.tabVS = function(){
       gransMix ? 'mid' : '']
   ];
 
+  /* Строки спроса читаются из demand_coverage; если у какой-то версии покрытия
+     нет, её спрос показан по marking_demand — это другая база, молчать нельзя. */
+  const covFb = rows.filter(r=>!r.covOk);
+  const covNote = covFb.length
+    ? `<span class="neg">demand_coverage недоступен у версий: ${esc(covFb.map(r=>r.label).join(', '))}</span>
+       — для них «Ограниченный спрос» и «Неудовлетворённый спрос» показаны по <code>marking_demand</code>
+       (принято в план и дефицит внутри плана), это другая база, строки спроса между версиями не сопоставимы.`
+    : `Спрос — одной базой из <code>demand_coverage</code>: неограниченный = покрытый + непокрытый,
+       ограниченный = покрытый (<code>fullfilleddemandqty</code>), неудовлетворённый = непокрытый
+       (<code>unfullfilleddemandqty</code>). Service Level и затраты — из <code>marking_demand</code>.`;
+
   const html = `
   <div class="frow">
     <div class="fg"><label>База сравнения</label>
@@ -1197,7 +1230,8 @@ CHX.tabVS = function(){
     ${VS_VIEW==='matrix'?`
     <div class="card w"><h3>Матрица показателей: все версии</h3>
       <div class="sub">Дельта считается к базе «${esc(base.label)}». Зелёный — улучшение с точки зрения бизнеса,
-        ★ — лучшая версия по строке</div><div id="vsMat"></div></div>`:''}
+        ★ — лучшая версия по строке. Тег у показателя — таблица-источник</div>
+      <div class="sub">${covNote}</div><div id="vsMat"></div></div>`:''}
     ${VS_VIEW==='profile'?`
     <div class="card w"><h3>Радар версий</h3>
       <div class="sub">Лучшее значение по каждой оси задаёт длину луча: наружу — сильнее.
@@ -1232,8 +1266,8 @@ CHX.tabVS = function(){
 
     /* ── Матрица: динамические колонки по числу версий ── */
     if(VS_VIEW==='matrix'){
-      const data = VS_METRICS.map(([k,name,dir,fmt])=>{
-        const rec = {n:name, _k:k, _dir:dir, _fmt:fmt, base:base[k]};
+      const data = VS_METRICS.map(([k,name,dir,fmt,src])=>{
+        const rec = {n:name, _k:k, _dir:dir, _fmt:fmt, _src:src, base:base[k]};
         rows.forEach(r=>{
           rec['v_'+r.id] = r[k];
           rec['d_'+r.id] = r[k] - base[k];
@@ -1243,7 +1277,8 @@ CHX.tabVS = function(){
         return rec;
       });
       const cols = [
-        {k:'n', t:'Показатель', left:1, flt:1},
+        {k:'n', t:'Показатель', left:1, flt:1,
+         f:(v,r)=>`${esc(v)}${r._src?` <span class="tag" style="margin-left:6px">${esc(r._src)}</span>`:''}`},
         {k:'base', t:base.label+' (база)', num:1, f:(v,r)=>r._fmt(v)}
       ];
       rows.filter(r=>!r.isBase).forEach(r=>{
