@@ -1107,7 +1107,13 @@ function covBasis(D){
   const dem=S(D,o=>o.dem), sal=S(D,o=>o.sal), unm=S(D,o=>o.unm);
   const fActive=Object.values(F).some(a=>a.length);
   const ff=num(cov.ff), uf=num(cov.uf);
-  const demUnc=num(cov.demUnc)||(ff+uf);
+  /* Определение, единое для ВСЕГО дашборда: неограниченный спрос — это сумма
+     покрытого и непокрытого спроса (fullfilleddemandqty + unfullfilleddemandqty).
+     Готовый итог источника берём только когда составляющих нет (старые снапшоты,
+     наборы без разложения): иначе при расхождении итога с составляющими разные
+     вкладки показывали бы разные числа. Само расхождение ловит проверка
+     «Неограниченный спрос: определение» во вкладке «Данные и качество». */
+  const demUnc=(ff>0||uf>0)?(ff+uf):num(cov.demUnc);
   const hasDC=!!(dims.length||demUnc>0);
   const useUnc=hasDC&&!fActive&&demUnc>0;
   const notPlanned=useUnc?Math.max(0,demUnc-dem):0;
@@ -3883,7 +3889,9 @@ function snap(ds){
      внутри плана. Если demand_coverage в датасете нет — demUnc=0 и gap равен
      дефициту плана (прежнее поведение). */
   const cov=((ds.agg||{}).totals||{}).cov||{};
-  const demUnc=num(cov.demUnc)||(num(cov.ff)+num(cov.uf));
+  /* то же определение, что в covBasis: покрытый + непокрытый, итог — фолбэк */
+  const covFF=num(cov.ff),covUF=num(cov.uf);
+  const demUnc=(covFF>0||covUF>0)?(covFF+covUF):num(cov.demUnc);
   const sal=S(o,x=>x.sal),unm=S(o,x=>x.unm);
   /* Разрезы для визуального сравнения версий (радар, мост дельт, теплокарта):
      верхушка продуктов и матрица «продукт × период» по валовой марже. Храним
@@ -3900,7 +3908,8 @@ function snap(ds){
     byProd,pp:{rows:ppRows,cols:ppCols,m:ppM},
     rev:S(o,x=>x.rev),cost:S(o,x=>x.cost),mar:S(o,x=>x.mar),dem:S(o,x=>x.dem),sal,unm,
     lm:S(o,x=>x.unm*x.mpt),full:o.filter(x=>!(x.unm>1e-9)).length,
-    demUnc,gap:demUnc>0?Math.max(0,demUnc-sal):unm,notPlanned:demUnc>0?Math.max(0,demUnc-S(o,x=>x.dem)):0,
+    demUnc,ff:covFF,uf:covUF,
+    gap:demUnc>0?Math.max(0,demUnc-sal):unm,notPlanned:demUnc>0?Math.max(0,demUnc-S(o,x=>x.dem)):0,
     lmMode:'order',lmBase:demUnc>0?'unc-available':'plan',
     pd:m('production'),mv:m('movement'),pc:m('procurement'),st:m('stock'),
     opsN:ops.length,plants:uq(ops,r=>r.pl).length,vendors:uq(ops,r=>r.vd).length};
@@ -4248,7 +4257,8 @@ function tabDQ(){
      источника: инварианты определений, сходимость периодного разреза с итогом,
      масштаб спроса вне плана и согласованность lostrevenue с маржой. */
   const aggD=(DS&&DS.agg)||{}, covD=(aggD.totals||{}).cov||{}, dimsD=((aggD.dims||{}).coverage||[]);
-  const demUncD=num(covD.demUnc)||(num(covD.ff)+num(covD.uf));
+  const covFFD=num(covD.ff), covUFD=num(covD.uf);
+  const demUncD=(covFFD>0||covUFD>0)?(covFFD+covUFD):num(covD.demUnc);
   const demD=S(o,x=>x.dem), salD=S(o,x=>x.sal), unmD=S(o,x=>x.unm);
   const revD=S(o,x=>x.rev), marD=S(o,x=>x.mar);
   if(!(demUncD>0)){
@@ -4265,9 +4275,21 @@ function tabDQ(){
         :`Инварианты соблюдены: неограниченный ${nf(demUncD)} т = план ${nf(demD)} т + вне плана ${nf(notPlannedD)} т; не покрыто всего ${nf(gapD)} т = вне плана + дефицит плана ${nf(unmD)} т.`,
       badU.length?'Проверить гранулярность и границы горизонта <code>demand_coverage</code>: смешение «месяц/день» или неполный период дают отгрузку больше спроса.':'—');
 
+    /* определение «неограниченный = покрытый + непокрытый» проверяем явно:
+       дашборд везде считает по составляющим, и если готовый итог выгрузки с ними
+       расходится, это брак источника, а не разные трактовки показателя */
+    const totSrcD=num(covD.demUnc), compD=covFFD+covUFD;
+    if(totSrcD>0&&compD>0){
+      const devDef=Math.abs(totSrcD-compD)/Math.max(totSrcD,compD);
+      add(devDef>.005?'e':'i','Неограниченный спрос: определение',
+        `Покрытый ${nf(covFFD)} т + непокрытый ${nf(covUFD)} т = ${nf(compD)} т против итога выгрузки ${nf(totSrcD)} т, расхождение ${pc(devDef)}.`,
+        devDef>.005?'Дашборд во всех разделах считает неограниченный спрос как сумму покрытого и непокрытого — показан именно он. Итог выгрузки с составляющими расходится: проверить <code>fullfilleddemandqty</code> / <code>unfullfilleddemandqty</code> и дедупликацию строк <code>demand_coverage</code>.'
+                   :'Итог выгрузки совпадает с суммой покрытого и непокрытого спроса.');
+    }
+
     /* сходимость периодного разреза с итогом — ловит смешение гранулярностей */
     if(dimsD.length>1){
-      const sumD=S(dimsD,x=>num(x.demUnc)||(num(x.ff)+num(x.uf)));
+      const sumD=S(dimsD,x=>(num(x.ff)>0||num(x.uf)>0)?(num(x.ff)+num(x.uf)):num(x.demUnc));
       const dev=Math.abs(sumD-demUncD)/Math.max(demUncD,1);
       add(dev>.01?'e':'i','Неограниченный спрос: разрез против итога',
         `Сумма по ${dimsD.length} периодам <code>demand_coverage</code> — ${nf(sumD)} т против итога ${nf(demUncD)} т, расхождение ${pc(dev)}.`,

@@ -1125,7 +1125,7 @@ function vsFlat(v){
   const a = v.agg || {}, t = a.totals || {}, cov = t.cov || {}, op = t.byOp || {};
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
   const ff = num(cov.ff), uf = num(cov.uf);
-  const demUnc = num(cov.demUnc) || (ff+uf);
+  const demUnc = (ff>0||uf>0) ? (ff+uf) : num(cov.demUnc);   // покрытый + непокрытый
   const covOk = demUnc > 0;            // demand_coverage по этой версии посчитан
   const demPlan = num(t.dem);          // ограниченный спрос ПЛАНА (marking_demand)
   return {
