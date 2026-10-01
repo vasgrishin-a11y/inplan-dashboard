@@ -81,6 +81,7 @@ function route(sql) {
   const dbm = sql.match(/`(data_public_\d+)`\./);
   const db = dbm && dbm[1];
   if (/SELECT 1 AS ok/.test(sql)) return [{ ok: 1 }];
+  if (/AS oid/.test(sql)) return OPS;              /* детализация операций заказов */
   if (/FROM system\.databases/.test(sql))
     return [{ name: 'system' }, ...Object.keys(DBS).sort().map((name) => ({ name }))];
   if (/FROM system\.columns/.test(sql)) return COLS.map((name) => ({ name }));
