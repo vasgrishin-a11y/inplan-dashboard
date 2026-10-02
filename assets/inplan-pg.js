@@ -1,13 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   In.Plan · PostgreSQL-коннектор (неограниченный спрос из independentdemand)
-   Зачем отдельное подключение: таблица independentdemand физически лежит в
+   In.Plan · PostgreSQL-коннектор (неограниченный спрос из independent_demand)
+   Зачем отдельное подключение: таблица independent_demand физически лежит в
    PostgreSQL, а не в ClickHouse. Браузер не умеет открывать TCP к Postgres,
    поэтому запросы идут через backend-прокси (server.js этого репозитория,
    POST /api/pg/schemas и /api/pg/unc) — как в дашборде opti.
 
    Соответствие версий: база ClickHouse «data_public_2» ↔ схема Postgres
    «public_2» (снимается префикс data_, регистр не важен; список схем, где
-   есть independentdemand, приходит от backend и служит справочником имён).
+   есть independent_demand, приходит от backend и служит справочником имён).
 
    Зависимости: только fetch/localStorage. CHX (assets/inplan-ch.js) вызывает
    PGX.enabled() и PGX.uncFor() внутри loadVersionAgg.
@@ -233,7 +233,7 @@ PGX.enabled = function(){
 };
 
 /* ─────────────── 4. СХЕМЫ И АГРЕГАТ ─────────────── */
-/* Первый вызов в рамках загрузки: получить список схем с independentdemand.
+/* Первый вызов в рамках загрузки: получить список схем с independent_demand.
    Ошибка запоминается до смены кредов/переподключения — 10 версий не должны
    отправлять 10 одинаковых неудачных запросов. */
 PGX.ensureSchemas = async function(){
@@ -322,7 +322,7 @@ PGX.problem = function(){
   const backend = PGX.state.stage==='backend';
   return {
     stage: backend?'backend':'pg',
-    title: backend?'Backend-прокси PostgreSQL недоступен':'PostgreSQL: таблица independentdemand недоступна',
+    title: backend?'Backend-прокси PostgreSQL недоступен':'PostgreSQL: таблица independent_demand недоступна',
     detail: msg,
     hint: backend?PGX.backendHint():''
   };
@@ -346,7 +346,12 @@ PGX.uncFor = async function(db, gran){
   PGX.state.lastDataError = null;
   return { demUnc:Number(r.demUnc)||0, n:Number(r.n)||0,
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:Number(p.demUnc)||0})),
-           schema:r.schema||schema };
+           schema:r.schema||schema, table:r.table||'independent_demand',
+           qtySource:r.qtySource||((r.cols||{}).qty)||'demandqty',
+           qtyFallback:r.qtyFallback||null,
+           primaryDemUnc:Number(r.primaryDemUnc)||0,
+           adjustedDemUnc:r.adjustedDemUnc==null?null:Number(r.adjustedDemUnc)||0,
+           diagnostics:r.diagnostics||null };
 };
 
 /* При загрузке страницы: подставить креды из автосессии (без сети). */

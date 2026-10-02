@@ -65,7 +65,7 @@ const ORDERS_TOT = { orders: 5, rev: 26900, cost: 15850, mar: 11050, dem: 5000, 
 const COV = { demUnc: 6000, ff: 4500, uf: 1500, inTime: 4300, late: 200, lostRev: 175000, planRev: 30000, prop: 6000 };
 const COV_P = [{ k: '2026-09', demUnc: 6000, ff: 4500, uf: 1500, late: 200 }];
 /* неограниченный спрос — по умолчанию фолбэк «покрытый + непокрытый» из demand_coverage
-   (таблица independentdemand лежит в PostgreSQL, в CH её нет и не ищем) */
+   (таблица independent_demand лежит в PostgreSQL, в CH её нет и не ищем) */
 const BY_OP = [{ t: 'production', c: 500, v: 48, n: 2 }, { t: 'movement', c: 300, v: 40, n: 2 }];
 const DIM_P = [{ k: '1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
 const DIM_PR = [{ k: 'P1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
@@ -89,7 +89,7 @@ function route(sql) {
   if (/FROM system\.columns/.test(sql)) return COLS.map((name) => ({ name }));
   if (/max\(update_date_time\)/.test(sql) && db && DBS[db]) return [{ n: DBS[db].n, ts: DBS[db].ts }];
   if (/SELECT periodtype AS t/.test(sql)) return db && DBS[db] ? DBS[db].grans.map(([t, n]) => ({ t, n })) : [];
-  if (/`independentdemand`/.test(sql)) throw new Error('в ClickHouse таблицы independentdemand быть не должно');
+  if (/`independent_demand`/.test(sql)) throw new Error('в ClickHouse таблицы independent_demand быть не должно');
   if (/count\(\) AS orders/.test(sql)) return [ORDERS_TOT];
   if (/`operation_type` AS t/.test(sql)) return BY_OP;
   if (/`o_p` AS k/.test(sql)) return DIM_P;

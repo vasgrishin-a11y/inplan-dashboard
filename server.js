@@ -2,7 +2,7 @@
 /**
  * In.Plan dashboard — backend-прокси к PostgreSQL.
  *
- * Неограниченный спрос дашборда — это Σ demandqty таблицы independentdemand,
+ * Неограниченный спрос дашборда — это Σ demandqty таблицы independent_demand,
  * которая физически лежит в PostgreSQL (планировщик пишет результаты прогонов
  * в схемы public, public_2, …; в ClickHouse тем же прогонам соответствуют базы
  * data_public, data_public_2, …). Браузер не умеет открывать TCP к Postgres,
@@ -12,9 +12,10 @@
  *                             эндпоинтов: по ним дашборд отличает «нет backend»
  *                             от «backend устарел»)
  *   GET  /api/pg/defaults   — хост/порт/база по умолчанию для формы подключения
- *   POST /api/pg/schemas    — схемы, в которых есть таблица independentdemand
+ *   POST /api/pg/schemas    — схемы, в которых есть таблица independent_demand
  *   POST /api/pg/unc        — агрегат неограниченного спроса схемы:
- *                             {schema, gran} → {demUnc, n, periods:[{k,demUnc}]}
+ *                             {schema, gran} → {demUnc, n, periods, qtySource,
+ *                             primaryDemUnc, adjustedDemUnc, diagnostics}
  *
  * Логин/пароль приходят в теле каждого запроса и нигде не сохраняются и не
  * логируются. Сервис также раздаёт статику дашборда (index.html, assets/),
@@ -37,10 +38,10 @@ const PG_DEFAULTS = {
   port: 48235,
   database: 'pgs_app_data_db'       // точное имя продуктивной базы (владелец, 2026-10)
 };
-const TABLE_NAME = 'independentdemand';
-/* В некоторых выгрузках имя приходит с разделителем: independent_demand.
-   Оба варианта означают один и тот же входной показатель. */
-const TABLE_CANDIDATES = ['independentdemand', 'independent_demand'];
+/* Фактическое имя таблицы в PostgreSQL — independent_demand. Старое слитное
+   написание оставлено только как обратная совместимость для прежних выгрузок. */
+const TABLE_NAME = 'independent_demand';
+const TABLE_CANDIDATES = ['independent_demand', 'independentdemand'];
 const MAX_SCHEMAS = 512;
 /* Подпись сервиса в каждом ответе (в т.ч. в ошибках). По ней фронтенд
    отличает три разные ситуации, которые раньше сливались в «Not found»:
@@ -48,7 +49,7 @@ const MAX_SCHEMAS = 512;
      • ответил наш, но без нужного эндпоинта  → backend устарел, нужен npm start свежей версии;
      • ответил наш и с эндпоинтом             → настоящая ошибка Postgres. */
 const SERVICE = 'inplan-dashboard';
-const API_LEVEL = 2;
+const API_LEVEL = 3;
 const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/unc'];
 
 class HttpError extends Error {
@@ -101,25 +102,30 @@ function normalizeGran(v) {
   return g;
 }
 
-/* ── Мэппинг столбцов independentdemand ─────────────────────────────────
+/* ── Мэппинг столбцов independent_demand ─────────────────────────────────
    Продуктивная база (pgs_app_data_db), реальные столбцы:
      item, demandqty, periodid, sys_id, dmdstream, periodtype, demandtype,
      loc, update_date_time, change_author, unit, date, adjusteddemandqty.
    • sys_id и update_date_time ЕСТЬ → запрос включает дедуп строк: последняя
      версия записи (DISTINCT ON (sys_id) … ORDER BY update_date_time DESC);
    • is_deleted НЕТ → фильтра удалённых нет;
-   • adjusteddemandqty существует, но по определению владельца показатель —
-     Σ demandqty (2026-10): скорректированный объём в агрегат не входит.
+   • основной показатель — Σ demandqty. На продовых снимках встречаются схемы,
+     где строки и periodtype заполнены, но demandqty во всех актуальных строках
+     равен нулю, а фактический вход модели записан в adjusteddemandqty. В таком
+     случае API использует adjusteddemandqty как ЯВНО ПОМЕЧЕННЫЙ фолбэк — это
+     лучше, чем объявлять доступную таблицу недоступной и незаметно брать
+     другой источник demand_coverage.
    Маппинг при этом оставлен толерантным: если в какой-то схеме sys_id или
    update_date_time отсутствуют, запрос аккуратно собирается без них, а
    схема с is_deleted получит и фильтр удалённых (COALESCE-к-тексту). */
 const COL_CANDIDATES = {
-  qty:   ['demandqty', 'demand_qty'],
-  ptype: ['periodtype', 'period_type'],
-  date:  ['date', 'period_date'],
-  sysId: ['sys_id'],
-  upd:   ['update_date_time', 'update_datetime', 'updated_at'],
-  del:   ['is_deleted']
+  qty:         ['demandqty', 'demand_qty'],
+  adjustedQty: ['adjusteddemandqty', 'adjusted_demand_qty'],
+  ptype:       ['periodtype', 'period_type'],
+  date:        ['date', 'period_date'],
+  sysId:       ['sys_id'],
+  upd:         ['update_date_time', 'update_datetime', 'updated_at'],
+  del:         ['is_deleted']
 };
 function colIndex(columnNames) {
   const lower = new Map();
@@ -248,7 +254,7 @@ async function listColumns(db, schema, tableName = TABLE_NAME) {
   return { names, tableName: actual };
 }
 
-/* ── Поиск схемы с independentdemand ─────────────────────────────────────
+/* ── Поиск схемы с independent_demand ─────────────────────────────────────
    Имя схемы дашборд выводит из имени базы ClickHouse (Data_public_4899 →
    public_4899). Регистр, префикс data_ и редкие расхождения в именовании
    не должны стоить пользователю «таблица недоступна»: если точного
@@ -306,39 +312,49 @@ function tableMissingError(wanted, names, conn) {
 
 /* ── SQL агрегата неограниченного спроса ─────────────────────────────────
    Семантика повторяет ClickHouse-выгрузку дашборда (src() в inplan-ch.js):
-   WHERE is_deleted = 0, затем последняя строка на sys_id (LIMIT 1 BY →
-   DISTINCT ON … ORDER BY update_date_time DESC), затем sum(demandqty) с
-   фильтром periodtype. Ключи периодов совпадают с расчётом ClickHouse:
-   неделя — дата понедельника, месяц/квартал/год — «YYYY-MM», день — дата. */
+   WHERE periodtype + is_deleted = 0, затем последняя строка на sys_id
+   (LIMIT 1 BY → DISTINCT ON … ORDER BY update_date_time DESC), затем сумма
+   выбранной колонки объёма. Фильтр periodtype принципиально стоит ДО дедупа:
+   один sys_id может встречаться в нескольких гранулярностях, и более свежая
+   строка другого periodtype не должна вытеснить строку выбранного периода.
+   Ключи периодов совпадают с расчётом ClickHouse: неделя — дата понедельника,
+   месяц/квартал/год — «YYYY-MM», день — дата. */
 function bucketKeyExpr(dateExpr, gran) {
   const d = `${dateExpr}::timestamp`;
   if (gran === 3) return `to_char(date_trunc('week', ${d}), 'YYYY-MM-DD')`;
   if (gran === 4 || gran === 5 || gran === 6) return `to_char(${d}, 'YYYY-MM')`;
   return `to_char(${d}::date, 'YYYY-MM-DD')`;
 }
-function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
-  let src = `SELECT * FROM ${qi(schema)}.${qi(tableName)}`;
+function uncSql(schema, cols, gran, tableName = TABLE_NAME, qtyColumn = null) {
+  const qty = qtyColumn || cols.qty;
+  if (!qty) throw new HttpError(400, `Схема «${schema}»: не выбрана колонка объёма спроса.`);
+  const filters = [];
+  const params = [];
   /* is_deleted может быть numeric («0/1»), boolean или текстом — приводим
      к тексту; NULL трактуем как «не удалена» */
-  if (cols.del) src += ` WHERE COALESCE(${qi(cols.del)}::text, '0') IN ('0','false','f')`;
+  if (cols.del) filters.push(`COALESCE(${qi(cols.del)}::text, '0') IN ('0','false','f')`);
+  if (cols.ptype) {
+    params.push(gran);
+    filters.push(`${qi(cols.ptype)} = $${params.length}`);
+  }
+  let src = `SELECT * FROM ${qi(schema)}.${qi(tableName)}`;
+  if (filters.length) src += ` WHERE ${filters.join(' AND ')}`;
   if (cols.sysId) {
     src = `SELECT DISTINCT ON (${qi(cols.sysId)}) * FROM (${src}) d ORDER BY ${qi(cols.sysId)}` +
           (cols.upd ? `, ${qi(cols.upd)} DESC` : '');
   }
-  const where = cols.ptype ? ` WHERE ${qi(cols.ptype)} = $1` : '';
-  const params = cols.ptype ? [gran] : [];
   const total = {
-    sql: `SELECT sum(${qi(cols.qty)}) AS demUnc, count(*)::bigint AS n FROM (${src}) s${where}`,
+    sql: `SELECT sum(${qi(qty)}) AS demUnc, count(*)::bigint AS n FROM (${src}) s`,
     params
   };
   const periods = cols.date
     ? {
-        sql: `SELECT ${bucketKeyExpr('s.' + qi(cols.date), gran)} AS k, sum(${qi(cols.qty)}) AS demUnc ` +
-             `FROM (${src}) s${where} GROUP BY k ORDER BY k`,
+        sql: `SELECT ${bucketKeyExpr('s.' + qi(cols.date), gran)} AS k, sum(${qi(qty)}) AS demUnc ` +
+             `FROM (${src}) s GROUP BY k ORDER BY k`,
         params
       }
     : null;
-  return { total, periods };
+  return { total, periods, qty };
 }
 
 /* ── Приложение ── */
@@ -366,7 +382,7 @@ function createApp(deps) {
   app.get('/api/pg/defaults', (req, res) =>
     res.json({ ...PG_DEFAULTS, table: TABLE_NAME, service: SERVICE, api: API_LEVEL }));
 
-  /** Схемы, в которых есть таблица independentdemand (+ оценка числа строк). */
+  /** Схемы, в которых есть таблица independent_demand (+ оценка числа строк). */
   app.post('/api/pg/schemas', async (req, res, next) => {
     try {
       const conn = normalizeConn(req.body || {});
@@ -393,7 +409,7 @@ function createApp(deps) {
                   AND v.table_schema NOT IN ('pg_catalog','information_schema')
              ) x
              LEFT JOIN pg_stat_user_tables st
-               ON st.schemaname = x.s AND lower(st.relname) = $1
+               ON st.schemaname = x.s AND lower(st.relname) = lower(x.t)
             ORDER BY 1`,
           TABLE_CANDIDATES
         );
@@ -417,7 +433,7 @@ function createApp(deps) {
       catch (e) { throw friendlyPgError(e, conn); }
       try {
         /* Быстрый путь — запрошенная схема существует: лишних запросов нет.
-           Иначе один раз спрашиваем реальный список схем с independentdemand
+           Иначе один раз спрашиваем реальный список схем с independent_demand
            и либо подбираем её (регистр / префикс data_ / номер версии),
            либо отвечаем ошибкой, в которой этот список перечислен. */
         let schema = wanted, names = null, cols, tableName = null;
@@ -438,23 +454,66 @@ function createApp(deps) {
           schema = alt;
           ({ cols, tableName } = await discover(schema));
         }
-        const q = uncSql(schema, cols, gran, tableName);
-        let tot;
-        try { tot = await db.query(q.total.sql, q.total.params); }
+        /* Сначала строгое бизнес-определение — demandqty. Если таблица
+           непустая, но сумма этой колонки нулевая, проверяем фактический
+           скорректированный вход adjusteddemandqty. В продуктивных снимках
+           это реальный случай: раньше 210 успешно прочитанных строк
+           превращались в ложное «independent_demand недоступна» и показатель
+           подменялся ClickHouse demand_coverage. Фолбэк прозрачен: ответ
+           возвращает qtySource, обе суммы и причину выбора. */
+        const primaryQ = uncSql(schema, cols, gran, tableName, cols.qty);
+        let primaryTot;
+        try { primaryTot = await db.query(primaryQ.total.sql, primaryQ.total.params); }
         catch (e) { throw friendlyPgError(e, conn); }
-        const row = (tot.rows || [])[0] || {};
+        const primaryRow = (primaryTot.rows || [])[0] || {};
+        const primaryDemUnc = Number(primaryRow.demUnc) || 0;
+        const primaryN = Number(primaryRow.n) || 0;
+
+        let selectedQ = primaryQ;
+        let row = primaryRow;
+        let qtySource = cols.qty;
+        let adjustedDemUnc = null;
+        let adjustedN = null;
+        let qtyFallback = null;
+        if (primaryDemUnc === 0 && primaryN > 0 && cols.adjustedQty) {
+          const adjustedQ = uncSql(schema, cols, gran, tableName, cols.adjustedQty);
+          let adjustedTot;
+          try { adjustedTot = await db.query(adjustedQ.total.sql, adjustedQ.total.params); }
+          catch (e) { throw friendlyPgError(e, conn); }
+          const adjustedRow = (adjustedTot.rows || [])[0] || {};
+          adjustedDemUnc = Number(adjustedRow.demUnc) || 0;
+          adjustedN = Number(adjustedRow.n) || 0;
+          if (adjustedDemUnc > 0) {
+            selectedQ = adjustedQ;
+            row = adjustedRow;
+            qtySource = cols.adjustedQty;
+            qtyFallback = {
+              from: cols.qty,
+              to: cols.adjustedQty,
+              reason: `Σ ${cols.qty} = 0 при ${primaryN} строках periodtype ${gran}`
+            };
+          }
+        }
+
         let periods = [];
-        if (q.periods) {
+        if (selectedQ.periods) {
           try {
-            const p = await db.query(q.periods.sql, q.periods.params);
+            const p = await db.query(selectedQ.periods.sql, selectedQ.periods.params);
             periods = (p.rows || []).map(r => ({ k: String(r.k), demUnc: Number(r.demUnc) || 0 }));
           } catch (e) { throw friendlyPgError(e, conn); }
         }
         res.json({
           ok: true, schema, requested: wanted, exact, table: tableName, gran,
-          cols,
+          cols, qtySource, qtyFallback,
+          primaryDemUnc, adjustedDemUnc,
           demUnc: Number(row.demUnc) || 0,
           n: Number(row.n) || 0,
+          diagnostics: {
+            demandqty: { column: cols.qty, demUnc: primaryDemUnc, n: primaryN },
+            adjustedDemandqty: cols.adjustedQty
+              ? { column: cols.adjustedQty, demUnc: adjustedDemUnc, n: adjustedN }
+              : null
+          },
           periods,
           service: SERVICE, api: API_LEVEL
         });

@@ -529,18 +529,19 @@ async function loadVersionAgg(db, gran){
     CHX.loaded.demand_coverage = true;
   }catch(e){ out.notes.push('demand_coverage: '+e.message) }
 
-  /* 8.4.1 НЕОГРАНИЧЕННЫЙ СПРОС = Σ demandqty из таблицы independentdemand.
+  /* 8.4.1 НЕОГРАНИЧЕННЫЙ СПРОС = Σ demandqty из таблицы independent_demand.
      Это единое определение всего дашборда (владелец, 2026-10): входной спрос
-     клиентов до ограничений модели читается из independentdemand, а не как
+     клиентов до ограничений модели читается из independent_demand, а не как
      «покрытый + непокрытый» из demand_coverage (покрытие — исход прогона,
      остаётся источником ff/uf/late/lostrevenue).
 
      Таблица физически лежит в PostgreSQL (продуктивные столбцы: item,
      demandqty, periodid, sys_id, dmdstream, periodtype, demandtype, loc,
      update_date_time, change_author, unit, date, adjusteddemandqty;
-     показатель по определению владельца — Σ demandqty, скорректированный
-     объём не используется; дедуп по последней версии записи sys_id делается
-     на backend); в ClickHouse её нет и не ищем. Источники:
+     основной показатель — Σ demandqty; если в непустой выборке он равен нулю,
+     а Σ adjusteddemandqty положительна, backend берёт скорректированный вход
+     как явно помеченный фолбэк внутри той же PG-таблицы; дедуп по последней
+     версии записи sys_id делается на backend); в ClickHouse её нет и не ищем. Источники:
      1) PostgreSQL через backend-прокси (PGX, assets/inplan-pg.js →
         server.js POST /api/pg/unc): схема PG = CH-базе без префикса data_
         (data_public_2 ↔ public_2) — основной и единственный путь к таблице;
@@ -550,12 +551,13 @@ async function loadVersionAgg(db, gran){
      Независимо от источника значение складываем в totals.cov.demUnc — все
      разделы читают его оттуда и получают одно определение; фактический
      источник фиксируется в totals.uncDetail и уходит в статусы. */
-  const applyUnc = (total, periods, srcDetail)=>{
-    out.totals.unc = { demUnc:total };
+  const applyUnc = (total, periods, srcDetail, qtySource)=>{
+    out.totals.unc = { demUnc:total, qtySource:qtySource||'demandqty' };
     out.totals.cov = out.totals.cov || {};
     out.totals.cov.demUnc = total;
     out.totals.uncSrc = 'independentdemand';
     out.totals.uncDetail = srcDetail;
+    out.totals.uncQty = qtySource||'demandqty';
     /* помесячный разрез покрытия пополняем тоннами входного спроса: у периода
        без строк в покрытии спрос всё равно может существовать (и наоборот) */
     const uncP = (periods||[]).map(r=>({k:String(r.k), demUnc:num(r.demUnc)}));
@@ -577,14 +579,26 @@ async function loadVersionAgg(db, gran){
   if(window.PGX && PGX.enabled()){
     try{
       const u = await PGX.uncFor(db, gran);   // backend агрегирует в самой PG
-      if(!(num(u.demUnc)>0))
-        throw new Error('нулевой объём спроса при periodtype '+gran+' (строк: '+(num(u.n)||0)+')');
-      applyUnc(num(u.demUnc), u.periods, 'PostgreSQL · '+u.schema);
+      if(!(num(u.demUnc)>0)){
+        const where = (u.schema||'?')+'.'+(u.table||'independent_demand');
+        const adj = u.adjustedDemUnc==null?'':', Σ adjusteddemandqty = '+num(u.adjustedDemUnc);
+        throw new Error('в '+where+' Σ demandqty = '+num(u.primaryDemUnc)+adj+
+          ' при periodtype '+gran+' (строк после дедупликации: '+(num(u.n)||0)+')');
+      }
+      const qty = u.qtySource||'demandqty';
+      const detail = 'PostgreSQL · '+u.schema+(qty!=='demandqty'?' · '+qty:'');
+      applyUnc(num(u.demUnc), u.periods, detail, qty);
+      if(u.qtyFallback){
+        out.notes.push('independent_demand: в '+u.schema+'.'+(u.table||'independent_demand')+
+          ' Σ '+u.qtyFallback.from+' = '+num(u.primaryDemUnc)+' при periodtype '+gran+
+          ' ('+(num(u.n)||0)+' строк) — использован Σ '+u.qtyFallback.to+
+          ' = '+num(u.demUnc)+' из PostgreSQL');
+      }
     }catch(e){ uncErrs.push('PG: '+e.message); }
   }
   if(!out.totals.uncSrc){
     if(num(((out.totals.cov||{}).demUncCov))>0) out.totals.uncSrc = 'demand_coverage';
-    out.notes.push('independentdemand недоступна ('+
+    out.notes.push('independent_demand недоступна ('+
       (uncErrs.length?uncErrs.join(' · '):'нет подключения к PostgreSQL')+')'+(out.totals.uncSrc
       ?' — неограниченный спрос показан как покрытый + непокрытый из demand_coverage'
       :' — неограниченный спрос недоступен'));
@@ -936,7 +950,7 @@ function pgStatText(){
     const warn = miss.length
       ? `<br><span class="neg">Схема не найдена у ${miss.length} из ${plan.length} выбранных версий — укажите её вручную ниже, иначе спрос будет взят из demand_coverage</span>`
       : '';
-    return `<span class="pos">PG подключён · схем с independentdemand: ${ps.schemas.length}${
+    return `<span class="pos">PG подключён · схем с independent_demand: ${ps.schemas.length}${
       ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>${warn}`;
   }
   if(ps.backendOk===false)
@@ -956,7 +970,7 @@ function pgMapBlock(){
   const sel = CHX.cfg.schemas||[];
   if(!sel.length)
     return `<div class="chm-note">Выберите схемы ClickHouse ниже — здесь появится их
-      соответствие схемам PostgreSQL (откуда брать <code>independentdemand</code>).</div>`;
+      соответствие схемам PostgreSQL (откуда брать <code>independent_demand</code>).</div>`;
   const plan = PGX.schemaPlan(sel);
   const opts = PGX.state.schemas||[];
   return `<div class="chm-sec">Соответствие версий и схем PostgreSQL</div>
@@ -1034,12 +1048,14 @@ function drawModal(){
   </div>
 
   ${window.PGX?`
-  <div class="chm-sec">PostgreSQL — independentdemand (неограниченный спрос)</div>
+  <div class="chm-sec">PostgreSQL — independent_demand (неограниченный спрос)</div>
   <div class="chm-note">Неограниченный спрос (Σ <code>demandqty</code>) лежит в Postgres,
-    в схемах <code>public_N</code> ↔ базы ClickHouse <code>data_public_N</code>. Браузер не умеет
-    открывать TCP к Postgres, поэтому запросы идут через backend-прокси (<code>server.js</code>,
-    как в дашборде opti). Не задан — неограниченный спрос считается как покрытый +
-    непокрытый из <code>demand_coverage</code> (ClickHouse).</div>
+    в схемах <code>public_N</code> ↔ базы ClickHouse <code>data_public_N</code>. Если строки есть,
+    но <code>demandqty</code> целиком нулевой, backend проверяет <code>adjusteddemandqty</code> и
+    использует его только с явной пометкой источника. Браузер не умеет открывать TCP к Postgres,
+    поэтому запросы идут через backend-прокси (<code>server.js</code>, как в дашборде opti).
+    Не задан — неограниченный спрос считается как покрытый + непокрытый из
+    <code>demand_coverage</code> (ClickHouse).</div>
   <div class="chm-row"><label>Backend</label>
     <input id="pgmBackend" type="text" value="${esc(PGX.cfg.backend)}"
       placeholder="пусто = этот же сервер (npm start)">
@@ -1052,7 +1068,7 @@ function drawModal(){
   <div class="chm-row"><label>База</label>
     <input id="pgmDb" type="text" value="${esc(PGX.cfg.database)}" placeholder="pgs_app_data_db">
     <span class="chm-hint">продуктивная база: <code>pgs_app_data_db</code> — в ней лежат схемы
-      <code>public_N</code> с <code>independentdemand</code></span></div>
+      <code>public_N</code> с <code>independent_demand</code></span></div>
   <div class="chm-row"><label>Логин</label>
     <input id="pgmUser" type="text" value="${esc(PGX.cfg.user)}" autocomplete="off"
       placeholder="рекомендуется read-only"></div>
@@ -1254,7 +1270,7 @@ function drawModal(){
       CHX.closeModal();
       const stat = document.getElementById('stat');
       /* В шапке — только короткий итог. Заметки загрузки (недоступная
-         independentdemand, смена periodtype и т.п.) уходят в значок ⚠:
+         independent_demand, смена periodtype и т.п.) уходят в значок ⚠:
          длинные красные простыни в шапке больше не печатаем. */
       if(stat) stat.innerHTML =
         `<span class="pos">ClickHouse:</span> ${esc(res.ds.name)}<br>`
@@ -1279,7 +1295,7 @@ let VS_TARGET = null;     // версия для waterfall
 
 /* Метрики версии: [ключ, название, направление (1 лучше больше), формат, источник].
    Источник — таблица ClickHouse, из которой реально считается строка: он выводится
-   тегом в матрице, чтобы входной спрос (independentdemand), покрытие
+   тегом в матрице, чтобы входной спрос (independent_demand), покрытие
    (demand_coverage) и план/затраты (marking_demand) нельзя было перепутать. */
 const VS_METRICS = [
   ['rev','Валовая выручка',1,bn,'marking_demand'],
@@ -1287,7 +1303,7 @@ const VS_METRICS = [
   ['mar','Валовая маржа',1,bn,'marking_demand'],
   ['mrg','Маржинальность',1,pc,'marking_demand'],
   ['mpt','Маржа на тонну',1,v=>nf(v)+' ₽','marking_demand'],
-  ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'independentdemand'],
+  ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'independent_demand'],
   ['demLim','Ограниченный спрос, т',0,v=>nf(v),'demand_coverage'],
   ['sal','План продаж, т',1,v=>nf(v),'marking_demand'],
   ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v),'demand_coverage'],
@@ -1308,7 +1324,7 @@ const VS_METRICS = [
 ];
 
 /* ── Источники строк спроса в сравнении версий ──
-     Неограниченный спрос, т    = Σ demandqty              — independentdemand
+     Неограниченный спрос, т    = Σ demandqty              — independent_demand
                                   (единое определение дашборда; загрузчик кладёт
                                    его в totals.cov.demUnc, фолбэк — прежнее
                                    fullfilleddemandqty + unfullfilleddemandqty)
@@ -1322,13 +1338,13 @@ const VS_METRICS = [
    Фолбэки остаются для версий без таблиц: без demand_coverage ограниченный и
    неудовлетворённый спрос показаны по marking_demand (принято в план и дефицит
    внутри плана — covOk=false, матрица об этом предупреждает), без
-   independentdemand неограниченный спрос — как покрытый + непокрытый
+   independent_demand неограниченный спрос — как покрытый + непокрытый
    (uncSrc='demand_coverage'). */
 function vsFlat(v){
   const a = v.agg || {}, t = a.totals || {}, cov = t.cov || {}, op = t.byOp || {};
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
   const ff = num(cov.ff), uf = num(cov.uf);
-  /* Неограниченный спрос: primary — Σ demandqty из independentdemand (загрузчик
+  /* Неограниченный спрос: primary — Σ demandqty из independent_demand (загрузчик
      уже положил его в cov.demUnc); сумма ff+uf — фолбэк для старых сохранённых
      датасетов, у которых cov.demUnc ещё нет. */
   const demUnc = num(cov.demUnc)>0 ? num(cov.demUnc) : (ff+uf);
@@ -1398,7 +1414,7 @@ CHX.tabVS = function(){
       gransMix ? 'mid' : '']
   ];
 
-  /* Источники спроса называем явно: неограниченный — из independentdemand
+  /* Источники спроса называем явно: неограниченный — из independent_demand
      (Σ demandqty), ограниченный/неудовлетворённый — из demand_coverage; версии
      с фолбэком перечисляем поимённо — это другая база, молчать нельзя. */
   const covFb = rows.filter(r=>!r.covOk);
@@ -1408,12 +1424,12 @@ CHX.tabVS = function(){
   const uncDet = uq(rows.filter(r=>r.demUnc>0 && r.uncSrc==='independentdemand')
     .map(r=>r.label+' ← '+r.uncDetail).filter(s=>!/ ← $/.test(s)),x=>x);
   const covNote = [
-    `Неограниченный спрос — <code>independentdemand</code> (Σ <code>demandqty</code>,
+    `Неограниченный спрос — <code>independent_demand</code> (Σ <code>demandqty</code>,
      {{DET}}ограниченный = покрытый (<code>fullfilleddemandqty</code>) и неудовлетворённый = непокрытый
      (<code>unfullfilleddemandqty</code>) — из <code>demand_coverage</code>. Service Level и затраты — из <code>marking_demand</code>.`
        .replace('{{DET}}', uncDet.length?('схемы: '+esc(uncDet.join('; '))+'); '):'из PostgreSQL; '),
     uncFb.length
-      ? `<span class="neg">independentdemand недоступна у версий: ${esc(uncFb.map(r=>r.label).join(', '))}</span>
+      ? `<span class="neg">independent_demand недоступна у версий: ${esc(uncFb.map(r=>r.label).join(', '))}</span>
          — их неограниченный спрос показан как покрытый + непокрытый из <code>demand_coverage</code>
          (исход прогона, а не вход), строки неограниченного спроса между версиями не сопоставимы.` : '',
     covFb.length
@@ -1492,7 +1508,8 @@ CHX.tabVS = function(){
         /* источник неограниченного спроса — фактический: если хоть одна версия
            на фолбэке, тег показывает обе таблицы (подробности — в covNote) */
         if(k==='demUnc'){
-          const srcs=uq(rows.map(r=>r.uncSrc||'').filter(Boolean),x=>x);
+          const srcName=s=>s==='independentdemand'?'independent_demand':s;
+          const srcs=uq(rows.map(r=>srcName(r.uncSrc||'')).filter(Boolean),x=>x);
           if(srcs.length) rec._src=srcs.join(' + ');
         }
         rows.forEach(r=>{
