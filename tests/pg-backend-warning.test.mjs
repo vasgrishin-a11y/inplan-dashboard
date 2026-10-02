@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    Регрессия по жалобе пользователя (2026-10-02):
 
-   1) «Data_public_4899 → independentdemand недоступна (PG: Not found)» —
+   1) «Data_public_4899 → independent_demand недоступна (PG: Not found)» —
       дашборд был открыт НЕ с server.js, поэтому POST /api/pg/* упирался в
       статический хостинг и получал его собственный 404 «Not found». Теперь
       такой ответ распознаётся: сообщение называет адрес, по которому нет
@@ -118,7 +118,7 @@ test('нет backend-прокси: вместо «Not found» — адрес и 
   const { w, res, pgUrls } = await loadWithoutBackend(t);
 
   const notes = res.notes.join(' ');
-  assert.match(notes, /independentdemand недоступна/, 'фолбэк на demand_coverage объяснён');
+  assert.match(notes, /independent_demand недоступна/, 'фолбэк на demand_coverage объяснён');
   assert.ok(!/PG: Not found/.test(notes), 'чужое «Not found» не показываем как ошибку Postgres: ' + notes);
   assert.match(notes, /нет backend-прокси/, 'названа настоящая причина');
   assert.match(notes, /localhost:8080/, 'назван адрес, по которому стучались');
@@ -146,7 +146,7 @@ test('шапка без красных простыней: предупрежд�
   stat.innerHTML = `<span class="pos">ClickHouse:</span> ${res.ds.name}`;
   w.setLoadWarnings(res.notes);
 
-  assert.ok(!/independentdemand недоступна/.test(stat.textContent),
+  assert.ok(!/independent_demand недоступна/.test(stat.textContent),
     'в шапке больше нет длинного красного текста: ' + stat.textContent);
   assert.equal(stat.querySelectorAll('.neg').length, 0, 'красных блоков в шапке нет');
 
@@ -160,7 +160,7 @@ test('шапка без красных простыней: предупрежд�
   assert.ok(!pop.classList.contains('open'), 'панель закрыта по умолчанию');
   d.getElementById('bWarn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   assert.ok(pop.classList.contains('open'), 'клик раскрывает детали');
-  assert.match(pop.textContent, /independentdemand недоступна/);
+  assert.match(pop.textContent, /independent_demand недоступна/);
   assert.match(pop.textContent, /нет backend-прокси/, 'причина в панели');
   assert.match(pop.textContent, /data_public_4899/, 'перечислены затронутые версии');
   assert.match(pop.textContent, /Что сделать/, 'есть подсказка по backend');
@@ -177,8 +177,8 @@ test('шапка без красных простыней: предупрежд�
 test('одинаковая причина у разных версий схлопывается в одно предупреждение', async (t) => {
   const { w, d } = await boot(t);
   const n = w.setLoadWarnings([
-    'data_public_4899 → independentdemand недоступна (PG: нет backend-прокси) — неограниченный спрос показан как покрытый + непокрытый из demand_coverage',
-    'data_public_4941 → independentdemand недоступна (PG: нет backend-прокси) — неограниченный спрос показан как покрытый + непокрытый из demand_coverage',
+    'data_public_4899 → independent_demand недоступна (PG: нет backend-прокси) — неограниченный спрос показан как покрытый + непокрытый из demand_coverage',
+    'data_public_4941 → independent_demand недоступна (PG: нет backend-прокси) — неограниченный спрос показан как покрытый + непокрытый из demand_coverage',
     'data_public_4941 → demand_cost: таблица не найдена',
   ]);
   assert.equal(n, 2, 'две разные причины, а не три строки');
@@ -198,7 +198,7 @@ test('ошибка самого Postgres остаётся текстом Postgre
     if (u.includes('/api/pg/schemas'))
       return { ok: true, status: 200, json: async () => ({ ok: true, service: 'inplan-dashboard', schemas: [{ schema: 'public_4899', n: 5 }] }) };
     return { ok: false, status: 400, json: async () => ({ ok: false, service: 'inplan-dashboard',
-      error: 'Схема «public_4941»: таблица «independentdemand» не найдена или нет доступа. Схемы с этой таблицей (1): public_4899.' }) };
+      error: 'Схема «public_4941»: таблица «independent_demand» не найдена или нет доступа. Схемы с этой таблицей (1): public_4899.' }) };
   };
   w.PGX.cfg.user = 'reader';
   await assert.rejects(() => w.PGX.uncFor('Data_public_4941', 4), /Схемы с этой таблицей/);

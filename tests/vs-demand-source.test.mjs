@@ -2,12 +2,12 @@
    Регрессия: источники строк спроса во вкладке «Сравнение версий».
 
    Требование владельца дашборда (2026-10): неограниченный спрос ВЕЗДЕ считается
-   по таблице `independentdemand` (Σ `demandqty`) — это вход модели. Таблица
+   по таблице `independent_demand` (Σ `demandqty`) — это вход модели. Таблица
    физически лежит в PostgreSQL и читается через backend-прокси (в ClickHouse
    её нет и не ищем); две другие строки остаются исходом прогона из
    `demand_coverage` (ClickHouse):
 
-     Неограниченный спрос, т    = Σ demandqty            — independentdemand (PG)
+     Неограниченный спрос, т    = Σ demandqty            — independent_demand (PG)
      Ограниченный спрос, т      = fullfilleddemandqty    — demand_coverage (CH)
      Неудовлетворённый спрос, т = unfullfilleddemandqty  — demand_coverage (CH)
 
@@ -75,7 +75,7 @@ const ORDERS_TOT = { orders: 2, rev: 5380, cost: 3170, mar: 2210, dem: 1000, sal
 const COV = { demUnc: 1200, ff: 950, uf: 250, inTime: 900, late: 50, lostRev: 120, planRev: 6000, prop: 1200 };
 const COV0 = { demUnc: 0, ff: 0, uf: 0, inTime: 0, late: 0, lostRev: 0, planRev: 0, prop: 0 };
 const COV_P = [{ k: '2026-09', demUnc: 1200, ff: 950, uf: 250, late: 50 }];
-/* independentdemand в PostgreSQL: входной спрос 1300 — не совпадает ни с покрытием, ни с планом */
+/* independent_demand в PostgreSQL: входной спрос 1300 — не совпадает ни с покрытием, ни с планом */
 const UNC = { demUnc: 1300, n: 15 };
 const UNC_P = [{ k: '2026-09', demUnc: 1300 }];
 const BY_OP = [{ t: 'production', c: 500, v: 48, n: 2 }, { t: 'movement', c: 300, v: 40, n: 2 }];
@@ -91,7 +91,7 @@ const OPS = [
 ];
 
 /** Маршрутизация ClickHouse SQL → строки ответа. noCovFor — схема без demand_coverage.
-    independentdemand здесь быть не может — она в PostgreSQL. */
+    independent_demand здесь быть не может — она в PostgreSQL. */
 function makeRoute(noCovFor) {
   return function route(sql) {
     const dbm = sql.match(/`(data_public_\d+)`\./);
@@ -108,8 +108,8 @@ function makeRoute(noCovFor) {
     if (/`o_p` AS k/.test(sql)) return DIM_P;
     if (/`o_prod` AS k/.test(sql)) return DIM_PR;
     if (/`o_cl` AS k/.test(sql)) return DIM_CL;
-    if (/`independentdemand`/.test(sql))
-      throw new Error('в ClickHouse таблицы independentdemand нет — дашборд обязан идти в PostgreSQL');
+    if (/`independent_demand`/.test(sql))
+      throw new Error('в ClickHouse таблицы independent_demand нет — дашборд обязан идти в PostgreSQL');
     if (/`lostrevenue`/.test(sql)) return [noCov ? COV0 : COV];
     if (/GROUP BY k ORDER BY k/.test(sql)) return noCov ? [] : COV_P;
     if (/calcavailablebucketcapacity/.test(sql)) return [];
@@ -135,7 +135,7 @@ async function waitFor(fn, timeout, label) {
 
 /** Ответ backend-прокси для PG-схемы: одно и то же входное значение на схему. */
 function pgUncPayload(schema) {
-  return { ok: true, schema, table: 'independentdemand', gran: 4,
+  return { ok: true, schema, table: 'independent_demand', gran: 4,
            cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date', sysId: null, upd: null, del: null },
            ...UNC, periods: UNC_P };
 }
@@ -163,11 +163,11 @@ async function openVS(noCovFor, pgMissingFor) {
       const body = JSON.parse(String((opts && opts.body) || '{}'));
       if (u.includes('/api/pg/schemas')) {
         const schemas = ['public_1', 'public_2'].filter((s) => s !== pgMissing).map((s) => ({ schema: s, n: 15 }));
-        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas }) };
       }
       if (u.includes('/api/pg/unc')) {
         if (body.schema === pgMissing)
-          return { ok: false, status: 400, json: async () => ({ error: `Схема «${body.schema}»: таблица «independentdemand» не найдена или нет доступа.` }) };
+          return { ok: false, status: 400, json: async () => ({ error: `Схема «${body.schema}»: таблица «independent_demand» не найдена или нет доступа.` }) };
         return { ok: true, status: 200, json: async () => pgUncPayload(body.schema) };
       }
       return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
@@ -221,7 +221,7 @@ test('неограниченный спрос — из PostgreSQL (Σ demandqty)
   const unsat = ctx.row('Неудовлетворённый спрос, т');
 
   assert.equal(unlimited.base, 1300,
-    'Неограниченный спрос = Σ demandqty из PG independentdemand, а не покрытый+непокрытый 1200 и не план 1000');
+    'Неограниченный спрос = Σ demandqty из PG independent_demand, а не покрытый+непокрытый 1200 и не план 1000');
   assert.equal(limited.base, 950,
     'Ограниченный спрос = fullfilleddemandqty (покрытый), а не demand_volume = 1000 из marking_demand');
   assert.equal(unsat.base, 250,
@@ -233,7 +233,7 @@ test('неограниченный спрос — из PostgreSQL (Σ demandqty)
   assert.equal(unsat.other, 250, 'вторая версия считается по тому же источнику');
 
   /* источники подписаны прямо в строках */
-  assert.equal(unlimited.src, 'independentdemand');
+  assert.equal(unlimited.src, 'independent_demand');
   assert.equal(limited.src, 'demand_coverage');
   assert.equal(unsat.src, 'demand_coverage');
   assert.equal(ctx.row('План продаж, т').src, 'marking_demand',
@@ -272,7 +272,7 @@ test('если demand_coverage у версии недоступна — чест
   assert.equal(unsat.base, 100, 'без покрытия — unsatisfied_demand из marking_demand');
   assert.equal(limited.other, 950, 'у версии с покрытием источник прежний — demand_coverage');
   assert.equal(unsat.other, 250, 'у версии с покрытием источник прежний — demand_coverage');
-  assert.equal(unlimited.src, 'independentdemand', 'источник неограниченного спроса не менялся');
+  assert.equal(unlimited.src, 'independent_demand', 'источник неограниченного спроса не менялся');
 
   const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
   assert.match(subs, /demand_coverage недоступна у версий/,
@@ -280,7 +280,7 @@ test('если demand_coverage у версии недоступна — чест
 });
 
 test('если в PostgreSQL таблицы у версии нет — фолбэк неограниченного спроса на покрытый + непокрытый с пометкой', async (t) => {
-  /* у базовой версии (data_public_1 ↔ public_1) нет independentdemand в PG: backend вернул 400 */
+  /* у базовой версии (data_public_1 ↔ public_1) нет independent_demand в PG: backend вернул 400 */
   const ctx = await openVS(null, 'data_public_1');
   t.after(ctx.close);
 
@@ -288,10 +288,10 @@ test('если в PostgreSQL таблицы у версии нет — фолб�
   assert.equal(unlimited.base, 1200, 'без PG-таблицы — покрытый 950 + непокрытый 250 из demand_coverage');
   assert.equal(unlimited.other, 1300, 'у версии с PG-таблицей — Σ demandqty');
   assert.match(unlimited.src, /demand_coverage/, 'тег строки показывает фолбэк-базу');
-  assert.match(unlimited.src, /independentdemand/, 'тег строки показывает и основную базу');
+  assert.match(unlimited.src, /independent_demand/, 'тег строки показывает и основную базу');
 
   const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
-  assert.match(subs, /independentdemand недоступна у версий/,
+  assert.match(subs, /independent_demand недоступна у версий/,
     'фолбэк назван явно, а не спрятана');
 
   const notes = ctx.window.CHX.versions.flatMap((v) => (v.agg && v.agg.notes) || []).join(' ');

@@ -1124,7 +1124,9 @@ function lmSegBuild(){
 /* ═══════════ 3.6. БАЗА ДЕФИЦИТА: ПЛАН ИЛИ НЕОГРАНИЧЕННЫЙ СПРОС ═══════════
    В данных два уровня спроса, и смешивать их нельзя:
 
-   • Неограниченный спрос — independentdemand (PostgreSQL): Σ demandqty.
+   • Неограниченный спрос — independent_demand (PostgreSQL): Σ demandqty.
+     Если в непустой выборке demandqty целиком нулевой, но заполнен
+     adjusteddemandqty, загрузчик явно помечает и использует Σ adjusteddemandqty.
      Весь входной спрос клиентов ДО ограничений модели. Это агрегат по всей
      схеме — фильтрами он не режется. Если PostgreSQL/таблица недоступны,
      фолбэк — покрытый + непокрытый из demand_coverage (см. covBasis).
@@ -1146,7 +1148,7 @@ function lmSegBuild(){
                           дефициту плана (₽/т активного метода). Масштаб
                           k = непокрытый спрос / дефицит плана применяется ко всем
                           разрезам, поэтому графики и таблицы сходятся с KPI.
-   Если неограниченного спроса нет (нет independentdemand и demand_coverage),
+   Если неограниченного спроса нет (нет independent_demand и demand_coverage),
    он нулевой или активны фильтры — база автоматически возвращается к
    «Дефициту плана» (прежнее поведение). */
 function covBasis(D){
@@ -1163,17 +1165,17 @@ function covBasis(D){
   const fActive=Object.values(F).some(a=>a.length);
   const ff=num(cov.ff), uf=num(cov.uf);
   /* Определение, единое для ВСЕГО дашборда: неограниченный спрос — это сумма
-     demandqty из таблицы independentdemand (весь входной спрос до ограничений
+     demandqty из таблицы independent_demand (весь входной спрос до ограничений
      модели). Загрузчик ClickHouse кладёт его в cov.demUnc; для версий без
-     independentdemand там остаётся фолбэк «покрытый + непокрытый» (отмечено
+     independent_demand там остаётся фолбэк «покрытый + непокрытый» (отмечено
      uncSrc в статусе загрузки), а для старых сохранённых датасетов cov.demUnc
      может отсутствовать — тогда считаем ff + uf здесь. Расхождение входа
-     (independentdemand) и исхода (demand_coverage) ловит проверка
+     (independent_demand) и исхода (demand_coverage) ловит проверка
      «Неограниченный спрос: определение» во вкладке «Данные и качество». */
   const demUnc=num(cov.demUnc)>0?num(cov.demUnc):(ff+uf);
   /* ── Один охват для всей цепочки спроса ──
      Детализация заказов грузится с лимитом (ClickHouse тянет топ-N по марже),
-     а неограниченный спрос — агрегат по ВСЕЙ схеме (independentdemand). Если
+     а неограниченный спрос — агрегат по ВСЕЙ схеме (independent_demand). Если
      смешать охваты, весь незагруженный план молча превратится в «не принято в
      план»: разница «агрегат − урезанный план» выглядит как отказ оптимизатора,
      хотя это артефакт загрузки. Поэтому цепочку считаем по агрегатам схемы,
@@ -1201,15 +1203,16 @@ function covBasis(D){
     dem,sal,unm,demDet,salDet,unmDet,
     rev,cost,mar,full,revDet,costDet,marDet,fullDet,finScope,
     demUnc,ff,uf,late,
-    /* откуда взят неограниченный спрос: independentdemand (primary) или
-       фолбэк demand_coverage / демо-синтез — идёт в подсказки */
+    /* откуда взят неограниченный спрос и какая фактическая колонка PG:
+       demandqty — основная; adjusteddemandqty — явно помеченный фолбэк */
     uncSrc:demo?'demo':(aggT.uncSrc||(demUnc>0?'demand_coverage':'')),
+    uncQty:aggT.uncQty||'demandqty',
     inTime:Math.max(0,sal-late),notPlanned,gapPlan:unm,gapTotal,
     lostRev:num(cov.lostRev)||0,planRev:num(cov.planRev)||0,
     /* почему неограниченный спрос недоступен — идёт в подписи и подсказки */
-    uncWhy:!hasDC?'нет данных independentdemand'
+    uncWhy:!hasDC?'нет данных independent_demand'
       :fActive?'активны фильтры — агрегат по всей схеме'
-      :'в independentdemand нулевой объём'};
+      :'в independent_demand нулевой объём'};
 }
 /* Тождества спроса — то, что бизнес хочет видеть «бьющимся».
    kind:'def' — равенство по построению (расхождение означает проблему в данных:
@@ -1227,7 +1230,7 @@ function covIds(B){
     bad:'Баланс заказа не сходится (demand_volume ≠ results_sale + unsatisfied_demand) — ошибка выгрузки'});
   if(B.useUnc)ids.push({kind:'def',t:'Неограниченный спрос = Отгружено + Не покрыто всего',
     a:B.demUnc,b:B.sal+B.gapTotal,ok:ok(B.demUnc,B.sal+B.gapTotal),
-    bad:'Отгружено больше неограниченного спроса — проверьте гранулярность independentdemand'});
+    bad:'Отгружено больше неограниченного спроса — проверьте гранулярность independent_demand'});
   if(B.useUnc&&B.uf>0)ids.push({kind:'check',t:'Не покрыто всего = unfullfilleddemandqty из demand_coverage',
     a:B.gapTotal,b:B.uf,ok:ok(B.gapTotal,B.uf),
     bad:'Расхождение двух источников непокрытого спроса: fullfilleddemandqty ≠ отгрузке marking_demand'});
@@ -1243,11 +1246,11 @@ const LM_BASES={
     w:'Разрезы по заказам, продуктам и периодам без допущений; единственная база, работающая под фильтрами.',
     lim:'Не видит спрос, который оптимизатор не принял в план, — занижает потери, если неограниченный спрос больше ограниченного.'},
   unc:{t:'Непокрытый спрос',
-    d:'Упущенная маржа по непокрытому спросу от общего неограниченного спроса (independentdemand.demandqty)',
+    d:'Упущенная маржа по непокрытому спросу от общего неограниченного спроса (independent_demand.demandqty)',
     f:'(Неограниченный спрос − Отгружено), т × средневзвешенная ставка дефицита плана, ₽/т',
     b:'Полная цена отказа: и дефицит внутри плана, и спрос, который в план вообще не попал.',
     w:'Основная база для разговора с бизнесом: потери считаются от всего спроса, а не от его урезанной части.',
-    lim:'Тонны «не принято в план» не имеют своей цены и маржи — оцениваются средневзвешенной ставкой дефицита плана. Доступна только без фильтров (агрегат independentdemand по всей схеме).'}
+    lim:'Тонны «не принято в план» не имеют своей цены и маржи — оцениваются средневзвешенной ставкой дефицита плана. Доступна только без фильтров (агрегат independent_demand по всей схеме).'}
 };
 const LM_BASE_KEY='inplan_lm_base';
 const lmBaseMode=()=>{try{const v=localStorage.getItem(LM_BASE_KEY);return LM_BASES[v]?v:'plan'}catch(e){return 'plan'}};
@@ -2880,7 +2883,7 @@ function chDumbbell(id,h,items,fmt,cb){const g=cv(id,h);if(!g)return;const{c,x,w
 /* Строка-предупреждение вместо справочного блока (задача владельца 2026-09-16):
    справка «Источник и методика» убрана из верхней части разделов — она дублировала
    подсказки «?» у показателей и занимала первый экран. Но если состояние данных
-   проблемное (нет independentdemand, активны фильтры, нет ставок), предупреждение
+   проблемное (нет independent_demand, активны фильтры, нет ставок), предупреждение
    остаётся тонкой строкой и раскрывается по клику: прятать его нельзя. */
 function srcFold(sev,brief,body){
   if(sev==='i')return '';
@@ -2905,7 +2908,7 @@ const METRIC_HELP={
  'Упущенная выручка':'<b>Σ (unm × цена заказа)</b>, ₽ — выручка, не полученная из-за дефицита плана.<br>Цена берётся по заказу (<code>demand_coverage.price</code>), а не средней по портфелю.',
  'Не покрыто всего':'<b>Дефицит плана + не принятый в план спрос</b> (<code>gapTotal</code>), т.<br>Не принятый в план = неограниченный спрос − ограниченный спрос.',
  'Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽.<br>Ставка — выбранный метод (маржа заказа / маржа на тонну продукта / предельная / смесь / ставка штрафа), объём — выбранная база (дефицит плана или непокрытый спрос от неограниченного спроса). Переключатели — в шапке вкладки, сверка со строкой <code>lostrevenue</code> — в «Экономике отказов».',
- 'Неограниченный спрос':'<b>Σ demandqty</b>, т — весь входной спрос клиентов до ограничения планом.<br>Источник: <code>independentdemand</code> — из PostgreSQL через backend-прокси (схема <code>public_N</code> ↔ база ClickHouse <code>data_public_N</code>). Если PostgreSQL недоступен — фолбэк: покрытый + непокрытый из <code>demand_coverage</code>; под фильтрами и без агрегата карточка не считается («—»).',
+ 'Неограниченный спрос':'<b>Σ demandqty</b>, т — весь входной спрос клиентов до ограничения планом.<br>Источник: <code>independent_demand</code> — из PostgreSQL через backend-прокси (схема <code>public_N</code> ↔ база ClickHouse <code>data_public_N</code>). Если строки есть, но <code>demandqty</code> целиком нулевой, а <code>adjusteddemandqty</code> заполнен, используется явно подписанный скорректированный объём. Если PostgreSQL недоступен — фолбэк: покрытый + непокрытый из <code>demand_coverage</code>; под фильтрами и без агрегата карточка не считается («—»).',
  'Не принято в план':'<b>Неограниченный спрос − Ограниченный спрос (план)</b>, т: объём, который не дошёл до планирования.',
  'Ограниченный спрос (план)':'<b>Σ dem</b>, т — спрос, принятый в план (<code>demand</code> / <code>demand_limited</code>).',
  'Отгружено':'<b>Σ sal</b>, т — объём, покрытый планом продаж.',
@@ -3065,7 +3068,7 @@ function tabOV(){
    ['Не покрыто всего',nf(B.gapTotal)+' т',
      B.useUnc?`${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана`:`= дефицит плана · ${B.uncWhy}`,
      B.gapTotal?'neg':'pos',
-     B.useUnc?'Неограниченный спрос (independentdemand.demandqty) − отгружено (marking_demand)'
+     B.useUnc?`Неограниченный спрос (independent_demand.${B.uncQty}) − отгружено (marking_demand)`
              :'Неограниченный спрос недоступен — показан дефицит плана marking_demand'],
    ['Упущенная маржа',bn(lm),lmKpiSub(T),lm?'neg':'',
      `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`]];
@@ -3223,7 +3226,7 @@ function tabOV(){
 /* ═════════ 9. БЛОК: СПРОС И ПОКРЫТИЕ ═══════════ */
 function tabDM(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
-  /* База покрытия: неограниченный спрос (independentdemand.demandqty), план и
+  /* База покрытия: неограниченный спрос (independent_demand.demandqty), план и
      непокрытый объём. Неограниченный спрос — агрегат по всей схеме, поэтому
      под фильтрами он отключается (useUnc=false) и все цифры считаются по плану. */
   const {B,T}=lmState(D);
@@ -3295,11 +3298,11 @@ function tabDM(){
     ['Неограниченный спрос',useUnc?nf(demUnc)+' т':'—',
       useUnc?`${ordW(B.ordersAll)} · весь спрос до ограничений модели`:B.uncWhy,'',
       useUnc?(B.uncSrc==='demand_coverage'
-            ?'Источник: demand_coverage (fullfilleddemandqty + unfullfilleddemandqty) — фолбэк: таблицы independentdemand в схеме нет, агрегат по всей схеме'
-            :'Источник: independentdemand (Σ demandqty), агрегат по всей схеме — фильтрами не режется')
-           :'Неограниченный спрос известен только из агрегата independentdemand по всей схеме'],
+            ?'Источник: demand_coverage (fullfilleddemandqty + unfullfilleddemandqty) — фолбэк: таблицы independent_demand в схеме нет, агрегат по всей схеме'
+            :`Источник: independent_demand (Σ ${B.uncQty}), агрегат по всей схеме — фильтрами не режется${B.uncQty!=='demandqty'?' · demandqty был нулевым, использован скорректированный вход':''}`)
+           :'Неограниченный спрос известен только из агрегата independent_demand по всей схеме'],
     ['Не принято в план',useUnc?nf(notPlanned)+' т':'—',
-      useUnc?pc(demUnc?notPlanned/demUnc:0)+' неограниченного спроса':'нужен independentdemand',useUnc&&notPlanned?'mid':'',
+      useUnc?pc(demUnc?notPlanned/demUnc:0)+' неограниченного спроса':'нужен independent_demand',useUnc&&notPlanned?'mid':'',
       'Неограниченный спрос − ограниченный спрос: объём, который оптимизатор не принял в план. Обе величины берутся в одном охвате ('+scopeTxt+'), иначе разница вобрала бы в себя незагруженные заказы'],
     ['Ограниченный спрос (план)',nf(dem)+' т',
       ordW(B.ordersAll)+(useUnc?` · принято ${pc(demUnc?dem/demUnc:0)} неограниченного спроса`:'')+sampleTxt,'',
@@ -3334,7 +3337,7 @@ function tabDM(){
      из сетки графиков и склеивается с summary() в конце функции. */
   const reconCard=`<div class="grid recon-tail">
     <div class="card w"><h3>Свод спроса: как складываются цифры</h3>
-      <div class="sub">Тождества между неограниченным спросом, планом, отгрузкой и непокрытым объёмом — проверка «бьётся / не бьётся»${B.demo?' · демо-агрегат (в демо нет independentdemand)':''}</div>
+      <div class="sub">Тождества между неограниченным спросом, планом, отгрузкой и непокрытым объёмом — проверка «бьётся / не бьётся»${B.demo?' · демо-агрегат (в демо нет independent_demand)':''}</div>
       ${covReconHtml(B,T,rev?mar/rev:0)}
       <p class="rec-note"><b>Как читать:</b> неограниченный спрос — сколько всего хотели клиенты; ограниченный спрос — сколько оптимизатор принял в план;
       «не принято в план» — спрос, отсечённый ограничениями до плана; «дефицит плана» — что не отгрузили из принятого;
@@ -3346,11 +3349,11 @@ function tabDM(){
   const html=`
   ${srcFold(B.partial?'w':(useUnc?'i':'w'),
     (B.partial?`детализация ${nf(B.orders)} из ${nf(B.ordersAll)} заказов · `:'')+(B.demo?'демо-агрегат покрытия · ':'')+(useUnc
-      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independentdemand'} + marking_demand · не покрыто ${nf(B.gapTotal)} т · база «${LM_BASES[T.base].t}»`
-      :hasDC?'активны фильтры — расчёт по marking_demand':'нет independentdemand — расчёт по marking_demand'),
-    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independentdemand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк — нет independentdemand)':'<code>independentdemand</code> (<code>demandqty</code>)'} по всей схеме; опоздания — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}».`
-      :hasDC?`Активны фильтры: неограниченный спрос (<code>independentdemand</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
-      :'Таблица <code>independentdemand</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}${
+      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · база «${LM_BASES[T.base].t}»`
+      :hasDC?'активны фильтры — расчёт по marking_demand':'нет independent_demand — расчёт по marking_demand'),
+    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк — нет independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>${B.uncQty!=='demandqty'?' — скорректированный вход, потому что demandqty нулевой':''})`} по всей схеме; опоздания — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}».`
+      :hasDC?`Активны фильтры: неограниченный спрос (<code>independent_demand</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
+      :'Таблица <code>independent_demand</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}${
       B.partial?` <b>Детализация ограничена лимитом загрузки:</b> ${nf(B.orders)} заказов из ${nf(B.ordersAll)} по схеме. Цепочка спроса и Service Level посчитаны по агрегатам всей схемы (${nf(B.dem)} т плана), иначе незагруженные заказы попали бы в «не принято в план». Таблицы, разрезы и упущенная маржа ниже строятся по загруженной выборке: её средневзвешенная ставка ₽/т перенесена на полный объём базы.`:''}`)}
   ${lmRowHtml()}
   ${kpisHtml(K)}
@@ -3463,7 +3466,7 @@ function tabDM(){
     {t:'Рекомендации',i:[
       `Расшивать дефицит по <span class="h">упущенной марже</span>, а не по тоннам — таблица уже отсортирована так.`,
       `По каждому дефицитному заказу смотреть колонки RCA: перегруз производства, блокировка маршрута и сырьё — три разных управленческих решения.`,
-      useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>independentdemand</code>, чтобы водопад начинался с неограниченного спроса, а упущенная маржа считалась по непокрытому спросу, а не только по дефициту плана.`,
+      useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>independent_demand</code>, чтобы водопад начинался с неограниченного спроса, а упущенная маржа считалась по непокрытому спросу, а не только по дефициту плана.`,
       covIds(B).filter(i=>!i.ok).length
         ?`<span class="h">Тождества спроса не сходятся</span>: ${covIds(B).filter(i=>!i.ok).map(i=>i.t).join('; ')} — разбор в карточке «Свод спроса» ниже.`
         :`Все тождества спроса сходятся — карточка «Свод спроса» ниже подтверждает равенства числами.`]}])
@@ -4018,7 +4021,7 @@ function snap(ds){
      равен дефициту плана (прежнее поведение). */
   const cov=((ds.agg||{}).totals||{}).cov||{};
   /* то же определение, что в covBasis: неограниченный спрос = Σ demandqty из
-     independentdemand (загрузчик кладёт его в cov.demUnc); сумма покрытого и
+     independent_demand (загрузчик кладёт его в cov.demUnc); сумма покрытого и
      непокрытого — фолбэк для старых сохранённых датасетов */
   const covFF=num(cov.ff),covUF=num(cov.uf);
   const demUnc=num(cov.demUnc)>0?num(cov.demUnc):(covFF+covUF);
@@ -4395,16 +4398,18 @@ function tabDQ(){
       :'Маржа на тонну согласована с «цена − себестоимость» в пределах 5%.',
     bad5.length?'Уточнить, входит ли в margin_per_unit логистика/пошлины: разные основания искажают сравнение методов упущенной маржи.':'—');
 
-  /* ── Неограниченный спрос (independentdemand.demandqty): данные для базы «Непокрытый спрос» ──
+  /* ── Неограниченный спрос (independent_demand.demandqty): данные для базы «Непокрытый спрос» ──
      Проверяем не UI-сверку (она живёт в блоке «Спрос и покрытие»), а качество
      источника: инварианты определений, сходимость периодного разреза с итогом,
      масштаб спроса вне плана и согласованность lostrevenue с маржой. */
   const aggD=(DS&&DS.agg)||{}, covD=(aggD.totals||{}).cov||{}, dimsD=((aggD.dims||{}).coverage||[]);
   const covFFD=num(covD.ff), covUFD=num(covD.uf);
-  /* то же определение, что в covBasis: Σ demandqty из independentdemand — primary,
-     покрытый + непокрытый — фолбэк (загрузчик уже разрулил источник в cov.demUnc) */
+  /* то же определение, что в covBasis: Σ demandqty из independent_demand — primary;
+     если он нулевой, загрузчик мог явно выбрать adjusteddemandqty. Покрытый +
+     непокрытый — межсистемный фолбэк (источник уже разрулен в cov.demUnc). */
   const demUncD=num(covD.demUnc)>0?num(covD.demUnc):(covFFD+covUFD);
   const uncSrcD=(aggD.totals||{}).uncSrc||(demUncD>0?'demand_coverage':'');
+  const uncQtyD=(aggD.totals||{}).uncQty||'demandqty';
   const demD=S(o,x=>x.dem), salD=S(o,x=>x.sal), unmD=S(o,x=>x.unm);
   const revD=S(o,x=>x.rev), marD=S(o,x=>x.mar);
   /* Тот же принцип, что в covBasis: цепочку сверяем в охвате всей схемы, иначе
@@ -4421,8 +4426,8 @@ function tabDQ(){
       detLim?'Если нужны по-заказные разрезы по всему плану, поднять лимит детализации в окне подключения ClickHouse. Смешивать агрегат схемы с урезанной выборкой в одной формуле нельзя: разница уходит в «не принято в план».':'—');
   if(!(demUncD>0)){
     add('w','Неограниченный спрос',
-      'Агрегат <code>independentdemand</code> отсутствует или нулевой: упущенная маржа считается только по дефициту плана (<code>marking_demand</code>). Заказы, которые в план не попали, в потерях не участвуют — полная цена отказа занижена.',
-      'Добавить в выгрузку <code>independentdemand</code> (demandqty) и <code>demand_coverage</code> (fullfilleddemandqty, unfullfilleddemandqty, demandfullfilledlateqty, lostrevenue) — либо прямо говорить, что LM означает «дефицит внутри плана», а не «непокрытый спрос».');
+      'Агрегат <code>independent_demand</code> отсутствует или нулевой: упущенная маржа считается только по дефициту плана (<code>marking_demand</code>). Заказы, которые в план не попали, в потерях не участвуют — полная цена отказа занижена.',
+      'Добавить в выгрузку <code>independent_demand</code> (demandqty) и <code>demand_coverage</code> (fullfilleddemandqty, unfullfilleddemandqty, demandfullfilledlateqty, lostrevenue) — либо прямо говорить, что LM означает «дефицит внутри плана», а не «непокрытый спрос».');
   }else{
     const notPlannedD=Math.max(0,demUncD-demSD), gapD=Math.max(0,demUncD-salSD);
     const badU=[];
@@ -4431,18 +4436,18 @@ function tabDQ(){
     add(badU.length?'e':'i','Неограниченный спрос: инварианты',
       badU.length?`Нарушено определение неограниченного спроса: ${badU.join('; ')}. База «Непокрытый спрос» на таких данных отключается автоматически.`
         :`Инварианты соблюдены: неограниченный ${nf(demUncD)} т = план ${nf(demSD)} т + вне плана ${nf(notPlannedD)} т; не покрыто всего ${nf(gapD)} т = вне плана + дефицит плана ${nf(unmSD)} т.`,
-      badU.length?'Проверить гранулярность и границы горизонта <code>independentdemand</code>: смешение «месяц/день» или неполный период дают отгрузку больше спроса.':'—');
+      badU.length?'Проверить гранулярность и границы горизонта <code>independent_demand</code>: смешение «месяц/день» или неполный период дают отгрузку больше спроса.':'—');
 
-    /* определение «неограниченный спрос = Σ demandqty (independentdemand)»
-       сверяем с исходом прогона: вход и покрытие — разные таблицы, и если они
-       расходятся, это брак источника, а не разные трактовки показателя */
+    /* определение входного спроса independent_demand сверяем с исходом прогона:
+       вход и покрытие — разные таблицы, и если они расходятся, это брак
+       источника, а не разные трактовки показателя. Фактическая колонка названа. */
     const totSrcD=num(covD.demUnc), compD=covFFD+covUFD;
     if(uncSrcD==='independentdemand'&&totSrcD>0&&compD>0){
       const devDef=Math.abs(totSrcD-compD)/Math.max(totSrcD,compD);
       add(devDef>.005?'e':'i','Неограниченный спрос: определение',
-        `Σ demandqty (<code>independentdemand</code>) — ${nf(totSrcD)} т против покрытого ${nf(covFFD)} т + непокрытого ${nf(covUFD)} т = ${nf(compD)} т (<code>demand_coverage</code>), расхождение ${pc(devDef)}.`,
-        devDef>.005?'Дашборд во всех разделах считает неограниченный спрос по столбцу <code>demandqty</code> таблицы <code>independentdemand</code> — показан именно он. Вход и исход прогона расходятся: проверить, что <code>independentdemand</code> выгружена для той же версии и гранулярности, и дедупликацию строк <code>demand_coverage</code> (<code>fullfilleddemandqty</code> / <code>unfullfilleddemandqty</code>).'
-                   :'Входной спрос <code>independentdemand</code> совпадает с суммой покрытого и непокрытого спроса <code>demand_coverage</code>.');
+        `Σ ${uncQtyD} (<code>independent_demand</code>) — ${nf(totSrcD)} т против покрытого ${nf(covFFD)} т + непокрытого ${nf(covUFD)} т = ${nf(compD)} т (<code>demand_coverage</code>), расхождение ${pc(devDef)}.`,
+        devDef>.005?`Дашборд во всех разделах считает неограниченный спрос по фактически выбранному столбцу <code>${uncQtyD}</code> таблицы <code>independent_demand</code> — показан именно он. Вход и исход прогона расходятся: проверить, что <code>independent_demand</code> выгружена для той же версии и гранулярности, и дедупликацию строк <code>demand_coverage</code> (<code>fullfilleddemandqty</code> / <code>unfullfilleddemandqty</code>).`
+                   :'Входной спрос <code>independent_demand</code> совпадает с суммой покрытого и непокрытого спроса <code>demand_coverage</code>.');
     }
 
     /* сходимость периодного разреза с итогом — ловит смешение гранулярностей */
@@ -4450,7 +4455,7 @@ function tabDQ(){
       const sumD=S(dimsD,x=>num(x.demUnc));
       const dev=Math.abs(sumD-demUncD)/Math.max(demUncD,1);
       add(dev>.01?'e':'i','Неограниченный спрос: разрез против итога',
-        `Сумма по ${dimsD.length} периодам <code>${uncSrcD==='independentdemand'?'independentdemand':'demand_coverage'}</code> — ${nf(sumD)} т против итога ${nf(demUncD)} т, расхождение ${pc(dev)}.`,
+        `Сумма по ${dimsD.length} периодам <code>${uncSrcD==='independentdemand'?'independent_demand':'demand_coverage'}</code> — ${nf(sumD)} т против итога ${nf(demUncD)} т, расхождение ${pc(dev)}.`,
         dev>.01?'Периоды и итог собраны по разным гранулярностям или с разными границами — сверить periodtype выгрузки (у каждой версии он свой, см. «Сравнение версий»).'
               :'Пер-периодный разрез сходится с итогом: распределение упущенной маржи по периодам корректно.');
     }
@@ -6961,13 +6966,13 @@ document.addEventListener('click',e=>{
   if(j){CapacityRCA.drillDownToOrder(+j.dataset.ord,j.dataset.rs,j.dataset.mode||'prod_res')}
 });
 /* ═══════════════ ЗНАЧОК ПРЕДУПРЕЖДЕНИЙ ЗАГРУЗКИ ═══════════════
-   Раньше причины («independentdemand недоступна (PG: …) — спрос показан как
+   Раньше причины («independent_demand недоступна (PG: …) — спрос показан как
    покрытый + непокрытый из demand_coverage» по каждой версии) печатались
    красным прямо в шапке и занимали половину её ширины. Теперь в шапке —
    один значок ⚠ (его нет, когда всё хорошо), а разбор проблемы и кнопка
    «Открыть подключение» живут в его всплывающей панели. */
 let LOAD_WARNINGS=[];
-/* Заметка загрузчика: «data_public_4899 → independentdemand недоступна (PG: …) — …»
+/* Заметка загрузчика: «data_public_4899 → independent_demand недоступна (PG: …) — …»
    → {db, title, cause, effect}. Одинаковые причины схлопываются по версиям. */
 function parseWarnNote(note){
   const s=String(note||'').trim();
@@ -7172,7 +7177,7 @@ window.onCHSessionStatus=function(info){
 };
 
 /* ── Демо-набор: агрегат неограниченного спроса ──
-   В реальной поставке неограниченный спрос приходит из таблицы independentdemand
+   В реальной поставке неограниченный спрос приходит из таблицы independent_demand
    (колонка demandqty; таблица лежит в PostgreSQL, дашборд читает её через
    backend-прокси server.js); во встроенном демо её нет. Чтобы без подключения
    к CH были видны водопад от неограниченного спроса, карточки

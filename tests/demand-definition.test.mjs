@@ -1,9 +1,9 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Регрессия: определение «Неограниченный спрос = Σ demandqty из independentdemand»
+   Регрессия: определение «Неограниченный спрос = Σ demandqty из independent_demand»
    действует во ВСЁМ дашборде, а не в одном разделе.
 
    Требование владельца (2026-10): неограниченный спрос везде — это сумма
-   по столбцу `demandqty` таблицы `independentdemand` (вход модели). Раньше
+   по столбцу `demandqty` таблицы `independent_demand` (вход модели). Раньше
    показатель считался как покрытый + непокрытый из `demand_coverage`
    (fullfilleddemandqty + unfullfilleddemandqty) — это ИСХОД прогона, и при
    расхождении входа и исхода разделы могли показать не то число.
@@ -11,7 +11,7 @@
    Проверяется моком, где таблицы намеренно расходятся (вход 1500 против
    950 + 250 исхода): дашборд обязан показывать 1500 (demandqty) во всех
    разделах и поднять проверку «Неограниченный спрос: определение», которая
-   сверяет вход (independentdemand) с исходом (demand_coverage).
+   сверяет вход (independent_demand) с исходом (demand_coverage).
 
    Запуск:  npm test
    ───────────────────────────────────────────────────────────────────────────── */
@@ -66,7 +66,7 @@ const OPS = [
   { o: 101, p: '1', type: 'production', pl: 'L1', pr: 'P1', rs: 'R1', fr: '', to: '', tm: '', v: 19, r: 26, vd: '', rt: '1.1', oid: '101.1', rc: 0 },
 ];
 
-/** uncTotal — Σ demandqty из PG independentdemand (вход); покрытие в CH — 950 + 250 = 1200 (исход). */
+/** uncTotal — Σ demandqty из PG independent_demand (вход); покрытие в CH — 950 + 250 = 1200 (исход). */
 function makeRoute(uncTotal) {
   const COV = { demUnc: 1200, ff: 950, uf: 250, inTime: 850, late: 50, lostRev: 120, planRev: 6000, prop: 1200 };
   const COV_P = [{ k: '2026-09', demUnc: 1200, ff: 950, uf: 250, late: 50 }];
@@ -84,7 +84,7 @@ function makeRoute(uncTotal) {
     if (/`o_p` AS k/.test(sql)) return DIM_P;
     if (/`o_prod` AS k/.test(sql)) return DIM_PR;
     if (/`o_cl` AS k/.test(sql)) return DIM_CL;
-    if (/`independentdemand`/.test(sql)) throw new Error('в ClickHouse таблицы independentdemand нет — идём в PostgreSQL');
+    if (/`independent_demand`/.test(sql)) throw new Error('в ClickHouse таблицы independent_demand нет — идём в PostgreSQL');
     if (/`lostrevenue`/.test(sql)) return [COV];
     if (/GROUP BY k ORDER BY k/.test(sql)) return COV_P;
     if (/SELECT order_id AS id/.test(sql)) return ORDERS;
@@ -120,9 +120,9 @@ async function loadCH(uncTotal) {
     if (u.includes('/api/pg/')) {
       const body = JSON.parse(String((opts && opts.body) || '{}'));
       if (u.includes('/api/pg/schemas'))
-        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: [{ schema: 'public_1', n: 15 }, { schema: 'public_2', n: 15 }] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas: [{ schema: 'public_1', n: 15 }, { schema: 'public_2', n: 15 }] }) };
       if (u.includes('/api/pg/unc'))
-        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independentdemand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date' }, demUnc: uncTotal, n: 15, periods: [{ k: '2026-09', demUnc: uncTotal }] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date' }, demUnc: uncTotal, n: 15, periods: [{ k: '2026-09', demUnc: uncTotal }] }) };
       return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
     }
     const sql = String((opts && opts.body) || '');
@@ -154,7 +154,7 @@ async function loadCH(uncTotal) {
   return { window: w, document: d, kpi, goTab, vsRow, close() { try { dom.window.close(); } catch { /* jsdom */ } } };
 }
 
-test('неограниченный спрос = Σ demandqty (independentdemand) во всех разделах, даже если покрытие говорит другое', async (t) => {
+test('неограниченный спрос = Σ demandqty (independent_demand) во всех разделах, даже если покрытие говорит другое', async (t) => {
   /* входной спрос 1500, а покрытый + непокрытый — 1200 */
   const ctx = await loadCH(1500);
   t.after(ctx.close);
@@ -163,7 +163,7 @@ test('неограниченный спрос = Σ demandqty (independentdemand)
   const unlim = ctx.kpi('Неограниченный спрос');
   assert.ok(unlim, 'карточка «Неограниченный спрос» есть во вкладке «Спрос и покрытие»');
   assert.equal(toNum(unlim.querySelector('.v').textContent), 1500,
-    'показан вход 1500 из independentdemand, а не покрытый+непокрытый 1200');
+    'показан вход 1500 из independent_demand, а не покрытый+непокрытый 1200');
 
   /* производные от него величины считаются от того же числа */
   assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 500, '1500 − 1000 плана');
@@ -182,13 +182,13 @@ test('неограниченный спрос = Σ demandqty (independentdemand)
   const checks = [...ctx.document.querySelectorAll('#q3 .dq')].map((x) => x.textContent.replace(/\s+/g, ' '));
   const def = checks.find((x) => /Неограниченный спрос: определение/.test(x));
   assert.ok(def, 'во вкладке «Данные и качество» есть проверка определения');
-  assert.match(def, /1 500/, 'вход (independentdemand) назван числом');
+  assert.match(def, /1 500/, 'вход (independent_demand) назван числом');
   assert.match(def, /1 200/, 'исход (demand_coverage) назван числом');
   assert.match(def, /расхождение/, 'проверка сообщает о расхождении, а не молчит');
-  assert.match(def, /independentdemand/, 'назван источник определения');
+  assert.match(def, /independent_demand/, 'назван источник определения');
 });
 
-test('когда вход (independentdemand) согласован с исходом (demand_coverage) — проверка определения зелёная', async (t) => {
+test('когда вход (independent_demand) согласован с исходом (demand_coverage) — проверка определения зелёная', async (t) => {
   const ctx = await loadCH(1200);
   t.after(ctx.close);
 
@@ -205,7 +205,7 @@ test('когда вход (independentdemand) согласован с исход
     'подтверждение, а не предупреждение');
 });
 
-test('без independentdemand — честный фолбэк на покрытый + непокрытый с пометкой в статусе загрузки', async (t) => {
+test('без independent_demand — честный фолбэк на покрытый + непокрытый с пометкой в статусе загрузки', async (t) => {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', () => {});
   const dom = new JSDOM(fs.readFileSync(HTML, 'utf8'), {
@@ -221,9 +221,9 @@ test('без independentdemand — честный фолбэк на покрыт
     if (u.includes('/api/pg/')) {
       const body = JSON.parse(String((opts && opts.body) || '{}'));
       if (u.includes('/api/pg/schemas'))
-        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: [{ schema: 'public_1', n: 0 }, { schema: 'public_2', n: 0 }] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas: [{ schema: 'public_1', n: 0 }, { schema: 'public_2', n: 0 }] }) };
       if (u.includes('/api/pg/unc'))
-        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independentdemand', gran: body.gran, cols: { qty: 'demandqty' }, demUnc: 0, n: 0, periods: [] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty' }, demUnc: 0, n: 0, periods: [] }) };
     }
     const sql = String((opts && opts.body) || '');
     let rows;
@@ -246,7 +246,7 @@ test('без independentdemand — честный фолбэк на покрыт
 
   /* загрузчик зафиксировал фолбэк: заметка и источник — demand_coverage */
   const notes = w.CHX.versions.map((v) => (v.agg.notes || []).join(' ')).join(' ');
-  assert.match(notes, /independentdemand/, 'причина фолбэка зафиксирована в заметках загрузки');
+  assert.match(notes, /independent_demand/, 'причина фолбэка зафиксирована в заметках загрузки');
   assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'demand_coverage',
     'источник неограниченного спроса помечен как demand_coverage');
 

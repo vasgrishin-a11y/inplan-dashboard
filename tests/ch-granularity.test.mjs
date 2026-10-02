@@ -92,7 +92,7 @@ const DIM_CL = [{ k: 'C1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
 const COV = { demUnc: 60, ff: 58, uf: 2, inTime: 56, late: 2, lostRev: 120, planRev: 6000, prop: 60 };
 const COV0 = { demUnc: 0, ff: 0, uf: 0, inTime: 0, late: 0, lostRev: 0, planRev: 0, prop: 0 };
 const COV_P = [{ k: '2026-09', demUnc: 60, ff: 58, uf: 2, late: 2 }];
-/* independentdemand лежит в PostgreSQL — в ClickHouse её нет и не ищем;
+/* independent_demand лежит в PostgreSQL — в ClickHouse её нет и не ищем;
    без PG источник неограниченного спроса — покрытый + непокрытый (demand_coverage) */
 const CAP = [{
   rs: 'R1', pl: 'L1', resTypeDescr: 'Линия', resType: 10, grp: 'G1', periodKey: '2026-09',

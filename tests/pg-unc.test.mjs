@@ -1,8 +1,8 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Регрессия: источник «Неограниченный спрос = Σ demandqty из independentdemand»
+   Регрессия: источник «Неограниченный спрос = Σ demandqty из independent_demand»
    — POSTGRESQL через backend-прокси (server.js), а не ClickHouse.
 
-   Уточнение владельца (2026-10): таблица independentdemand физически лежит
+   Уточнение владельца (2026-10): таблица independent_demand физически лежит
    в PostgreSQL (та же база, к которой подключён дашборд opti). ClickHouse-версии
    сопоставляются PG-схемам по имени: data_public_2 ↔ public_2.
 
@@ -81,7 +81,7 @@ function routeCH(sql) {
   if (/SELECT 1 AS ok/.test(sql)) return [{ ok: 1 }];
   if (/FROM system\.databases/.test(sql))
     return [{ name: 'system' }, ...Object.keys(DBS).sort().map((name) => ({ name }))];
-  /* independentdemand в ClickHouse ОТСУТСТВУЕТ — в system.columns её колонок нет */
+  /* independent_demand в ClickHouse ОТСУТСТВУЕТ — в system.columns её колонок нет */
   if (/FROM system\.columns/.test(sql)) return COLS.map((name) => ({ name }));
   if (/max\(update_date_time\)/.test(sql) && db && DBS[db]) return [{ n: DBS[db].n, ts: DBS[db].ts }];
   if (/SELECT periodtype AS t/.test(sql)) return db && DBS[db] ? DBS[db].grans.map(([t, n]) => ({ t, n })) : [];
@@ -90,7 +90,7 @@ function routeCH(sql) {
   if (/`o_p` AS k/.test(sql)) return DIM_P;
   if (/`o_prod` AS k/.test(sql)) return DIM_PR;
   if (/`o_cl` AS k/.test(sql)) return DIM_CL;
-  if (/`independentdemand`/.test(sql)) throw new Error('в ClickHouse таблицы быть не должно — дашборд обязан идти в PG');
+  if (/`independent_demand`/.test(sql)) throw new Error('в ClickHouse таблицы быть не должно — дашборд обязан идти в PG');
   if (/`lostrevenue`/.test(sql)) return [COV];
   if (/GROUP BY k ORDER BY k/.test(sql)) return COV_P;
   if (/SELECT order_id AS id/.test(sql)) return ORDERS;
@@ -123,7 +123,7 @@ async function boot(t) {
 }
 
 /* pgMode 'ok' — backend отвечает агрегатами; 'lost' — backend жив, но таблицы
-   independentdemand нет ни в одной схеме (ответ 400 «не найдена»). */
+   independent_demand нет ни в одной схеме (ответ 400 «не найдена»). */
 async function loadWithPG(t, pgMode) {
   const { w, d } = await boot(t);
   w.fetch = async (url, opts) => {
@@ -131,15 +131,20 @@ async function loadWithPG(t, pgMode) {
     if (u.includes('/api/pg/')) {
       const body = JSON.parse(String((opts && opts.body) || '{}'));
       if (u.includes('/api/pg/schemas')) {
-        if (pgMode === 'lost') return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: [] }) };
-        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: PG_SCHEMAS }) };
+        if (pgMode === 'lost') return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas: [] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas: PG_SCHEMAS }) };
       }
       if (u.includes('/api/pg/unc')) {
-        const rec = pgMode === 'ok' && PG[body.schema];
+        const rec = (pgMode === 'ok' || pgMode === 'adjusted') && PG[body.schema];
         if (!rec) {
-          return { ok: false, status: 400, json: async () => ({ error: `Схема «${body.schema}»: таблица «independentdemand» не найдена или нет доступа.` }) };
+          return { ok: false, status: 400, json: async () => ({ error: `Схема «${body.schema}»: таблица «independent_demand» не найдена или нет доступа.` }) };
         }
-        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independentdemand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date', sysId: 'sys_id', upd: 'update_date_time', del: null }, ...rec }) };
+        const payload = pgMode === 'adjusted'
+          ? { ...rec, qtySource: 'adjusteddemandqty',
+              qtyFallback: { from: 'demandqty', to: 'adjusteddemandqty', reason: `Σ demandqty = 0 при ${rec.n} строках periodtype ${body.gran}` },
+              primaryDemUnc: 0, adjustedDemUnc: rec.demUnc }
+          : rec;
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty', adjustedQty: 'adjusteddemandqty', ptype: 'periodtype', date: 'date', sysId: 'sys_id', upd: 'update_date_time', del: null }, ...payload }) };
       }
       return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
     }
@@ -184,7 +189,7 @@ test('неограниченный спрос приходит из PostgreSQL �
 
   /* заметок о фолбэке нет — источник основной */
   const notes = w.CHX.versions.flatMap((v) => v.agg.notes || []).join(' ');
-  assert.ok(!/independentdemand недоступна/.test(notes), 'ошибок источника нет: ' + notes);
+  assert.ok(!/independent_demand недоступна/.test(notes), 'ошибок источника нет: ' + notes);
 
   /* помесячный разрез: PG-периоды слились с покрытием; период, которого нет
      в покрытии, дописан с нулями составляющих */
@@ -208,7 +213,7 @@ test('неограниченный спрос приходит из PostgreSQL �
   const trs = [...d.querySelectorAll('#vsMat table tbody tr')];
   const uncTr = trs.find((x) => (x.querySelector('td') || {}).textContent?.trim().startsWith('Неограниченный спрос'));
   assert.ok(uncTr, 'строка неограниченного спроса есть');
-  assert.match(uncTr.querySelector('td').innerHTML, /independentdemand/, 'тег источника');
+  assert.match(uncTr.querySelector('td').innerHTML, /independent_demand/, 'тег источника');
   /* ячейки версий идут с дельтой к базе «1 700 (+200)» — отрезаем её */
   const cells = [...uncTr.querySelectorAll('td')].slice(1)
     .map((td) => toNum(td.textContent.split('(')[0]));
@@ -231,6 +236,23 @@ test('неограниченный спрос приходит из PostgreSQL �
   assert.equal(w.PGX.pgSchemaFor('public_9'), 'public_9', 'без попадания в справочник — снятое имя как есть');
 });
 
+test('нулевой demandqty при заполненном adjusteddemandqty остаётся PG-источником, а не уходит в demand_coverage', async (t) => {
+  const ctx = await loadWithPG(t, 'adjusted');
+  const v1 = ctx.w.CHX.versions.find((v) => v.id === 'data_public_1');
+
+  assert.equal(v1.agg.totals.uncSrc, 'independentdemand');
+  assert.equal(v1.agg.totals.uncQty, 'adjusteddemandqty');
+  assert.equal(v1.agg.totals.cov.demUnc, 1500, 'использован скорректированный вход PG, не покрытие 1200');
+  assert.match(v1.agg.totals.uncDetail, /PostgreSQL · public_1 · adjusteddemandqty/);
+  const notes = (v1.agg.notes || []).join(' ');
+  assert.match(notes, /Σ demandqty = 0/);
+  assert.match(notes, /использован Σ adjusteddemandqty = 1500/);
+  assert.ok(!/independent_demand недоступна/.test(notes), 'таблица доступна и не должна называться недоступной');
+
+  await ctx.goTab('dm');
+  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1500);
+});
+
 test('PG недоступен для схем — честный фолбэк на покрытый + непокрытый с причиной в статусе', async (t) => {
   const ctx = await loadWithPG(t, 'lost');
   const { w, d } = ctx;
@@ -240,7 +262,7 @@ test('PG недоступен для схем — честный фолбэк н
   assert.equal(v1.agg.totals.cov.demUnc, 1200, 'показан покрытый + непокрытый');
 
   const notes = w.CHX.versions.flatMap((v) => v.agg.notes || []).join(' ');
-  assert.match(notes, /independentdemand недоступна/, 'причина фолбэка зафиксирована');
+  assert.match(notes, /independent_demand недоступна/, 'причина фолбэка зафиксирована');
   assert.match(notes, /PG: /, 'в заметке — ошибка PostgreSQL-пути');
   assert.ok(!/CH: /.test(notes), 'в ClickHouse таблицу не ищем вовсе: ' + notes);
   assert.match(notes, /покрытый \+ непокрытый из demand_coverage/, 'подмена источника объяснена');
@@ -270,6 +292,6 @@ test('без заданного PG загрузчик не дёргает backen
   assert.equal(pgCalls, 0, 'ни одного обращения к backend без учётных данных');
   const v1 = w.CHX.versions[0];
   assert.equal(v1.agg.totals.uncSrc, 'demand_coverage');
-  assert.match((v1.agg.notes || []).join(' '), /independentdemand недоступна \(нет подключения к PostgreSQL\)/,
+  assert.match((v1.agg.notes || []).join(' '), /independent_demand недоступна \(нет подключения к PostgreSQL\)/,
     'причина — не задан креды PG, и только они');
 });
