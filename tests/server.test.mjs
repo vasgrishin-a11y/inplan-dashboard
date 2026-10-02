@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import srv from '../server.js';
 
-const { createApp, uncSql, mapColumns } = srv;
+const { createApp, uncSql, mapColumns, matchSchema, schemaCandidates } = srv;
 
 const sq = (s) => s.replace(/\s+/g, ' ').trim();
 
@@ -88,9 +88,85 @@ test('GET /api/health и /api/pg/defaults', async () => {
   await withServer(() => ({ rows: [] }), async (base) => {
     const h = await (await fetch(base + '/api/health')).json();
     assert.equal(h.ok, true);
+    /* подпись сервиса и перечень эндпоинтов: по ним дашборд отличает
+       «backend не запущен» от «backend старой версии» */
+    assert.equal(h.service, 'inplan-dashboard');
+    assert.ok(h.api >= 2);
+    assert.ok(h.endpoints.includes('/api/pg/unc'));
     const d = await (await fetch(base + '/api/pg/defaults')).json();
     assert.equal(d.database, 'pgs_app_data_db');
     assert.equal(d.table, 'independentdemand');
+  });
+});
+
+test('404 неизвестного эндпоинта подписан сервисом (а не голым Not found)', async () => {
+  await withServer(() => ({ rows: [] }), async (base) => {
+    const r = await post(base, '/api/pg/nope', CONN);
+    assert.equal(r.status, 404);
+    const data = await r.json();
+    assert.equal(data.service, 'inplan-dashboard');
+    assert.match(data.error, /не найден/);
+    assert.ok(data.endpoints.includes('/api/pg/unc'), 'сервис перечисляет, что умеет');
+  });
+});
+
+/* ── Подбор схемы: регистр, префикс data_, номер версии ── */
+test('matchSchema: регистр, префикс data_ и номер версии', () => {
+  const names = ['public_4899', 'public_4941', 'reporting'];
+  assert.equal(matchSchema(names, 'public_4899'), 'public_4899');
+  assert.equal(matchSchema(names, 'Public_4941'), 'public_4941', 'регистр не важен');
+  assert.equal(matchSchema(names, 'data_public_4899'), 'public_4899', 'префикс data_ снимается');
+  assert.equal(matchSchema(['pub_4899', 'reporting'], 'public_4899'), 'pub_4899',
+    'однозначный номер версии подходит, когда имя схемы иное');
+  assert.equal(matchSchema(['pub_4899', 'x_4899'], 'public_4899'), null,
+    'номер версии неоднозначен — не угадываем');
+  assert.equal(matchSchema(names, 'public_1'), null);
+  assert.deepEqual(schemaCandidates('Data_public_2'), ['Data_public_2', 'public_2']);
+});
+
+test('POST /api/pg/unc — схема подбирается по регистру/префиксу (Data_public_4899 → public_4899)', async () => {
+  const calls = [];
+  await withServer((sql, params) => {
+    if (/information_schema\.columns/.test(sql)) {
+      calls.push(params[0]);
+      /* таблица есть только в public_4899 — запрошенную «Data_public_4899» PG не знает */
+      return params[0] === 'public_4899' ? { rows: PROD_COLS.map((c) => ({ c })) } : { rows: [] };
+    }
+    if (/information_schema\.tables/.test(sql)) return { rows: [{ s: 'public_4899' }, { s: 'public_4941' }] };
+    if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 777, n: 7 }] };
+    return { rows: [] };
+  }, async (base) => {
+    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'Data_public_4899', gran: 4 });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.schema, 'public_4899', 'ответ сообщает фактическую схему');
+    assert.equal(data.requested, 'Data_public_4899');
+    assert.equal(data.demUnc, 777);
+    assert.deepEqual(calls, ['Data_public_4899', 'public_4899'], 'сначала как просили, потом подобранная');
+  });
+});
+
+test('POST /api/pg/unc — схемы нет: ошибка перечисляет доступные схемы', async () => {
+  await withServer((sql) => {
+    if (/information_schema\.tables/.test(sql)) return { rows: [{ s: 'public_12' }, { s: 'public_13' }] };
+    return { rows: [] };
+  }, async (base) => {
+    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_4899', gran: 4 });
+    assert.equal(r.status, 400);
+    const err = (await r.json()).error;
+    assert.match(err, /не найдена или нет доступа/);
+    assert.match(err, /public_12, public_13/, 'видно, какие схемы есть на самом деле');
+  });
+});
+
+test('POST /api/pg/unc — в базе вообще нет схем с independentdemand: подсказка про базу и права', async () => {
+  await withServer(() => ({ rows: [] }), async (base) => {
+    const r = await post(base, '/api/pg/unc', { ...CONN, database: 'wrong_db', schema: 'public_1', gran: 4 });
+    assert.equal(r.status, 400);
+    const err = (await r.json()).error;
+    assert.match(err, /нет ни одной схемы с этой таблицей/);
+    assert.match(err, /pgs_app_data_db/, 'названа продуктивная база');
+    assert.match(err, /«u»/, 'назван пользователь, у которого может не быть прав');
   });
 });
 

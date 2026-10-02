@@ -35,7 +35,14 @@ const PGX = window.PGX = {
     connected:false,          // backend ответил списком схем (креды валидны)
     checked:false,            // в этой загрузке уже пробовали (не дёргаем повторно)
     schemas:[],               // [{schema:'public_2', n:123}]
-    lastError:null
+    lastError:null,          // ошибка подключения (список схем)
+    lastDataError:null,      // ошибка чтения конкретной схемы
+    /* диагностика backend-прокси: без неё ошибка «Not found» от чужого
+       статического хостинга выглядела как проблема Postgres */
+    backend:null,             // фактически выбранный адрес ('' = свой origin)
+    backendOk:null,           // true/false/null — отвечает ли /api/health
+    backendInfo:null,         // {service, api, endpoints} из /api/health
+    stage:null                // 'backend' | 'pg' — на чём именно сломалось
   }
 };
 
@@ -83,15 +90,80 @@ PGX.restoreSession = function(){
 };
 
 /* ─────────────── 3. API-КЛИЕНТ ─────────────── */
+const LOCAL_BACKEND = 'http://localhost:8080';
+/* Адрес из настроек (пусто — свой origin). Если автопоиск нашёл рабочий
+   backend, пользуемся им: пользователю не нужно знать про поле «Backend». */
 PGX.backendBase = function(){
   const b = (PGX.cfg.backend||'').trim().replace(/\/+$/,'');
   if(b) return b;
+  if(PGX.state.backend) return PGX.state.backend;
   /* страница открыта из файла: backend работает на той же машине локально */
-  if(typeof location!=='undefined' && location.protocol==='file:') return 'http://localhost:8080';
+  if(typeof location!=='undefined' && location.protocol==='file:') return LOCAL_BACKEND;
   return '';
 };
+PGX.backendLabel = function(base){
+  const b = base===undefined ? PGX.backendBase() : base;
+  if(b) return b;
+  /* без скобок и тире: текст попадает внутрь «(PG: …)» в заметках загрузки */
+  return (typeof location!=='undefined' && location.origin) ? location.origin : 'этот же origin';
+};
+/* Кандидаты автопоиска: заданный вручную адрес — единственный (пользователь
+   знает лучше); иначе свой origin, а для http/file — ещё и локальный npm start.
+   С https-страницы браузер всё равно заблокирует http://localhost (mixed
+   content), поэтому туда не стучимся и честно пишем это в подсказке. */
+PGX.backendCandidates = function(){
+  const manual = (PGX.cfg.backend||'').trim().replace(/\/+$/,'');
+  if(manual) return [manual];
+  const proto = (typeof location!=='undefined' && location.protocol) || 'http:';
+  if(proto==='file:') return [LOCAL_BACKEND, 'http://127.0.0.1:8080'];
+  const list = [''];
+  if(proto!=='https:') list.push(LOCAL_BACKEND, 'http://127.0.0.1:8080');
+  return list;
+};
+/* GET /api/health: жив ли backend и какой он версии. Никогда не бросает. */
+PGX.health = async function(base){
+  const url = (base||'') + '/api/health';
+  try{
+    const resp = await fetch(url, {method:'GET', headers:{'Accept':'application/json'}});
+    if(!resp || !resp.ok || typeof resp.json!=='function') return null;
+    const data = await resp.json();
+    if(!data || data.ok!==true) return null;
+    return { base:base||'', service:data.service||'', api:Number(data.api)||0,
+             endpoints:Array.isArray(data.endpoints)?data.endpoints:[] };
+  }catch(e){ return null }
+};
+/* Автопоиск backend перед первым запросом: заполняет state.backend/backendOk.
+   Ошибок не бросает — если ничего не нашли, запрос всё равно уйдёт по
+   текущему адресу, а понятную причину соберёт PGX.api. */
+PGX.detectBackend = async function(){
+  const cands = PGX.backendCandidates();
+  for(const base of cands){
+    const info = await PGX.health(base);
+    if(info){
+      PGX.state.backend = base;
+      PGX.state.backendOk = true;
+      PGX.state.backendInfo = info;
+      return info;
+    }
+  }
+  PGX.state.backend = null;
+  PGX.state.backendOk = false;
+  PGX.state.backendInfo = null;
+  return null;
+};
+/* Почему backend не отвечает — текст для модалки и значка предупреждения. */
+PGX.backendHint = function(){
+  const manual = (PGX.cfg.backend||'').trim();
+  const https = typeof location!=='undefined' && location.protocol==='https:';
+  if(manual) return 'Проверьте адрес backend «'+manual+'»: там должен отвечать server.js (npm start).';
+  if(https) return 'Откройте дашборд по адресу запущенного server.js (npm start → http://localhost:8080) '+
+    'или укажите его адрес в поле «Backend»: со страницы по HTTPS браузер не пустит запрос на http://localhost.';
+  return 'Запустите backend: npm start в папке дашборда — и откройте страницу по адресу http://localhost:8080 '+
+    '(или впишите адрес запущенного server.js в поле «Backend»).';
+};
 PGX.api = async function(pathName, body){
-  const url = PGX.backendBase() + pathName;
+  const base = PGX.backendBase();
+  const url = base + pathName;
   let resp;
   try{
     resp = await fetch(url, {
@@ -100,16 +172,42 @@ PGX.api = async function(pathName, body){
       body: JSON.stringify(body||{})
     });
   }catch(e){
-    throw new Error('backend-прокси недоступен по адресу '+(url||'/api')+
-      ' — запустите server.js (npm start) или укажите его адрес в подключении ('+e.message+')');
+    /* Текст короткий: «что делать» показывают модалка и значок ⚠ отдельной
+       строкой (PGX.backendHint) — иначе заметка загрузки превращается в абзац. */
+    PGX.state.stage = 'backend';
+    throw new Error('backend-прокси не отвечает по адресу '+PGX.backendLabel(base));
   }
   let data=null;
-  try{ data = await resp.json() }
+  try{ if(typeof resp.json==='function') data = await resp.json() }
   catch(e){ /* не JSON — сообщим статусом */ }
-  if(!resp.ok)
-    throw new Error((data&&data.error)||('Ошибка сервера: '+resp.status));
-  if(!data || data.ok===false)
-    throw new Error((data&&data.error)||'пустой ответ backend-прокси');
+  const ours = !!(data && data.service==='inplan-dashboard');
+  if(resp.status===404 && !ours){
+    /* Самая частая причина «PG: Not found»: страница открыта НЕ с server.js,
+       и POST /api/pg/* упирается в статический хостинг, который отвечает
+       своим 404. Так и пишем — вместо чужого «Not found». */
+    PGX.state.stage = 'backend';
+    throw new Error('по адресу '+PGX.backendLabel(base)+' нет backend-прокси: на '+pathName+
+      ' пришёл ответ 404'+((data&&data.error)?' «'+data.error+'»':''));
+  }
+  if(resp.status===404 && ours){
+    PGX.state.stage = 'backend';
+    throw new Error('backend по адресу '+PGX.backendLabel(base)+' не знает эндпоинт '+pathName+
+      ': версия устарела, обновите server.js и перезапустите npm start');
+  }
+  /* структурированная ошибка в теле — отвечал API (наш или совместимый):
+     это проблема Postgres, а не отсутствие прокси */
+  const apiErr = !!(data && data.error);
+  if(!resp.ok){
+    PGX.state.stage = (ours||apiErr) ? 'pg' : 'backend';
+    throw new Error((data&&data.error)||('backend по адресу '+PGX.backendLabel(base)+
+      ' ответил HTTP '+resp.status));
+  }
+  if(!data || data.ok===false){
+    PGX.state.stage = (ours||apiErr) ? 'pg' : 'backend';
+    throw new Error((data&&data.error)||'пустой ответ backend-прокси по адресу '+PGX.backendLabel(base));
+  }
+  PGX.state.stage = null;
+  PGX.state.backendOk = true;          // запрос прошёл — backend точно на месте
   return data;
 };
 PGX.connBody = function(){
@@ -135,6 +233,8 @@ PGX.ensureSchemas = async function(){
   if(PGX.state.checked && PGX.state.lastError) throw new Error(PGX.state.lastError);
   PGX.state.checked = true;
   try{
+    /* сначала ищем сам backend — чтобы отличить «нет прокси» от «ошибка PG» */
+    if(PGX.state.backendOk===null) await PGX.detectBackend();
     const r = await PGX.api('/api/pg/schemas', PGX.connBody());
     PGX.state.schemas = (r.schemas||[]).map(s=>({schema:String(s.schema), n:Number(s.n)||0}));
     PGX.state.connected = true;
@@ -148,27 +248,74 @@ PGX.ensureSchemas = async function(){
     throw e;
   }
 };
-/* Дисквалификация текущего подключения — при смене кредов в модалке. */
+/* Дисквалификация текущего подключения — при смене кредов в модалке.
+   Адрес backend ищем заново: его могли поправить в том же окне. */
 PGX.invalidate = function(){
   PGX.state.connected=false; PGX.state.checked=false; PGX.state.schemas=[];
-  PGX.state.lastError=null;
+  PGX.state.lastError=null; PGX.state.lastDataError=null; PGX.state.stage=null;
+  PGX.state.backend=null; PGX.state.backendOk=null; PGX.state.backendInfo=null;
 };
 /* Схема Postgres для базы ClickHouse: data_public_2 ↔ public_2.
    Список схем из backend — справочник: имя матчится без префикса в любом
-   регистре («Data_public_2» → «public_2»); когда список ещё не получен,
-   возвращаем снятое имя как есть и пусть сервер ответит ошибкой. */
+   регистре («Data_public_2» → «public_2»), затем по номеру версии
+   («public_4899» ↔ единственная схема, оканчивающаяся на 4899). Когда список
+   ещё не получен, возвращаем снятое имя как есть — схему подберёт backend. */
 PGX.pgSchemaFor = function(db){
   const stripped = String(db||'').replace(/^data_/i,'');
+  const list = (PGX.state.schemas||[]).map(s=>String(s.schema));
+  if(!list.length) return stripped;
+  const cands = [stripped, String(db||''), 'data_'+stripped];
+  for(const c of cands){
+    const hit = list.find(s=>s.toLowerCase()===String(c).toLowerCase());
+    if(hit) return hit;
+  }
+  const num = (stripped.match(/(\d+)\s*$/)||[])[1];
+  if(num){
+    const re = new RegExp('(^|[^0-9])'+num+'$');
+    const hits = list.filter(s=>re.test(s));
+    if(hits.length===1) return hits[0];
+  }
+  return stripped;
+};
+/* Сопоставление выбранных версий ClickHouse и схем Postgres — для модалки:
+   [{db:'data_public_4899', schema:'public_4899', ok:true, n:123}]. */
+PGX.schemaMap = function(dbs){
   const list = PGX.state.schemas||[];
-  const hit = list.find(s=>String(s.schema).toLowerCase()===stripped.toLowerCase());
-  return hit ? hit.schema : stripped;
+  return (dbs||[]).map(db=>{
+    const schema = PGX.pgSchemaFor(db);
+    const hit = list.find(s=>String(s.schema).toLowerCase()===String(schema).toLowerCase());
+    return { db, schema, ok:!!hit, n:hit?hit.n:0 };
+  });
+};
+/* Короткая диагностика для значка предупреждения в шапке:
+   {stage:'backend'|'pg', title, detail, hint}. null — проблем нет. */
+PGX.problem = function(){
+  if(!PGX.enabled()) return null;
+  const msg = PGX.state.lastError || PGX.state.lastDataError;
+  if(!msg) return null;
+  const backend = PGX.state.stage==='backend';
+  return {
+    stage: backend?'backend':'pg',
+    title: backend?'Backend-прокси PostgreSQL недоступен':'PostgreSQL: таблица independentdemand недоступна',
+    detail: msg,
+    hint: backend?PGX.backendHint():''
+  };
 };
 /* Агрегат неограниченного спроса версии: {demUnc, n, periods:[{k,demUnc}], schema}.
    Бросает ошибку — вызывающий (loadVersionAgg) перейдёт к следующему источнику. */
 PGX.uncFor = async function(db, gran){
   await PGX.ensureSchemas();
   const schema = PGX.pgSchemaFor(db);
-  const r = await PGX.api('/api/pg/unc', Object.assign(PGX.connBody(), {schema, gran:Number(gran)}));
+  let r;
+  try{
+    r = await PGX.api('/api/pg/unc', Object.assign(PGX.connBody(), {schema, gran:Number(gran)}));
+  }catch(e){
+    /* ошибка данных версии не гасит подключение (другие версии могут
+       прочитаться), но попадает в значок предупреждения */
+    PGX.state.lastDataError = e.message;
+    throw e;
+  }
+  PGX.state.lastDataError = null;
   return { demUnc:Number(r.demUnc)||0, n:Number(r.n)||0,
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:Number(p.demUnc)||0})),
            schema:r.schema||schema };

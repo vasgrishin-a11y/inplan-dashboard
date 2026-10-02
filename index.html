@@ -178,6 +178,33 @@ h1{font:600 28px/34px 'Open Sans',sans-serif;margin:0;color:var(--scp-text)}
   align-self:center}
 .stat.session-status{white-space:normal;max-width:440px}
 
+/* ═══ ЗНАЧОК ПРЕДУПРЕЖДЕНИЙ ЗАГРУЗКИ ═══
+   Длинные красные сообщения о проблемах источников (PostgreSQL недоступен и
+   т.п.) больше не висят в шапке: остаётся один значок ⚠, детали — по клику. */
+.hdr-warn{position:relative;align-self:center;display:none}
+.hdr-warn.on{display:block}
+.icon-btn.w{border-color:var(--scp-warn);color:var(--scp-warn);background:var(--scp-warn-bg)}
+.icon-btn.w:hover{border-color:var(--scp-warn);color:var(--scp-warn);background:var(--scp-warn-bg);
+  filter:brightness(.97)}
+.icon-btn.w .warn-n{position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 3px;
+  border-radius:8px;background:var(--scp-warn);color:#fff;font-size:10px;line-height:15px;
+  font-weight:700;text-align:center}
+.warn-pop{position:absolute;top:calc(100% + 8px);right:0;width:420px;max-width:min(420px,88vw);
+  background:var(--scp-surface);border:1px solid var(--scp-menu-bd);border-radius:var(--r-m);
+  box-shadow:0 12px 32px rgba(0,0,0,.18);padding:12px 14px;z-index:900;display:none;
+  text-align:left;white-space:normal}
+.warn-pop.open{display:block}
+.warn-pop h4{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--scp-text);
+  display:flex;align-items:center;gap:6px}
+.warn-pop h4 .wp-x{margin-left:auto;cursor:pointer;color:var(--scp-text-3);font-size:14px}
+.warn-pop h4 .wp-x:hover{color:var(--scp-err)}
+.warn-item{border-left:3px solid var(--scp-warn);background:var(--scp-warn-bg);border-radius:var(--r-s);
+  padding:7px 9px;margin-bottom:7px;font-size:12px;line-height:17px;color:var(--scp-text-2)}
+.warn-item b{color:var(--scp-text)}
+.warn-item .wi-src{display:block;margin-top:3px;color:var(--scp-text-3);font-size:11px;
+  word-break:break-word}
+.warn-pop .wp-act{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+
 /* ═══════════════ ПАНЕЛЬ ФИЛЬТРОВ ═══════════════ */
 .fpanel{background:var(--scp-surface);border-bottom:1px solid var(--scp-line-2);
   padding:8px 32px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:52px}
@@ -602,6 +629,16 @@ details.src-fold .dq{margin:0}
       </div>
       <div class="stat" id="stat"></div>
       <div class="hdr-actions">
+        <!-- Значок предупреждений: виден только когда загрузка прошла с оговорками
+             (например, не удалось подключиться к PostgreSQL). Детали — по клику,
+             чтобы в шапке не висели длинные красные тексты. -->
+        <div class="hdr-warn" id="warnWrap">
+          <button class="icon-btn w" id="bWarn" data-tip="Предупреждения загрузки" aria-label="Предупреждения загрузки" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span class="warn-n" id="warnN"></span>
+          </button>
+          <div class="warn-pop" id="warnPop"></div>
+        </div>
         <button class="icon-btn" id="bThemeToggle" data-tip="Переключить тему (тёмная / светлая)" aria-label="Переключить тему">
           <svg id="iconSun" viewBox="0 0 24 24" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           <svg id="iconMoon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -6809,8 +6846,9 @@ async function loadFiles(fileList){
     if(parsedDemand&&parsedDemand.skippedOps) notes.push(`пропущено ${nf(parsedDemand.skippedOps)} ${plural(parsedDemand.skippedOps,['строка','строки','строк'])} операций с неизвестным типом`);
     if(demandFiles.length>1) notes.push(`demand-лист найден в нескольких файлах (${demandFiles.join(', ')}), применён последний: ${demandFrom}`);
     if(failedFiles.length) notes.push(`не прочитаны: ${failedFiles.join('; ')}`);
-    const noteMsg = notes.length ? `<br><span class="neg">Внимание: ${esc(notes.join(' · '))}</span>` : '';
-    $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}${noteMsg}`;
+    /* предупреждения не печатаем в шапке — отдаём значку ⚠ (детали по клику) */
+    setLoadWarnings(notes);
+    $('#stat').innerHTML = `<span class="pos">Загружено:</span> ${esc(DS.name)}<br>${DS.orders.length} заказов | ${DS.ops.length} операций${capMsg}`;
     STAT_PIN = true; // переживает переключения вкладок, пока не придёт новая загрузка или сброс
     autosaveDS(); // данные переживают перезагрузку страницы
   } catch(err){
@@ -6922,6 +6960,99 @@ document.addEventListener('click',e=>{
   const j=e.target.closest('[data-rca-jump]');
   if(j){CapacityRCA.drillDownToOrder(+j.dataset.ord,j.dataset.rs,j.dataset.mode||'prod_res')}
 });
+/* ═══════════════ ЗНАЧОК ПРЕДУПРЕЖДЕНИЙ ЗАГРУЗКИ ═══════════════
+   Раньше причины («independentdemand недоступна (PG: …) — спрос показан как
+   покрытый + непокрытый из demand_coverage» по каждой версии) печатались
+   красным прямо в шапке и занимали половину её ширины. Теперь в шапке —
+   один значок ⚠ (его нет, когда всё хорошо), а разбор проблемы и кнопка
+   «Открыть подключение» живут в его всплывающей панели. */
+let LOAD_WARNINGS=[];
+/* Заметка загрузчика: «data_public_4899 → independentdemand недоступна (PG: …) — …»
+   → {db, title, cause, effect}. Одинаковые причины схлопываются по версиям. */
+function parseWarnNote(note){
+  const s=String(note||'').trim();
+  const i=s.indexOf(' → ');
+  const db=i>0?s.slice(0,i).trim():'';
+  const text=(i>0?s.slice(i+3):s).trim();
+  let title=text,cause='',effect='';
+  /* причина — в скобках после заголовка; ищем парную скобку, а не первую
+     попавшуюся: внутри причины встречаются и скобки, и тире */
+  const o=text.indexOf('(');
+  if(o>0){
+    let depth=0,close=-1;
+    for(let k=o;k<text.length;k++){
+      const ch=text[k];
+      if(ch==='(')depth++;
+      else if(ch===')'&&--depth===0){close=k;break}
+    }
+    if(close>0){
+      title=text.slice(0,o).trim();
+      /* «PG: …» — служебный префикс загрузчика, в панели он лишний */
+      cause=text.slice(o+1,close).trim().replace(/^PG:\s*/,'');
+      effect=text.slice(close+1).replace(/^\s*[—–-]\s*/,'').trim();
+    }
+  }
+  if(!cause){
+    const cut=text.split(' — ');
+    title=cut[0].trim();effect=cut.slice(1).join(' — ').trim();
+  }
+  return {db,title:title||text,cause,effect};
+}
+function groupWarnNotes(notes){
+  const out=[],idx=new Map();
+  (notes||[]).filter(Boolean).forEach(n=>{
+    const p=parseWarnNote(n);
+    const key=[p.title,p.cause,p.effect].join('|');
+    if(idx.has(key)){const g=idx.get(key);if(p.db&&!g.dbs.includes(p.db))g.dbs.push(p.db);return}
+    const g={title:p.title,cause:p.cause,effect:p.effect,dbs:p.db?[p.db]:[]};
+    idx.set(key,g);out.push(g);
+  });
+  return out;
+}
+/* Публичный вход для коннекторов: список коротких заметок загрузки. */
+window.setLoadWarnings=function(notes){
+  LOAD_WARNINGS=groupWarnNotes(notes);
+  paintWarnings();
+  return LOAD_WARNINGS.length;
+};
+window.clearLoadWarnings=function(){LOAD_WARNINGS=[];paintWarnings()};
+function warnPopOpen(on){
+  const pop=$('#warnPop'),btn=$('#bWarn');
+  if(!pop||!btn)return;
+  pop.classList.toggle('open',!!on);
+  btn.setAttribute('aria-expanded',on?'true':'false');
+}
+function paintWarnings(){
+  const wrap=$('#warnWrap'),pop=$('#warnPop'),btn=$('#bWarn'),badge=$('#warnN');
+  if(!wrap||!pop||!btn)return;
+  if(!LOAD_WARNINGS.length){wrap.classList.remove('on');warnPopOpen(false);return}
+  wrap.classList.add('on');
+  if(badge)badge.textContent=LOAD_WARNINGS.length>9?'9+':String(LOAD_WARNINGS.length);
+  /* подпись короткая: тултип icon-btn — nowrap, длинный текст уехал бы за край */
+  btn.setAttribute('data-tip',LOAD_WARNINGS.length===1
+    ?'Предупреждение загрузки'
+    :`Предупреждения загрузки: ${LOAD_WARNINGS.length}`);
+  /* совет по backend-прокси берём у PG-коннектора: он знает, куда стучался */
+  const pgp=(window.PGX&&typeof PGX.problem==='function')?PGX.problem():null;
+  pop.innerHTML=`<h4>⚠ Загрузка прошла с оговорками<span class="wp-x" id="warnX" title="Закрыть">✕</span></h4>`
+    +LOAD_WARNINGS.map(g=>`<div class="warn-item"><b>${esc(g.title)}</b>${g.effect?' — '+esc(g.effect):''}`
+      +(g.cause?`<span class="wi-src">Причина: ${esc(g.cause)}</span>`:'')
+      +(g.dbs.length?`<span class="wi-src">Версии: ${esc(g.dbs.join(', '))}</span>`:'')
+      +`</div>`).join('')
+    +(pgp&&pgp.hint?`<div class="warn-item"><b>Что сделать</b><span class="wi-src">${esc(pgp.hint)}</span></div>`:'')
+    +`<div class="wp-act"><button class="btn" id="warnConn">Открыть подключение</button>
+       <button class="btn" id="warnHide">Скрыть</button></div>`;
+  const x=$('#warnX');if(x)x.onclick=e=>{e.stopPropagation();warnPopOpen(false)};
+  const hide=$('#warnHide');if(hide)hide.onclick=e=>{e.stopPropagation();warnPopOpen(false)};
+  const conn=$('#warnConn');
+  if(conn)conn.onclick=e=>{e.stopPropagation();warnPopOpen(false);if(window.CHX)CHX.openModal()};
+  pop.onclick=e=>e.stopPropagation();
+}
+$('#bWarn').onclick=e=>{
+  e.stopPropagation();
+  warnPopOpen(!$('#warnPop').classList.contains('open'));
+};
+document.addEventListener('click',()=>warnPopOpen(false));
 $('#bLoad').onclick=()=>$('#fIn').click();
 $('#bCH').onclick=()=>{ if(window.CHX) CHX.openModal(); else alert('Модуль ClickHouse не загружен: проверьте файл assets/inplan-ch.js') };
 $('#fIn').onchange=e=>{if(e.target.files&&e.target.files.length){loadFiles(e.target.files);e.target.value=''}};
@@ -6930,7 +7061,7 @@ $('#bReset').onclick=()=>{
   if(!confirm('Сбросить данные и обнулить все дашборды?\n\nАвтосохранение тоже будет удалено. Сохранённые версии для сравнения останутся.'))return;
   clearSavedDataset();
   if(window.CHX&&typeof CHX.forgetSession==='function') CHX.forgetSession();
-  DS=null;TAB='ov';STAT_PIN=false;clearF();render();
+  DS=null;TAB='ov';STAT_PIN=false;clearF();clearLoadWarnings();render();
 };
 const toggleRail=()=>{
   const app=$('#app'),min=app.classList.toggle('min');
@@ -6980,7 +7111,7 @@ if(window.ResizeObserver){
 window.addEventListener('keydown',e=>{
   // Escape закрывает всплывающие панели и полноэкранный график; сброс фильтров — отдельной кнопкой «Сбросить»
   if(e.key!=='Escape')return;
-  dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'));
+  dtpHide();$$('.pop-wrap').forEach(w=>w.classList.remove('open'));warnPopOpen(false);
   if(FULL_ID){FULL_ID=null;render()}
 });
 

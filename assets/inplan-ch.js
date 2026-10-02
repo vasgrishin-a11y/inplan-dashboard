@@ -918,14 +918,37 @@ CHX.openModal = function(){
   drawModal();
 };
 
-/* Текст статуса PG-блока модалки подключения */
+/* Текст статуса PG-блока модалки подключения.
+   Отдельно показываем состояние backend-прокси: ошибка «нет такого адреса»
+   (страница открыта не с server.js) и ошибка Postgres — разные проблемы,
+   и раньше они обе выглядели как невнятное «Not found». */
 function pgStatText(){
   if(!window.PGX) return '';
   const ps = PGX.state;
-  if(ps.lastError) return `<span class="neg">${esc(ps.lastError)}</span>`;
-  if(ps.connected)
+  if(ps.lastError){
+    const hint = ps.stage==='backend' ? `<br><span class="chm-hint" style="max-width:none">${esc(PGX.backendHint())}</span>` : '';
+    return `<span class="neg">${esc(ps.lastError)}</span>${hint}`;
+  }
+  if(ps.connected){
+    /* сверка выбранных версий CH со схемами PG — сразу видно, какая версия
+       не найдётся в Postgres ещё до загрузки данных */
+    const sel = (CHX.cfg.schemas||[]).slice(0,6);
+    const map = typeof PGX.schemaMap==='function' ? PGX.schemaMap(sel) : [];
+    const miss = map.filter(m=>!m.ok);
+    const mapTxt = map.length
+      ? `<br><span class="chm-hint" style="max-width:none">Версии → схемы PG: ${
+          map.map(m=>`${esc(m.db)} → ${m.ok?esc(m.schema):'<span class="neg">нет схемы '+esc(m.schema)+'</span>'}`).join(' · ')}${
+          (CHX.cfg.schemas||[]).length>6?' · …':''}</span>`
+      : '';
+    const warn = miss.length
+      ? `<br><span class="neg">Для ${miss.length} из ${map.length} версий схемы нет — у них спрос будет взят из demand_coverage</span>`
+      : '';
     return `<span class="pos">PG подключён · схем с independentdemand: ${ps.schemas.length}${
-      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>`;
+      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>${mapTxt}${warn}`;
+  }
+  if(ps.backendOk===false)
+    return `<span class="neg">backend-прокси не найден (${esc(PGX.backendLabel())})</span>` +
+      `<br><span class="chm-hint" style="max-width:none">${esc(PGX.backendHint())}</span>`;
   if(PGX.enabled()) return 'PG задан — подключится при загрузке данных';
   return 'PG не задан — источник: demand_coverage (покрытый + непокрытый)';
 }
@@ -993,12 +1016,16 @@ function drawModal(){
   <div class="chm-row"><label>Backend</label>
     <input id="pgmBackend" type="text" value="${esc(PGX.cfg.backend)}"
       placeholder="пусто = этот же сервер (npm start)">
-    <span class="chm-hint">URL запущенного server.js — только если дашборд открыт со статического хостинга или file://</span></div>
+    <span class="chm-hint">URL запущенного server.js. Пусто — берётся адрес этой страницы, поэтому
+      открывать дашборд нужно по адресу server.js (http://localhost:8080): со статического хостинга
+      запросы <code>/api/pg/*</code> упираются в чужой 404</span></div>
   <div class="chm-row"><label>Хост / Порт</label>
     <input id="pgmHost" type="text" value="${esc(PGX.cfg.host)}" style="flex:1">
     <input id="pgmPort" type="number" value="${num(PGX.cfg.port)||48235}" style="width:110px;margin-left:8px"></div>
   <div class="chm-row"><label>База</label>
-    <input id="pgmDb" type="text" value="${esc(PGX.cfg.database)}"></div>
+    <input id="pgmDb" type="text" value="${esc(PGX.cfg.database)}" placeholder="pgs_app_data_db">
+    <span class="chm-hint">продуктивная база: <code>pgs_app_data_db</code> — в ней лежат схемы
+      <code>public_N</code> с <code>independentdemand</code></span></div>
   <div class="chm-row"><label>Логин</label>
     <input id="pgmUser" type="text" value="${esc(PGX.cfg.user)}" autocomplete="off"
       placeholder="рекомендуется read-only"></div>
@@ -1094,8 +1121,16 @@ function drawModal(){
   };
   if(g('pgmTest')) g('pgmTest').onclick = async ()=>{
     pgSync(); PGX.invalidate();
-    g('pgmStat').innerHTML = 'Подключение к PostgreSQL…';
-    try{ await PGX.ensureSchemas(); }
+    g('pgmStat').innerHTML = 'Поиск backend-прокси…';
+    try{
+      /* две стадии с разными причинами отказа: сначала ищем server.js,
+         потом логинимся в Postgres — пользователь видит, где именно встало */
+      await PGX.detectBackend();
+      if(g('pgmStat')) g('pgmStat').innerHTML = PGX.state.backendOk
+        ? 'Backend найден — подключение к PostgreSQL…'
+        : 'Backend не ответил на /api/health — пробуем запрос напрямую…';
+      await PGX.ensureSchemas();
+    }
     catch(e){ /* перерисовка покажет ошибку в pgmStat */ }
     if(st.connected) CHX.session.touch();
     drawModal();
@@ -1184,11 +1219,14 @@ function drawModal(){
        const res = await CHX.loadAll(msg=>{ if(prog) prog.textContent = msg });
       CHX.closeModal();
       const stat = document.getElementById('stat');
+      /* В шапке — только короткий итог. Заметки загрузки (недоступная
+         independentdemand, смена periodtype и т.п.) уходят в значок ⚠:
+         длинные красные простыни в шапке больше не печатаем. */
       if(stat) stat.innerHTML =
         `<span class="pos">ClickHouse:</span> ${esc(res.ds.name)}<br>`
         + `${res.ds.orders.length} заказов${res.ds.detailLimited?' (лимит детализации)':''} | `
-        + `${res.ds.ops.length} операций | версий: ${res.versions.length}`
-        + (res.notes.length?`<br><span class="neg">${esc(res.notes.join(' · '))}</span>`:'');
+        + `${res.ds.ops.length} операций | версий: ${res.versions.length}`;
+      if(typeof window.setLoadWarnings==='function') window.setLoadWarnings(res.notes);
     }catch(e){
       if(prog) prog.innerHTML = `<span class="neg">${esc(e.message)}</span>`;
       g('chmLoad').disabled = false;
