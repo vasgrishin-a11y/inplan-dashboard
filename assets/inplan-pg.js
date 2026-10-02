@@ -29,7 +29,13 @@ const PGX = window.PGX = {
     host:'db-postgresql-app.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
     port:48235,
     database:'pgs_app_data_db',
-    user:'', password:'', ssl:'auto'
+    user:'', password:'', ssl:'auto',
+    /* Ручное соответствие «база ClickHouse → схема PostgreSQL»:
+       {'data_public_4899':'public_1494'}. Нужно, когда нумерация прогонов в
+       ClickHouse и схем в Postgres не совпадает (а она совпадает не всегда:
+       в CH выбраны data_public_4899/4941, а в PG — public_13…public_1726 и
+       далее). Пустая запись = автоподбор по имени. Живёт в автосессии. */
+    schemaMap:{}
   },
   state:{
     connected:false,          // backend ответил списком схем (креды валидны)
@@ -69,7 +75,8 @@ PGX.session = {
     const c = PGX.cfg, now = Date.now();
     const rec = { v:1, savedAt:now, expiresAt:now+SESSION_TTL_MS,
       cfg:{ backend:c.backend, host:c.host, port:c.port, database:c.database,
-            user:c.user, password:c.password, ssl:c.ssl } };
+            user:c.user, password:c.password, ssl:c.ssl,
+            schemaMap:Object.assign({}, c.schemaMap||{}) } };
     try{ localStorage.setItem(LS_SESSION, JSON.stringify(rec)); return true }
     catch(e){ console.warn('PG-автосессия не сохранена:', e); return false }
   },
@@ -85,6 +92,7 @@ PGX.restoreSession = function(){
   const rec = PGX.session.read();
   if(!rec) return false;
   Object.assign(PGX.cfg, rec.cfg);
+  if(!PGX.cfg.schemaMap || typeof PGX.cfg.schemaMap!=='object') PGX.cfg.schemaMap = {};
   PGX.state.sessionRestored = true;
   return true;
 };
@@ -262,6 +270,9 @@ PGX.invalidate = function(){
    ещё не получен, возвращаем снятое имя как есть — схему подберёт backend. */
 PGX.pgSchemaFor = function(db){
   const stripped = String(db||'').replace(/^data_/i,'');
+  /* ручное соответствие важнее любых догадок по имени */
+  const ov = (PGX.cfg.schemaMap||{})[String(db||'').toLowerCase()];
+  if(ov) return String(ov);
   const list = (PGX.state.schemas||[]).map(s=>String(s.schema));
   if(!list.length) return stripped;
   const cands = [stripped, String(db||''), 'data_'+stripped];
@@ -278,14 +289,29 @@ PGX.pgSchemaFor = function(db){
   return stripped;
 };
 /* Сопоставление выбранных версий ClickHouse и схем Postgres — для модалки:
-   [{db:'data_public_4899', schema:'public_4899', ok:true, n:123}]. */
-PGX.schemaMap = function(dbs){
+   [{db:'data_public_4899', schema:'public_4899', ok:true, manual:false, n:123}].
+   ok=false — такой схемы в Postgres нет: версия уйдёт в фолбэк
+   demand_coverage, пока пользователь не выберет схему руками. */
+PGX.schemaPlan = function(dbs){
   const list = PGX.state.schemas||[];
+  const man = PGX.cfg.schemaMap||{};
   return (dbs||[]).map(db=>{
     const schema = PGX.pgSchemaFor(db);
     const hit = list.find(s=>String(s.schema).toLowerCase()===String(schema).toLowerCase());
-    return { db, schema, ok:!!hit, n:hit?hit.n:0 };
+    return { db, schema, ok:!!hit, manual:!!man[String(db||'').toLowerCase()], n:hit?hit.n:0 };
   });
+};
+/* Ручная привязка версии к схеме (или сброс в автоподбор пустым значением).
+   Сохраняется в автосессии: выбор переживает перезагрузку страницы. */
+PGX.setSchemaOverride = function(db, schema){
+  const key = String(db||'').toLowerCase();
+  if(!key) return;
+  if(!PGX.cfg.schemaMap || typeof PGX.cfg.schemaMap!=='object') PGX.cfg.schemaMap = {};
+  const val = String(schema||'').trim();
+  if(val) PGX.cfg.schemaMap[key] = val;
+  else delete PGX.cfg.schemaMap[key];
+  PGX.session.touch();
+  return PGX.cfg.schemaMap;
 };
 /* Короткая диагностика для значка предупреждения в шапке:
    {stage:'backend'|'pg', title, detail, hint}. null — проблем нет. */
@@ -306,9 +332,11 @@ PGX.problem = function(){
 PGX.uncFor = async function(db, gran){
   await PGX.ensureSchemas();
   const schema = PGX.pgSchemaFor(db);
+  /* схему выбрал человек — backend не должен подбирать похожую */
+  const exact = !!(PGX.cfg.schemaMap||{})[String(db||'').toLowerCase()];
   let r;
   try{
-    r = await PGX.api('/api/pg/unc', Object.assign(PGX.connBody(), {schema, gran:Number(gran)}));
+    r = await PGX.api('/api/pg/unc', Object.assign(PGX.connBody(), {schema, gran:Number(gran), exact}));
   }catch(e){
     /* ошибка данных версии не гасит подключение (другие версии могут
        прочитаться), но попадает в значок предупреждения */

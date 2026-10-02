@@ -930,27 +930,54 @@ function pgStatText(){
     return `<span class="neg">${esc(ps.lastError)}</span>${hint}`;
   }
   if(ps.connected){
-    /* сверка выбранных версий CH со схемами PG — сразу видно, какая версия
-       не найдётся в Postgres ещё до загрузки данных */
-    const sel = (CHX.cfg.schemas||[]).slice(0,6);
-    const map = typeof PGX.schemaMap==='function' ? PGX.schemaMap(sel) : [];
-    const miss = map.filter(m=>!m.ok);
-    const mapTxt = map.length
-      ? `<br><span class="chm-hint" style="max-width:none">Версии → схемы PG: ${
-          map.map(m=>`${esc(m.db)} → ${m.ok?esc(m.schema):'<span class="neg">нет схемы '+esc(m.schema)+'</span>'}`).join(' · ')}${
-          (CHX.cfg.schemas||[]).length>6?' · …':''}</span>`
-      : '';
+    const sel = (CHX.cfg.schemas||[]);
+    const plan = typeof PGX.schemaPlan==='function' ? PGX.schemaPlan(sel) : [];
+    const miss = plan.filter(m=>!m.ok);
     const warn = miss.length
-      ? `<br><span class="neg">Для ${miss.length} из ${map.length} версий схемы нет — у них спрос будет взят из demand_coverage</span>`
+      ? `<br><span class="neg">Схема не найдена у ${miss.length} из ${plan.length} выбранных версий — укажите её вручную ниже, иначе спрос будет взят из demand_coverage</span>`
       : '';
     return `<span class="pos">PG подключён · схем с independentdemand: ${ps.schemas.length}${
-      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>${mapTxt}${warn}`;
+      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>${warn}`;
   }
   if(ps.backendOk===false)
     return `<span class="neg">backend-прокси не найден (${esc(PGX.backendLabel())})</span>` +
       `<br><span class="chm-hint" style="max-width:none">${esc(PGX.backendHint())}</span>`;
   if(PGX.enabled()) return 'PG задан — подключится при загрузке данных';
   return 'PG не задан — источник: demand_coverage (покрытый + непокрытый)';
+}
+
+/* Соответствие «версия ClickHouse → схема PostgreSQL».
+   Нумерация прогонов в CH и схем в PG совпадает не всегда (бывает выбрана
+   база data_public_4899, а схемы в Postgres — public_13…public_1726), поэтому
+   автоподбор по имени дополнен ручным выбором: он имеет приоритет над любыми
+   догадками и запоминается в автосессии. */
+function pgMapBlock(){
+  if(!window.PGX || !PGX.state.connected) return '';
+  const sel = CHX.cfg.schemas||[];
+  if(!sel.length)
+    return `<div class="chm-note">Выберите схемы ClickHouse ниже — здесь появится их
+      соответствие схемам PostgreSQL (откуда брать <code>independentdemand</code>).</div>`;
+  const plan = PGX.schemaPlan(sel);
+  const opts = PGX.state.schemas||[];
+  return `<div class="chm-sec">Соответствие версий и схем PostgreSQL</div>
+  <div class="chm-note">Неограниченный спрос версии читается из выбранной здесь схемы.
+    «Авто» подбирает по имени (<code>data_public_2</code> → <code>public_2</code>; регистр и
+    префикс <code>data_</code> не важны). Если нумерация ClickHouse и Postgres расходится —
+    выберите схему вручную, выбор сохранится в автосессии.</div>
+  ${plan.map(m=>{
+    const label = CHX.labelFor(m.db);
+    const auto = m.ok?`авто → ${m.schema}`:`авто → нет схемы «${m.schema}»`;
+    return `<div class="chm-row"><label title="${esc(m.db)}">${esc(label)}</label>
+      <select data-pgmap="${esc(m.db)}" style="flex:1">
+        <option value="">${esc(m.manual?'авто (подбор по имени)':auto)}</option>
+        ${opts.map(o=>`<option value="${esc(o.schema)}" ${
+          m.manual&&String(o.schema).toLowerCase()===String(m.schema).toLowerCase()?'selected':''}>${
+          esc(o.schema)}${o.n?' · '+nf(o.n)+' строк':''}</option>`).join('')}
+      </select>
+      <span class="chm-hint">${m.ok
+        ? `<span class="pos">✓ ${esc(m.schema)}${m.manual?' (вручную)':''}</span>`
+        : `<span class="neg">схемы «${esc(m.schema)}» нет — спрос из demand_coverage</span>`}</span></div>`;
+  }).join('')}`;
 }
 
 function drawModal(){
@@ -1037,7 +1064,8 @@ function drawModal(){
     <button class="btn" id="pgmTest">Проверить PG</button>
     ${PGX.session.exists()?`<button class="btn d" id="pgmForget">Забыть PG-сессию</button>`:''}
     <span id="pgmStat" class="chm-stat">${pgStatText()}</span>
-  </div>`:''}
+  </div>
+  ${pgMapBlock()}`:''}
 
   ${st.connected?`
   <div class="chm-sec">Схемы (версии планов)</div>
@@ -1136,6 +1164,12 @@ function drawModal(){
     drawModal();
   };
   if(g('pgmForget')) g('pgmForget').onclick = ()=>{ PGX.forgetSession(); drawModal() };
+  /* ручная привязка версии к схеме PG: сразу в cfg и в автосессию */
+  m.querySelectorAll('select[data-pgmap]').forEach(selEl=>selEl.onchange = ()=>{
+    PGX.setSchemaOverride(selEl.dataset.pgmap, selEl.value);
+    PGX.state.lastDataError = null;
+    drawModal();
+  });
   g('chmX').onclick = g('chmClose').onclick = CHX.closeModal;
   g('chmMode').onchange = e=>{ sync(); c.useProxy = (e.target.value==='proxy'); drawModal() };
   g('chmConn').onclick = async ()=>{

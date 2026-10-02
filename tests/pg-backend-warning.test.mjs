@@ -207,9 +207,92 @@ test('ошибка самого Postgres остаётся текстом Postgre
   assert.match(p.title, /PostgreSQL/);
   assert.equal(p.hint, '', 'совет про npm start здесь не нужен');
   /* сопоставление версий и схем для модалки */
-  const map = w.PGX.schemaMap(['Data_public_4899', 'data_public_4941']);
+  const map = w.PGX.schemaPlan(['Data_public_4899', 'data_public_4941']);
   assert.deepEqual(map.map((m) => [m.db, m.schema, m.ok]), [
     ['Data_public_4899', 'public_4899', true],
     ['data_public_4941', 'public_4941', false],
   ]);
+});
+
+/* ── Ручное соответствие «версия CH → схема PG» ──────────────────────────────
+   Нумерация прогонов ClickHouse и схем Postgres совпадает не всегда: в CH
+   выбраны data_public_4899/4941, а схемы в PG — public_13…public_1726 и далее.
+   Автоподбор по имени тогда промахивается, и версия должна получить схему из
+   ручного соответствия (оно же переживает перезагрузку страницы). */
+async function pgReady(t, schemas) {
+  const { w, d } = await boot(t);
+  w.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/api/health'))
+      return { ok: true, status: 200, json: async () => ({ ok: true, service: 'inplan-dashboard', api: 2, endpoints: ['/api/pg/unc'] }) };
+    if (u.includes('/api/pg/schemas'))
+      return { ok: true, status: 200, json: async () => ({ ok: true, service: 'inplan-dashboard', schemas }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, service: 'inplan-dashboard', schema: 'x', demUnc: 0, n: 0, periods: [] }) };
+  };
+  w.PGX.cfg.user = 'reader';
+  await w.PGX.ensureSchemas();
+  return { w, d };
+}
+
+test('схема выбирается вручную, когда номера CH и PG не совпадают', async (t) => {
+  const SCHEMAS = [{ schema: 'public', n: 10 }, { schema: 'public_1494', n: 24581 }, { schema: 'public_1726', n: 19725 }];
+  const { w } = await pgReady(t, SCHEMAS);
+
+  /* автоподбор честно промахивается — версия ушла бы в demand_coverage */
+  let plan = w.PGX.schemaPlan(['Data_public_4899']);
+  assert.deepEqual(plan.map((m) => [m.schema, m.ok, m.manual]), [['public_4899', false, false]]);
+
+  /* пользователь выбирает схему руками */
+  w.PGX.setSchemaOverride('Data_public_4899', 'public_1494');
+  assert.equal(w.PGX.pgSchemaFor('Data_public_4899'), 'public_1494');
+  plan = w.PGX.schemaPlan(['Data_public_4899']);
+  assert.deepEqual(plan.map((m) => [m.schema, m.ok, m.manual]), [['public_1494', true, true]]);
+
+  /* запрос ушёл именно в выбранную схему */
+  let sent = null;
+  const prev = w.fetch;
+  w.fetch = async (url, opts) => {
+    if (String(url).includes('/api/pg/unc')) sent = JSON.parse(String(opts.body));
+    return prev(url, opts);
+  };
+  await w.PGX.uncFor('Data_public_4899', 4);
+  assert.equal(sent.schema, 'public_1494');
+
+  /* выбор сохранён в автосессии и переживает перезагрузку страницы */
+  assert.match(w.localStorage.getItem('inplan_pg_session_v1'), /public_1494/);
+  w.PGX.cfg.schemaMap = {};
+  assert.equal(w.PGX.restoreSession(), true);
+  assert.equal(w.PGX.cfg.schemaMap['data_public_4899'], 'public_1494', 'восстановлено из автосессии');
+  assert.equal(w.PGX.pgSchemaFor('Data_public_4899'), 'public_1494');
+
+  /* сброс в «авто» пустым значением */
+  w.PGX.setSchemaOverride('Data_public_4899', '');
+  assert.equal(w.PGX.pgSchemaFor('Data_public_4899'), 'public_4899');
+});
+
+test('модалка показывает соответствие версий и схем PG со списком для выбора', async (t) => {
+  const SCHEMAS = [{ schema: 'public_1494', n: 24581 }, { schema: 'public_4941', n: 19725 }];
+  const { w, d } = await pgReady(t, SCHEMAS);
+  w.CHX.cfg.schemas = ['Data_public_4899', 'Data_public_4941'];
+  w.CHX.openModal();
+  await settle(80);
+
+  const sels = [...d.querySelectorAll('select[data-pgmap]')];
+  assert.equal(sels.length, 2, 'по строке на выбранную версию');
+  assert.deepEqual(sels.map((s) => s.dataset.pgmap), ['Data_public_4899', 'Data_public_4941']);
+  /* в списке — все схемы PG с оценкой строк */
+  assert.match(sels[0].innerHTML, /public_1494/);
+  assert.match(sels[0].innerHTML, /24(&nbsp;|\s)581/, 'в списке видно, сколько строк в схеме');
+  /* промах автоподбора виден прямо в строке */
+  const rows = [...d.querySelectorAll('#chModal .chm-row')].map((r) => r.textContent.replace(/\s+/g, ' '));
+  assert.ok(rows.some((r) => /нет схемы «public_4899»/.test(r)), 'промах назван: ' + rows.join(' | '));
+  assert.ok(rows.some((r) => /✓ public_4941/.test(r)), 'попадание отмечено');
+
+  /* выбор в списке сразу привязывает схему */
+  sels[0].value = 'public_1494';
+  sels[0].dispatchEvent(new w.Event('change'));
+  await settle(50);
+  assert.equal(w.PGX.pgSchemaFor('Data_public_4899'), 'public_1494');
+  const after = [...d.querySelectorAll('#chModal .chm-row')].map((r) => r.textContent.replace(/\s+/g, ' '));
+  assert.ok(after.some((r) => /✓ public_1494 \(вручную\)/.test(r)), 'подпись обновилась: ' + after.join(' | '));
 });

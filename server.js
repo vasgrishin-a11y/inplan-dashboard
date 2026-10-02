@@ -388,6 +388,7 @@ function createApp(deps) {
       const conn = normalizeConn(req.body || {});
       const wanted = normalizeSchema((req.body || {}).schema);
       const gran = normalizeGran((req.body || {}).gran);
+      const exact = (req.body || {}).exact === true || (req.body || {}).exact === 'true';
       let db;
       try { db = await connect(conn); }
       catch (e) { throw friendlyPgError(e, conn); }
@@ -402,6 +403,9 @@ function createApp(deps) {
         } catch (e) {
           if (!(e instanceof TableMissing)) throw e;
           names = await listSchemaNames(db);
+          /* exact=true — схему выбрал человек в модалке: молча подставлять
+             другую нельзя, иначе показатель приедет из чужого прогона. */
+          if (exact) throw tableMissingError(wanted, names, conn);
           const alt = matchSchema(names, wanted);
           if (!alt) throw tableMissingError(wanted, names, conn);
           schema = alt;
@@ -420,7 +424,7 @@ function createApp(deps) {
           } catch (e) { throw friendlyPgError(e, conn); }
         }
         res.json({
-          ok: true, schema, requested: wanted, table: TABLE_NAME, gran,
+          ok: true, schema, requested: wanted, exact, table: TABLE_NAME, gran,
           cols,
           demUnc: Number(row.demUnc) || 0,
           n: Number(row.n) || 0,

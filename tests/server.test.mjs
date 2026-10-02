@@ -146,6 +146,19 @@ test('POST /api/pg/unc — схема подбирается по регистр
   });
 });
 
+test('POST /api/pg/unc — exact=true (схему выбрал человек): подмены схемы нет', async () => {
+  await withServer((sql, params) => {
+    if (/information_schema\.columns/.test(sql)) return { rows: [] };          // в выбранной схеме таблицы нет
+    if (/information_schema\.tables/.test(sql)) return { rows: [{ s: 'public_4899' }] };
+    return { rows: [] };
+  }, async (base) => {
+    /* без exact номер версии подобрал бы public_4899 — с exact получаем ошибку */
+    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_4899x', gran: 4, exact: true });
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error, /public_4899/, 'в ошибке — что есть на самом деле');
+  });
+});
+
 test('POST /api/pg/unc — схемы нет: ошибка перечисляет доступные схемы', async () => {
   await withServer((sql) => {
     if (/information_schema\.tables/.test(sql)) return { rows: [{ s: 'public_12' }, { s: 'public_13' }] };
