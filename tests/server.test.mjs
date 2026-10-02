@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import srv from '../server.js';
 
-const { createApp, uncSql, mapColumns, matchSchema, schemaCandidates } = srv;
+const { createApp, uncSql, mapColumns, matchSchema, schemaCandidates, bucketKeyExpr } = srv;
 
 const sq = (s) => s.replace(/\s+/g, ' ').trim();
 
@@ -40,28 +40,24 @@ const CONN = { host: 'pg.test', port: 5432, database: 'db', user: 'u', password:
 const FULL_COLS = ['sys_id', 'is_deleted', 'update_date_time', 'date', 'periodtype', 'demandqty'];
 /* Реальный список столбцов продуктивной таблицы (pgs_app_data_db) — сообщён владельцем */
 const PROD_COLS = ['item', 'demandqty', 'periodid', 'sys_id', 'dmdstream', 'periodtype',
-  'demandtype', 'loc', 'update_date_time', 'change_author', 'unit', 'date', 'adjusteddemandqty'];
+  'demandtype', 'loc', 'update_date_time', 'change_author', 'unit'];
 
 /* ── Чистые юнит-проверки SQL-сборки ── */
 test('uncSql: продуктивные колонки — дедуп по sys_id, основной объём demandqty', () => {
   const cols = mapColumns(PROD_COLS, 'public_2');
-  assert.deepEqual(cols, { qty: 'demandqty', adjustedQty: 'adjusteddemandqty',
-                           ptype: 'periodtype', date: 'date',
+  assert.deepEqual(cols, { qty: 'demandqty',
+                           ptype: 'periodtype', date: 'periodid',
                            sysId: 'sys_id', upd: 'update_date_time', del: null });
   const q = uncSql('public_2', cols, 4);
   assert.match(q.total.sql,
     /DISTINCT ON \("sys_id"\) \* FROM \(SELECT \* FROM "public_2"\."independent_demand" WHERE "periodtype" = \$1\) d ORDER BY "sys_id", "update_date_time" DESC/,
     'periodtype фильтруется до дедупа, затем выбирается последняя версия строки');
   assert.ok(!/is_deleted/.test(q.total.sql), 'фильтра удалённых нет — колонки не существует');
-  assert.ok(!/adjusteddemandqty/.test(q.total.sql) && !/adjusteddemandqty/.test(q.periods.sql),
-    'основной запрос по-прежнему считает demandqty');
   assert.match(q.total.sql, /sum\("demandqty"\) AS demUnc/);
   assert.equal(q.qty, 'demandqty');
-  /* backend может явно собрать второй запрос, только если основная сумма ноль */
-  const qa = uncSql('public_2', cols, 4, 'independent_demand', cols.adjustedQty);
-  assert.match(qa.total.sql, /sum\("adjusteddemandqty"\) AS demUnc/);
-  assert.equal(qa.qty, 'adjusteddemandqty');
+  assert.match(q.periods.sql, /substr\(s\."periodid"::text, 2, 4\)/, 'periodid распознаётся для помесячного разреза');
 });
+
 test('uncSql: полный набор колонок — periodtype до дедупа, ключи периодов', () => {
   const cols = mapColumns(FULL_COLS, 'public_2');
   const q = uncSql('public_2', cols, 4);
@@ -69,10 +65,7 @@ test('uncSql: полный набор колонок — periodtype до дед�
   assert.ok(!/s WHERE "periodtype"/.test(q.total.sql), 'после дедупа повторный фильтр не нужен');
   assert.deepEqual(q.total.params, [4]);
   assert.match(q.total.sql, /sum\("demandqty"\) AS demUnc/);
-  assert.match(q.periods.sql, /to_char\(s\."date"::timestamp, 'YYYY-MM'\) AS k/);
-  /* неделя — ключ даты понедельника, как toMonday в ClickHouse */
-  const q3 = uncSql('public_2', cols, 3);
-  assert.match(q3.periods.sql, /date_trunc\('week', s\."date"::timestamp\), 'YYYY-MM-DD'/);
+  assert.match(q.periods.sql, /s\."date"/);
 });
 
 test('uncSql: минимум колонок — ничего лишнего не добавляем', () => {
@@ -80,7 +73,7 @@ test('uncSql: минимум колонок — ничего лишнего не
   const q = uncSql('s1', cols, 4);
   assert.equal(q.total.sql, sq('SELECT sum("demandqty") AS demUnc, count(*)::bigint AS n FROM (SELECT * FROM "s1"."independent_demand") s'));
   assert.deepEqual(q.total.params, []);
-  assert.equal(q.periods, null, 'без колонки date периодный разрез не строится');
+  assert.equal(q.periods, null, 'без колонки date/periodid периодный разрез не строится');
 });
 
 test('mapColumns: без demandqty — понятная ошибка с перечнем колонок', () => {
@@ -152,7 +145,7 @@ test('POST /api/pg/unc — схема подбирается по регистр
 });
 
 test('POST /api/pg/unc — exact=true (схему выбрал человек): подмены схемы нет', async () => {
-  await withServer((sql, params) => {
+  await withServer((sql) => {
     if (/information_schema\.columns/.test(sql)) return { rows: [] };          // в выбранной схеме таблицы нет
     if (/information_schema\.tables/.test(sql)) return { rows: [{ s: 'public_4899' }] };
     return { rows: [] };
@@ -224,38 +217,7 @@ test('POST /api/pg/unc — итог по Σ demandqty и помесячный р
   });
 });
 
-test('POST /api/pg/unc — demandqty нулевой: используем заполненный adjusteddemandqty с явной диагностикой', async () => {
-  await withServer((sql) => {
-    if (/information_schema\.columns/.test(sql)) return { rows: PROD_COLS.map((c) => ({ c })) };
-    if (/sum\("demandqty"\).*count\(\*\)::bigint/.test(sql))
-      return { rows: [{ demUnc: 0, n: 210 }] };
-    if (/sum\("adjusteddemandqty"\).*count\(\*\)::bigint/.test(sql))
-      return { rows: [{ demUnc: 2750.5, n: 210 }] };
-    if (/sum\("adjusteddemandqty"\).*GROUP BY k ORDER BY k/.test(sql))
-      return { rows: [{ k: '2026-10', demUnc: 2750.5 }] };
-    throw new Error('неожиданный SQL: ' + sql);
-  }, async (base, calls) => {
-    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_2', gran: 4 });
-    assert.equal(r.status, 200);
-    const data = await r.json();
-    assert.equal(data.demUnc, 2750.5, 'дашборд получает фактически заполненный вход модели');
-    assert.equal(data.n, 210);
-    assert.equal(data.qtySource, 'adjusteddemandqty');
-    assert.equal(data.primaryDemUnc, 0, 'нулевая основная сумма не скрыта');
-    assert.equal(data.adjustedDemUnc, 2750.5);
-    assert.deepEqual(data.qtyFallback, {
-      from: 'demandqty', to: 'adjusteddemandqty',
-      reason: 'Σ demandqty = 0 при 210 строках periodtype 4'
-    });
-    assert.deepEqual(data.periods, [{ k: '2026-10', demUnc: 2750.5 }],
-      'разрез строится по той же колонке, что итог');
-    assert.equal(data.diagnostics.demandqty.n, 210);
-    assert.ok(calls.some(c => /sum\("demandqty"\)/.test(c.sql)));
-    assert.ok(calls.some(c => /sum\("adjusteddemandqty"\)/.test(c.sql)));
-  });
-});
-
-test('POST /api/pg/unc — обе колонки нулевые: возвращаем факты, не маскируем demand_coverage', async () => {
+test('POST /api/pg/unc — нулевой demandqty возвращает demUnc=0 без маскировки', async () => {
   await withServer((sql) => {
     if (/information_schema\.columns/.test(sql)) return { rows: PROD_COLS.map((c) => ({ c })) };
     if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 0, n: 210 }] };
@@ -266,11 +228,9 @@ test('POST /api/pg/unc — обе колонки нулевые: возвращ�
     assert.equal(r.status, 200);
     const data = await r.json();
     assert.equal(data.demUnc, 0);
+    assert.equal(data.n, 210);
     assert.equal(data.qtySource, 'demandqty');
-    assert.equal(data.qtyFallback, null);
-    assert.equal(data.primaryDemUnc, 0);
-    assert.equal(data.adjustedDemUnc, 0);
-    assert.equal(data.diagnostics.adjustedDemandqty.n, 210);
+    assert.equal(data.diagnostics.demandqty.demUnc, 0);
   });
 });
 

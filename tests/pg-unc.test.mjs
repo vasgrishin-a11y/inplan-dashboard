@@ -123,7 +123,8 @@ async function boot(t) {
 }
 
 /* pgMode 'ok' — backend отвечает агрегатами; 'lost' — backend жив, но таблицы
-   independent_demand нет ни в одной схеме (ответ 400 «не найдена»). */
+   independent_demand нет ни в одной схеме (ответ 400 «не найдена»);
+   'zero' — demandqty равен 0. */
 async function loadWithPG(t, pgMode) {
   const { w, d } = await boot(t);
   w.fetch = async (url, opts) => {
@@ -135,16 +136,14 @@ async function loadWithPG(t, pgMode) {
         return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independent_demand', schemas: PG_SCHEMAS }) };
       }
       if (u.includes('/api/pg/unc')) {
-        const rec = (pgMode === 'ok' || pgMode === 'adjusted') && PG[body.schema];
+        const rec = (pgMode === 'ok' || pgMode === 'zero') && PG[body.schema];
         if (!rec) {
           return { ok: false, status: 400, json: async () => ({ error: `Схема «${body.schema}»: таблица «independent_demand» не найдена или нет доступа.` }) };
         }
-        const payload = pgMode === 'adjusted'
-          ? { ...rec, qtySource: 'adjusteddemandqty',
-              qtyFallback: { from: 'demandqty', to: 'adjusteddemandqty', reason: `Σ demandqty = 0 при ${rec.n} строках periodtype ${body.gran}` },
-              primaryDemUnc: 0, adjustedDemUnc: rec.demUnc }
+        const payload = pgMode === 'zero'
+          ? { ...rec, demUnc: 0 }
           : rec;
-        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty', adjustedQty: 'adjusteddemandqty', ptype: 'periodtype', date: 'date', sysId: 'sys_id', upd: 'update_date_time', del: null }, ...payload }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date', sysId: 'sys_id', upd: 'update_date_time', del: null }, ...payload }) };
       }
       return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
     }
@@ -218,7 +217,6 @@ test('неограниченный спрос приходит из PostgreSQL �
   const cells = [...uncTr.querySelectorAll('td')].slice(1)
     .map((td) => toNum(td.textContent.split('(')[0]));
   assert.deepEqual(cells.slice(0, 2), [1500, 1700], 'обе версии читаются из своих PG-схем');
-  const covNote = d.querySelector('#vsCovNote, #main .dim, #vsMat')?.parentElement?.textContent || '';
   assert.match(d.getElementById('main').textContent, /PostgreSQL · public_1/,
     'в сравнении версий подписана PG-схема каждой версии');
 
@@ -236,21 +234,18 @@ test('неограниченный спрос приходит из PostgreSQL �
   assert.equal(w.PGX.pgSchemaFor('public_9'), 'public_9', 'без попадания в справочник — снятое имя как есть');
 });
 
-test('нулевой demandqty при заполненном adjusteddemandqty остаётся PG-источником, а не уходит в demand_coverage', async (t) => {
-  const ctx = await loadWithPG(t, 'adjusted');
+test('нулевой demandqty в independent_demand переходит в demand_coverage с понятной причиной', async (t) => {
+  const ctx = await loadWithPG(t, 'zero');
   const v1 = ctx.w.CHX.versions.find((v) => v.id === 'data_public_1');
 
-  assert.equal(v1.agg.totals.uncSrc, 'independentdemand');
-  assert.equal(v1.agg.totals.uncQty, 'adjusteddemandqty');
-  assert.equal(v1.agg.totals.cov.demUnc, 1500, 'использован скорректированный вход PG, не покрытие 1200');
-  assert.match(v1.agg.totals.uncDetail, /PostgreSQL · public_1 · adjusteddemandqty/);
+  assert.equal(v1.agg.totals.uncSrc, 'demand_coverage');
+  assert.equal(v1.agg.totals.cov.demUnc, 1200);
   const notes = (v1.agg.notes || []).join(' ');
   assert.match(notes, /Σ demandqty = 0/);
-  assert.match(notes, /использован Σ adjusteddemandqty = 1500/);
-  assert.ok(!/independent_demand недоступна/.test(notes), 'таблица доступна и не должна называться недоступной');
+  assert.match(notes, /demand_coverage/);
 
   await ctx.goTab('dm');
-  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1500);
+  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1200);
 });
 
 test('PG недоступен для схем — честный фолбэк на покрытый + непокрытый с причиной в статусе', async (t) => {
