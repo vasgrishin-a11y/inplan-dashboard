@@ -1,0 +1,375 @@
+'use strict';
+/**
+ * In.Plan dashboard — backend-прокси к PostgreSQL.
+ *
+ * Неограниченный спрос дашборда — это Σ demandqty таблицы independentdemand,
+ * которая физически лежит в PostgreSQL (планировщик пишет результаты прогонов
+ * в схемы public, public_2, …; в ClickHouse тем же прогонам соответствуют базы
+ * data_public, data_public_2, …). Браузер не умеет открывать TCP к Postgres,
+ * поэтому эти запросы обслуживает этот сервис. Эндпоинты:
+ *
+ *   GET  /api/health        — проверка, что backend жив
+ *   GET  /api/pg/defaults   — хост/порт/база по умолчанию для формы подключения
+ *   POST /api/pg/schemas    — схемы, в которых есть таблица independentdemand
+ *   POST /api/pg/unc        — агрегат неограниченного спроса схемы:
+ *                             {schema, gran} → {demUnc, n, periods:[{k,demUnc}]}
+ *
+ * Логин/пароль приходят в теле каждого запроса и нигде не сохраняются и не
+ * логируются. Сервис также раздаёт статику дашборда (index.html, assets/),
+ * поэтому страница и API работают на одном origin — CORS-проблем нет; для
+ * открытых со статического хостинга страниц CORS разрешён («*», без cookies).
+ *
+ * Соответствие версий: база ClickHouse «data_public_2» ↔ схема Postgres
+ * «public_2» (префикс data_ отрезается на фронтенде, регистр не важен).
+ *
+ * Для тестов DB-слой инжектится: createApp({connect}).
+ * Запуск: npm start (PORT=8080, HOST=0.0.0.0 по умолчанию).
+ */
+
+const path = require('path');
+const express = require('express');
+const { Client } = require('pg');
+
+const PG_DEFAULTS = {
+  host: 'db-postgresql-app.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
+  port: 48235,
+  database: 'pgs_app_data_db'
+};
+const TABLE_NAME = 'independentdemand';
+const MAX_SCHEMAS = 512;
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/* ── Идентификаторы и валидация входа: только квотирование/параметры ── */
+function qi(ident) {
+  if (typeof ident !== 'string' || !ident) throw new HttpError(400, 'Пустое имя схемы/таблицы/столбца.');
+  if (ident.length > 128) throw new HttpError(400, 'Слишком длинное имя схемы/таблицы/столбца.');
+  return '"' + ident.replace(/"/g, '""') + '"';
+}
+function asStr(v, field) {
+  if (v === undefined || v === null) return '';
+  const s = String(v);
+  if (s.length > 512) throw new HttpError(400, `Поле «${field}» слишком длинное.`);
+  return s;
+}
+function reqStr(v, field) {
+  const s = asStr(v, field).trim();
+  if (!s) throw new HttpError(400, `Заполните поле «${field}».`);
+  return s;
+}
+function normalizeConn(body) {
+  const b = body || {};
+  const host = reqStr(b.host, 'Хост');
+  const port = Number(b.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new HttpError(400, 'Порт должен быть целым числом от 1 до 65535.');
+  const database = reqStr(b.database, 'База данных');
+  const user = reqStr(b.user, 'Логин');
+  const password = b.password === undefined || b.password === null ? '' : String(b.password);
+  const ssl = b.ssl === undefined || b.ssl === null || b.ssl === '' ? 'auto' : String(b.ssl);
+  if (!['auto', 'off', 'insecure', 'strict'].includes(ssl))
+    throw new HttpError(400, 'Некорректный режим SSL.');
+  return { host, port, database, user, password, ssl };
+}
+function normalizeSchema(v) {
+  const s = reqStr(v, 'Схема');
+  if (s.length > 128) throw new HttpError(400, 'Слишком длинное имя схемы.');
+  return s;
+}
+function normalizeGran(v) {
+  const g = Number(v);
+  if (!Number.isInteger(g) || g < 1 || g > 6)
+    throw new HttpError(400, 'Гранулярность (periodtype) должна быть целым числом от 1 до 6.');
+  return g;
+}
+
+/* ── Мэппинг столбцов independentdemand ─────────────────────────────────
+   Продуктивная база (pgs_app_data_db), реальные столбцы:
+     item, demandqty, periodid, sys_id, dmdstream, periodtype, demandtype,
+     loc, update_date_time, change_author, unit, date, adjusteddemandqty.
+   • sys_id и update_date_time ЕСТЬ → запрос включает дедуп строк: последняя
+     версия записи (DISTINCT ON (sys_id) … ORDER BY update_date_time DESC);
+   • is_deleted НЕТ → фильтра удалённых нет;
+   • adjusteddemandqty существует, но по определению владельца показатель —
+     Σ demandqty (2026-10): скорректированный объём в агрегат не входит.
+   Маппинг при этом оставлен толерантным: если в какой-то схеме sys_id или
+   update_date_time отсутствуют, запрос аккуратно собирается без них, а
+   схема с is_deleted получит и фильтр удалённых (COALESCE-к-тексту). */
+const COL_CANDIDATES = {
+  qty:   ['demandqty', 'demand_qty'],
+  ptype: ['periodtype', 'period_type'],
+  date:  ['date', 'period_date'],
+  sysId: ['sys_id'],
+  upd:   ['update_date_time', 'update_datetime', 'updated_at'],
+  del:   ['is_deleted']
+};
+function colIndex(columnNames) {
+  const lower = new Map();
+  for (const c of columnNames || []) {
+    const k = String(c).toLowerCase();
+    if (!lower.has(k)) lower.set(k, c);
+  }
+  return lower;
+}
+function mapColumns(columnNames, schemaName) {
+  const lower = colIndex(columnNames);
+  const mapped = {};
+  for (const key of Object.keys(COL_CANDIDATES)) {
+    const hit = COL_CANDIDATES[key].map(c => lower.get(c)).find(Boolean);
+    mapped[key] = hit || null;
+  }
+  if (!mapped.qty) {
+    const found = (columnNames && columnNames.length) ? columnNames.join(', ') : '—';
+    throw new HttpError(
+      400,
+      `Схема «${schemaName}»: в таблице ${TABLE_NAME} нет колонки demandqty. Найдены: ${found}.`
+    );
+  }
+  return mapped;
+}
+
+/* ── Дружелюбные тексты ошибок (коды node-pg) ── */
+function isSslError(err) {
+  if (!err) return false;
+  if (['28P01', '28P04', '28000', '3D000'].includes(err.code)) return false;
+  return /ssl/i.test(err.message || '');
+}
+function friendlyPgError(err, conn) {
+  if (err instanceof HttpError) return err;
+  const code = err && err.code;
+  const where = conn && conn.host ? ` (${conn.host}:${conn.port || ''})` : '';
+  if (code === '28P01' || code === '28P04' || code === '28000') {
+    const who = conn && conn.user ? ` пользователя «${conn.user}»` : '';
+    return new HttpError(401, `Неверный логин или пароль — Postgres отклонил аутентификацию${who}.`);
+  }
+  if (code === '3D000')
+    return new HttpError(400, `База данных «${conn && conn.database}» не существует или недоступна.`);
+  if (code === '42P01')
+    return new HttpError(400, `Таблица ${TABLE_NAME} не найдена (или нет прав на неё).`);
+  if (code === '42501' || code === '42000')
+    return new HttpError(403, 'Недостаточно прав: пользователь не видит нужные схемы/таблицы.');
+  if (code === 'ENOTFOUND') return new HttpError(502, `Хост «${conn && conn.host}» не найден (DNS).`);
+  if (code === 'ECONNREFUSED')
+    return new HttpError(502, `Нет соединения с ${conn && conn.host}:${conn && conn.port}${where}.`);
+  if (code === 'ETIMEDOUT' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'EAI_AGAIN')
+    return new HttpError(502, `Превышено время ожидания соединения${where}. Проверьте хост, порт и доступность сети.`);
+  if (isSslError(err))
+    return new HttpError(502, 'Ошибка SSL при подключении. Попробуйте другой режим SSL в форме подключения.');
+  const raw = String((err && err.message) || '');
+  if (/timeout expired|timed out/i.test(raw))
+    return new HttpError(502, `Превышено время ожидания соединения${where}. Проверьте хост, порт и доступность сети.`);
+  if (/connection terminated|connection reset|econnreset/i.test(raw))
+    return new HttpError(502, `Соединение с сервером${where} разорвано. Проверьте хост/порт и режим SSL.`);
+  if (/password authentication failed/i.test(raw))
+    return new HttpError(401, 'Неверный логин или пароль — Postgres отклонил аутентификацию.');
+  if (/database .* does not exist/i.test(raw))
+    return new HttpError(400, `База данных «${conn && conn.database}» не существует или недоступна.`);
+  return new HttpError(500, `Postgres: ${raw.slice(0, 400) || 'неизвестная ошибка'}`);
+}
+
+/* ── Подключение через node-pg (SSL-режимы как в opti) ── */
+function sslConfig(mode) {
+  if (mode === 'off') return false;
+  if (mode === 'strict') return { rejectUnauthorized: true };
+  return { rejectUnauthorized: false }; // insecure
+}
+async function defaultConnect(conn) {
+  const base = {
+    host: conn.host,
+    port: conn.port,
+    database: conn.database,
+    user: conn.user,
+    password: conn.password,
+    connectionTimeoutMillis: 15000,
+    statement_timeout: 180000,
+    application_name: 'inplan-dashboard'
+  };
+  const open = async mode => {
+    const client = new Client({ ...base, ssl: sslConfig(mode) });
+    await client.connect();
+    return client;
+  };
+  let client;
+  if (conn.ssl && conn.ssl !== 'auto') client = await open(conn.ssl);
+  else {
+    try { client = await open('insecure'); }
+    catch (e) {
+      if (isSslError(e)) client = await open('off');
+      else throw e;
+    }
+  }
+  return {
+    query: (text, params) => client.query(text, params),
+    close: () => client.end().catch(() => {})
+  };
+}
+
+/* ── Столбцы таблицы схемы ── */
+async function listColumns(db, schema) {
+  let res;
+  try {
+    res = await db.query(
+      'SELECT column_name AS c FROM information_schema.columns ' +
+      'WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position',
+      [schema, TABLE_NAME]
+    );
+  } catch (e) {
+    throw friendlyPgError(e, null);
+  }
+  const names = (res.rows || []).map(r => String(r.c));
+  if (!names.length)
+    throw new HttpError(400, `Схема «${schema}»: таблица «${TABLE_NAME}» не найдена или нет доступа.`);
+  return names;
+}
+
+/* ── SQL агрегата неограниченного спроса ─────────────────────────────────
+   Семантика повторяет ClickHouse-выгрузку дашборда (src() в inplan-ch.js):
+   WHERE is_deleted = 0, затем последняя строка на sys_id (LIMIT 1 BY →
+   DISTINCT ON … ORDER BY update_date_time DESC), затем sum(demandqty) с
+   фильтром periodtype. Ключи периодов совпадают с расчётом ClickHouse:
+   неделя — дата понедельника, месяц/квартал/год — «YYYY-MM», день — дата. */
+function bucketKeyExpr(dateExpr, gran) {
+  const d = `${dateExpr}::timestamp`;
+  if (gran === 3) return `to_char(date_trunc('week', ${d}), 'YYYY-MM-DD')`;
+  if (gran === 4 || gran === 5 || gran === 6) return `to_char(${d}, 'YYYY-MM')`;
+  return `to_char(${d}::date, 'YYYY-MM-DD')`;
+}
+function uncSql(schema, cols, gran) {
+  let src = `SELECT * FROM ${qi(schema)}.${qi(TABLE_NAME)}`;
+  /* is_deleted может быть numeric («0/1»), boolean или текстом — приводим
+     к тексту; NULL трактуем как «не удалена» */
+  if (cols.del) src += ` WHERE COALESCE(${qi(cols.del)}::text, '0') IN ('0','false','f')`;
+  if (cols.sysId) {
+    src = `SELECT DISTINCT ON (${qi(cols.sysId)}) * FROM (${src}) d ORDER BY ${qi(cols.sysId)}` +
+          (cols.upd ? `, ${qi(cols.upd)} DESC` : '');
+  }
+  const where = cols.ptype ? ` WHERE ${qi(cols.ptype)} = $1` : '';
+  const params = cols.ptype ? [gran] : [];
+  const total = {
+    sql: `SELECT sum(${qi(cols.qty)}) AS demUnc, count(*)::bigint AS n FROM (${src}) s${where}`,
+    params
+  };
+  const periods = cols.date
+    ? {
+        sql: `SELECT ${bucketKeyExpr('s.' + qi(cols.date), gran)} AS k, sum(${qi(cols.qty)}) AS demUnc ` +
+             `FROM (${src}) s${where} GROUP BY k ORDER BY k`,
+        params
+      }
+    : null;
+  return { total, periods };
+}
+
+/* ── Приложение ── */
+function createApp(deps) {
+  const connect = (deps && deps.connect) || defaultConnect;
+  const app = express();
+  /* CORS: дашборд может быть открыт со статического хостинга/file://, тогда
+     запросы идут на этот backend с чужого origin. Куки не используются
+     (пароль — в теле), «*» без credentials безопасно. */
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    next();
+  });
+  app.use(express.json({ limit: '256kb' }));
+
+  app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+  app.get('/api/pg/defaults', (req, res) => res.json({ ...PG_DEFAULTS, table: TABLE_NAME }));
+
+  /** Схемы, в которых есть таблица independentdemand (+ оценка числа строк). */
+  app.post('/api/pg/schemas', async (req, res, next) => {
+    try {
+      const conn = normalizeConn(req.body || {});
+      let db;
+      try { db = await connect(conn); }
+      catch (e) { throw friendlyPgError(e, conn); }
+      try {
+        const t = await db.query(
+          `SELECT t.table_schema AS s, st.n_live_tup::bigint AS n
+             FROM information_schema.tables t
+             LEFT JOIN pg_stat_user_tables st
+               ON st.schemaname = t.table_schema AND lower(st.relname) = $1
+            WHERE lower(t.table_name) = $1
+              AND t.table_schema NOT IN ('pg_catalog','information_schema')
+            ORDER BY 1`,
+          [TABLE_NAME]
+        );
+        const schemas = (t.rows || []).slice(0, MAX_SCHEMAS)
+          .map(r => ({ schema: String(r.s), n: Number(r.n) || 0 }));
+        res.json({ ok: true, table: TABLE_NAME, schemas });
+      } finally { await db.close(); }
+    } catch (e) { next(e); }
+  });
+
+  /** Агрегат неограниченного спроса схемы: итог + помесячный разрез. */
+  app.post('/api/pg/unc', async (req, res, next) => {
+    try {
+      const conn = normalizeConn(req.body || {});
+      const schema = normalizeSchema((req.body || {}).schema);
+      const gran = normalizeGran((req.body || {}).gran);
+      let db;
+      try { db = await connect(conn); }
+      catch (e) { throw friendlyPgError(e, conn); }
+      try {
+        const cols = mapColumns(await listColumns(db, schema), schema);
+        const q = uncSql(schema, cols, gran);
+        let tot;
+        try { tot = await db.query(q.total.sql, q.total.params); }
+        catch (e) { throw friendlyPgError(e, conn); }
+        const row = (tot.rows || [])[0] || {};
+        let periods = [];
+        if (q.periods) {
+          try {
+            const p = await db.query(q.periods.sql, q.periods.params);
+            periods = (p.rows || []).map(r => ({ k: String(r.k), demUnc: Number(r.demUnc) || 0 }));
+          } catch (e) { throw friendlyPgError(e, conn); }
+        }
+        res.json({
+          ok: true, schema, table: TABLE_NAME, gran,
+          cols,
+          demUnc: Number(row.demUnc) || 0,
+          n: Number(row.n) || 0,
+          periods
+        });
+      } finally { await db.close(); }
+    } catch (e) { next(e); }
+  });
+
+  /* Статика дашборда: один origin для страницы и API. */
+  app.use(express.static(__dirname));
+  app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+
+  // eslint-disable-next-line no-unused-vars
+  app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    const status = (err && err.status) || 500;
+    res.status(status).json({ error: (err && err.message) || 'Internal error' });
+  });
+  return app;
+}
+
+if (require.main === module) {
+  const PORT = Number(process.env.PORT) || 8080;
+  const HOST = process.env.HOST || '0.0.0.0';
+  createApp().listen(PORT, HOST, () => {
+    console.log(`In.Plan dashboard + PG-прокси → http://${HOST}:${PORT}`);
+    console.log(`Postgres по умолчанию: ${PG_DEFAULTS.host}:${PG_DEFAULTS.port} / ${PG_DEFAULTS.database} (таблица ${TABLE_NAME})`);
+  });
+}
+
+module.exports = {
+  createApp, defaultConnect,
+  normalizeConn, normalizeSchema, normalizeGran,
+  mapColumns, COL_CANDIDATES, uncSql, bucketKeyExpr,
+  qi, friendlyPgError, HttpError, PG_DEFAULTS, TABLE_NAME
+};

@@ -1,17 +1,17 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Регрессия: определение «Неограниченный спрос = Покрытый + Непокрытый спрос»
+   Регрессия: определение «Неограниченный спрос = Σ demandqty из independentdemand»
    действует во ВСЁМ дашборде, а не в одном разделе.
 
-   Требование владельца: неограниченный спрос везде — это сумма покрытого
-   (`fullfilleddemandqty`) и непокрытого (`unfullfilleddemandqty`) спроса из
-   `demand_coverage`. Раньше код предпочитал готовый итог выгрузки
-   (`num(cov.demUnc) || (ff+uf)`): пока итог совпадает с составляющими, разницы
-   нет, но при расхождении разделы показали бы разные числа и никто бы об этом
-   не узнал.
+   Требование владельца (2026-10): неограниченный спрос везде — это сумма
+   по столбцу `demandqty` таблицы `independentdemand` (вход модели). Раньше
+   показатель считался как покрытый + непокрытый из `demand_coverage`
+   (fullfilleddemandqty + unfullfilleddemandqty) — это ИСХОД прогона, и при
+   расхождении входа и исхода разделы могли показать не то число.
 
-   Проверяется моком, где итог выгрузки намеренно расходится с составляющими
-   (итог 9999 против 950 + 250): дашборд обязан показывать 1200 во всех
-   разделах и поднять проверку «Неограниченный спрос: определение».
+   Проверяется моком, где таблицы намеренно расходятся (вход 1500 против
+   950 + 250 исхода): дашборд обязан показывать 1500 (demandqty) во всех
+   разделах и поднять проверку «Неограниченный спрос: определение», которая
+   сверяет вход (independentdemand) с исходом (demand_coverage).
 
    Запуск:  npm test
    ───────────────────────────────────────────────────────────────────────────── */
@@ -66,10 +66,10 @@ const OPS = [
   { o: 101, p: '1', type: 'production', pl: 'L1', pr: 'P1', rs: 'R1', fr: '', to: '', tm: '', v: 19, r: 26, vd: '', rt: '1.1', oid: '101.1', rc: 0 },
 ];
 
-/** covTotal — что отдаёт выгрузка в готовом итоге demUnc (может врать). */
-function makeRoute(covTotal) {
-  const COV = { demUnc: covTotal, ff: 950, uf: 250, inTime: 850, late: 50, lostRev: 120, planRev: 6000, prop: 1200 };
-  const COV_P = [{ k: '2026-09', demUnc: covTotal, ff: 950, uf: 250, late: 50 }];
+/** uncTotal — Σ demandqty из PG independentdemand (вход); покрытие в CH — 950 + 250 = 1200 (исход). */
+function makeRoute(uncTotal) {
+  const COV = { demUnc: 1200, ff: 950, uf: 250, inTime: 850, late: 50, lostRev: 120, planRev: 6000, prop: 1200 };
+  const COV_P = [{ k: '2026-09', demUnc: 1200, ff: 950, uf: 250, late: 50 }];
   return function route(sql) {
     const dbm = sql.match(/`(data_public_\d+)`\./);
     const db = dbm && dbm[1];
@@ -84,6 +84,7 @@ function makeRoute(covTotal) {
     if (/`o_p` AS k/.test(sql)) return DIM_P;
     if (/`o_prod` AS k/.test(sql)) return DIM_PR;
     if (/`o_cl` AS k/.test(sql)) return DIM_CL;
+    if (/`independentdemand`/.test(sql)) throw new Error('в ClickHouse таблицы independentdemand нет — идём в PostgreSQL');
     if (/`lostrevenue`/.test(sql)) return [COV];
     if (/GROUP BY k ORDER BY k/.test(sql)) return COV_P;
     if (/SELECT order_id AS id/.test(sql)) return ORDERS;
@@ -101,9 +102,9 @@ async function waitFor(fn, timeout, label) {
   }
   throw new Error('timeout: ' + (label || 'условие'));
 }
-const toNum = (s) => Number(String(s).replace(/\u00a0|\u202f|\s/g, '').replace(/[^\d.,-]/g, '').replace(',', '.'));
+const toNum = (s) => Number(String(s).replace(/ | |\s/g, '').replace(/[^\d.,-]/g, '').replace(',', '.'));
 
-async function loadCH(covTotal) {
+async function loadCH(uncTotal) {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', () => {});
   const dom = new JSDOM(fs.readFileSync(HTML, 'utf8'), {
@@ -113,11 +114,25 @@ async function loadCH(covTotal) {
   await new Promise((resolve) => dom.window.addEventListener('load', resolve));
   await settle(400);
   const w = dom.window, d = w.document;
-  const route = makeRoute(covTotal);
+  const route = makeRoute(uncTotal);
   w.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes('/api/pg/')) {
+      const body = JSON.parse(String((opts && opts.body) || '{}'));
+      if (u.includes('/api/pg/schemas'))
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: [{ schema: 'public_1', n: 15 }, { schema: 'public_2', n: 15 }] }) };
+      if (u.includes('/api/pg/unc'))
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independentdemand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date' }, demUnc: uncTotal, n: 15, periods: [{ k: '2026-09', demUnc: uncTotal }] }) };
+      return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
+    }
     const sql = String((opts && opts.body) || '');
-    return { ok: true, status: 200, text: async () => route(sql).map((r) => JSON.stringify(r)).join('\n') };
+    let rows;
+    try { rows = route(sql); }
+    catch (e) { return { ok: false, status: 500, text: async () => e.message }; }
+    return { ok: true, status: 200, text: async () => rows.map((r) => JSON.stringify(r)).join('\n') };
   };
+  w.PGX.cfg.user = 'reader';
+  w.PGX.cfg.password = 'secret';
   await w.CHX.connect();
   w.CHX.openModal();
   d.querySelector('input[data-db="data_public_1"]').click();
@@ -139,44 +154,48 @@ async function loadCH(covTotal) {
   return { window: w, document: d, kpi, goTab, vsRow, close() { try { dom.window.close(); } catch { /* jsdom */ } } };
 }
 
-test('неограниченный спрос = покрытый + непокрытый во всех разделах, даже если итог выгрузки говорит другое', async (t) => {
-  /* выгрузка отдаёт итог 9999, а составляющие — 950 и 250 */
-  const ctx = await loadCH(9999);
+test('неограниченный спрос = Σ demandqty (independentdemand) во всех разделах, даже если покрытие говорит другое', async (t) => {
+  /* входной спрос 1500, а покрытый + непокрытый — 1200 */
+  const ctx = await loadCH(1500);
   t.after(ctx.close);
 
   await ctx.goTab('dm');
   const unlim = ctx.kpi('Неограниченный спрос');
   assert.ok(unlim, 'карточка «Неограниченный спрос» есть во вкладке «Спрос и покрытие»');
-  assert.equal(toNum(unlim.querySelector('.v').textContent), 1200,
-    'показан покрытый 950 + непокрытый 250, а не итог выгрузки 9999');
+  assert.equal(toNum(unlim.querySelector('.v').textContent), 1500,
+    'показан вход 1500 из independentdemand, а не покрытый+непокрытый 1200');
 
   /* производные от него величины считаются от того же числа */
-  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 200, '1200 − 1000 плана');
-  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 300, '1200 − 900 отгрузки');
+  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 500, '1500 − 1000 плана');
+  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 600, '1500 − 900 отгрузки');
 
   await ctx.goTab('ov');
-  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 300,
+  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 600,
     '«Общий» использует то же определение');
 
   await ctx.goTab('vs');
-  assert.equal(ctx.vsRow('Неограниченный спрос, т'), 1200, '«Сравнение версий» — то же число');
-  assert.equal(ctx.vsRow('Ограниченный спрос, т') + ctx.vsRow('Неудовлетворённый спрос, т'), 1200,
-    'покрытый + непокрытый = неограниченный');
+  assert.equal(ctx.vsRow('Неограниченный спрос, т'), 1500, '«Сравнение версий» — то же число');
+  assert.equal(ctx.vsRow('Ограниченный спрос, т'), 950, 'ограниченный = покрытый (demand_coverage)');
+  assert.equal(ctx.vsRow('Неудовлетворённый спрос, т'), 250, 'неудовлетворённый = непокрытый (demand_coverage)');
 
   await ctx.goTab('data');
   const checks = [...ctx.document.querySelectorAll('#q3 .dq')].map((x) => x.textContent.replace(/\s+/g, ' '));
   const def = checks.find((x) => /Неограниченный спрос: определение/.test(x));
   assert.ok(def, 'во вкладке «Данные и качество» есть проверка определения');
-  assert.match(def, /9 999/, 'расхождение с итогом выгрузки названо числом');
+  assert.match(def, /1 500/, 'вход (independentdemand) назван числом');
+  assert.match(def, /1 200/, 'исход (demand_coverage) назван числом');
   assert.match(def, /расхождение/, 'проверка сообщает о расхождении, а не молчит');
+  assert.match(def, /independentdemand/, 'назван источник определения');
 });
 
-test('когда итог выгрузки согласован с составляющими — проверка определения зелёная', async (t) => {
+test('когда вход (independentdemand) согласован с исходом (demand_coverage) — проверка определения зелёная', async (t) => {
   const ctx = await loadCH(1200);
   t.after(ctx.close);
 
   await ctx.goTab('dm');
   assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1200);
+  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 200, '1200 − 1000 плана');
+  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 300, '1200 − 900 отгрузки');
 
   await ctx.goTab('data');
   const checks = [...ctx.document.querySelectorAll('#q3 .dq')].map((x) => x.textContent.replace(/\s+/g, ' '));
@@ -184,4 +203,57 @@ test('когда итог выгрузки согласован с состав�
   assert.ok(def, 'проверка выполняется и в согласованном случае');
   assert.match(def, /совпадает с суммой покрытого и непокрытого/,
     'подтверждение, а не предупреждение');
+});
+
+test('без independentdemand — честный фолбэк на покрытый + непокрытый с пометкой в статусе загрузки', async (t) => {
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on('jsdomError', () => {});
+  const dom = new JSDOM(fs.readFileSync(HTML, 'utf8'), {
+    url: BASE + '/', runScripts: 'dangerously', pretendToBeVisual: true,
+    virtualConsole, resources: { interceptors: [localResources] },
+  });
+  await new Promise((resolve) => dom.window.addEventListener('load', resolve));
+  await settle(400);
+  const w = dom.window, d = w.document;
+  const route = makeRoute(0);   /* в PG таблица есть, но строк нет / нулевой объём */
+  w.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes('/api/pg/')) {
+      const body = JSON.parse(String((opts && opts.body) || '{}'));
+      if (u.includes('/api/pg/schemas'))
+        return { ok: true, status: 200, json: async () => ({ ok: true, table: 'independentdemand', schemas: [{ schema: 'public_1', n: 0 }, { schema: 'public_2', n: 0 }] }) };
+      if (u.includes('/api/pg/unc'))
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independentdemand', gran: body.gran, cols: { qty: 'demandqty' }, demUnc: 0, n: 0, periods: [] }) };
+    }
+    const sql = String((opts && opts.body) || '');
+    let rows;
+    try { rows = route(sql); }
+    catch (e) { return { ok: false, status: 500, text: async () => e.message }; }
+    return { ok: true, status: 200, text: async () => rows.map((r) => JSON.stringify(r)).join('\n') };
+  };
+  w.PGX.cfg.user = 'reader';
+  w.PGX.cfg.password = 'secret';
+  t.after(() => { try { dom.window.close(); } catch { /* jsdom */ } });
+
+  await w.CHX.connect();
+  w.CHX.openModal();
+  d.querySelector('input[data-db="data_public_1"]').click();
+  await settle();
+  d.querySelector('input[data-db="data_public_2"]').click();
+  await settle();
+  d.getElementById('chmLoad').click();
+  await waitFor(() => w.CHX.versions.length === 2, 20000, 'версии загружены');
+
+  /* загрузчик зафиксировал фолбэк: заметка и источник — demand_coverage */
+  const notes = w.CHX.versions.map((v) => (v.agg.notes || []).join(' ')).join(' ');
+  assert.match(notes, /independentdemand/, 'причина фолбэка зафиксирована в заметках загрузки');
+  assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'demand_coverage',
+    'источник неограниченного спроса помечен как demand_coverage');
+
+  w.go('dm');
+  await settle(250);
+  const unlim = [...d.querySelectorAll('#main .kpi')]
+    .find((k) => ((k.querySelector('.t') || {}).textContent || '').trim() === 'Неограниченный спрос');
+  assert.equal(toNum(unlim.querySelector('.v').textContent), 1200,
+    'карточка показывает покрытый 950 + непокрытый 250 — старое поведение сохранено');
 });
