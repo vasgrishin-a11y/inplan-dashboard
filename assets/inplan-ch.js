@@ -503,7 +503,7 @@ CHX.unmatchedSchemas = () =>
 /* ─────────────── 8. АГРЕГАТЫ ВЕРСИИ (считает ClickHouse) ─────────────── */
 async function loadVersionAgg(db, gran){
   const out = {db, gran, totals:{}, dims:{}, notes:[]};
-  const S_MD = src(db,'marking_demand');
+  const S_MD = await src(db,'marking_demand');
 
    /* 8.1 финансы и объёмы: дедуп до уровня заказа, потом агрегация.
      ВАЖНО: колонки подзапроса названы с префиксом o_ — ClickHouse подставляет
@@ -557,11 +557,39 @@ async function loadVersionAgg(db, gran){
   out.dims.product = dPr.map(r=>({k:String(r.k), mar:num(r.mar), sal:num(r.sal), unm:num(r.unm)}));
   out.dims.client  = dCl.map(r=>({k:String(r.k), mar:num(r.mar), sal:num(r.sal), unm:num(r.unm)}));
 
+  /* 8.4a неограниченный (входной) спрос — из independent_demand:
+     это ПЕРВОИСТОЧНИК входного спроса (одна строка на
+     item×loc×dmdstream×demandtype×период), тогда как demand_coverage —
+     производная таблица покрытия. Раньше дашборд брал неограниченный спрос
+     только как covered+uncovered из demand_coverage; теперь он считается
+     напрямую по demandqty, а при отсутствии/падении таблицы — честно
+     помечается в notes и остаётся фолбэк на demand_coverage. */
+  try{
+    const gw = granWhere('independent_demand', gran);
+    const pk = periodKeyExpr('independent_demand', gran);
+    const tID = TABLES.independent_demand;
+    const S_ID = await src(db,'independent_demand', gw);
+    const idTot = await chQuery(`SELECT sum(toFloat64(${q(tID.qtyCol)})) AS demUnc,
+        count() AS n FROM ${S_ID}`);
+    const num0 = x => { const v = num(x); return isFinite(v) ? v : 0 };
+    const totRec = idTot[0] || {};
+    if(num0(totRec.n) > 0){
+      out.totals.demandUnc = {demUnc: num0(totRec.demUnc), rows: num0(totRec.n), from:'independent_demand'};
+      CHX.loaded.independent_demand = true;
+      const idPer = await chQuery(`SELECT ${pk} AS k,
+          sum(toFloat64(${q(tID.qtyCol)})) AS demUnc
+        FROM ${S_ID} GROUP BY k ORDER BY k`);
+      out.dims.demandUnc = idPer.map(r=>({k:String(r.k||''), demUnc:num0(r.demUnc)}));
+    } else {
+      out.notes.push('independent_demand: таблица есть, но строк с текущей гранулярностью нет — неограниченный спрос взят из demand_coverage (covered+uncovered)');
+    }
+  }catch(e){ out.notes.push('independent_demand: '+e.message+' — неограниченный спрос берётся из demand_coverage (covered+uncovered)') }
+
   /* 8.4 покрытие спроса: неограниченный = выполнено + не выполнено */
   try{
     const gw = granWhere('demand_coverage', gran);
     const pk = periodKeyExpr('demand_coverage', gran);
-    const S_DC = src(db,'demand_coverage', gw);
+    const S_DC = await src(db,'demand_coverage', gw);
     const cov = await chQuery(`SELECT
         sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
         sum(${q('fullfilleddemandqty')})    AS ff,
@@ -590,7 +618,7 @@ async function loadVersionAgg(db, gran){
   try{
     const gw = granWhere('capacity_view_sp', gran);
     const pk = periodKeyExpr('capacity_view_sp', gran);
-    const S_CV = src(db,'capacity_view_sp', gw);
+    const S_CV = await src(db,'capacity_view_sp', gw);
     const availExpr = `if(${q('calcavailablebucketcapacity')} > 0,
         ${q('calcavailablebucketcapacity')}, ${q('netavailablecapacity')})`;
     const cap = await chQuery(`SELECT
@@ -632,7 +660,7 @@ async function loadVersionAgg(db, gran){
   try{
     const gw = granWhere('rescapacity', gran);
     const pk = periodKeyExpr('rescapacity', gran);
-    const S_RC = src(db,'rescapacity', gw);
+    const S_RC = await src(db,'rescapacity', gw);
     const rc = await chQuery(`SELECT ${q('res')} AS rs, any(${q('loc')}) AS pl,
         ${pk} AS periodKey,
         sum(${q('calendarcapacity')})     AS norm,
@@ -653,7 +681,7 @@ async function loadVersionAgg(db, gran){
   /* 8.7 экономика отказов: периодные ставки перекрывают безпериодные */
   try{
     const gw = granWhere('demand_cost', gran);
-    const S_DCst = src(db,'demand_cost', gw);
+    const S_DCst = await src(db,'demand_cost', gw);
     const dc = await chQuery(`SELECT
         ${q('item')} AS item, ${q('loc')} AS loc,
         ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
@@ -667,7 +695,7 @@ async function loadVersionAgg(db, gran){
     CHX.loaded.demand_cost = true;
   }catch(e){ out.notes.push('demand_cost: '+e.message) }
   try{
-    const S_TI = src(db,'demand_cost_ti');
+    const S_TI = await src(db,'demand_cost_ti');
     const ti = await chQuery(`SELECT ${q('item')} AS item, ${q('loc')} AS loc,
         ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
         avg(${q('nondelcostrate')}) AS nonDel, avg(${q('latedelivcostrate')}) AS lateRate,
@@ -690,7 +718,7 @@ async function loadVersionAgg(db, gran){
     (out.penalty||[]).forEach(r=>rate.set(key(r), r));       // период перекрывает
     try{
       const gw = granWhere('demand_coverage', gran);
-      const S_DC = src(db,'demand_coverage', gw);
+      const S_DC = await src(db,'demand_coverage', gw);
       const uf = await chQuery(`SELECT ${q('item')} AS item, ${q('loc')} AS loc,
           ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
           sum(${q('unfullfilleddemandqty')}) AS uf,
@@ -718,7 +746,7 @@ const T2 = {movement:'mv', production:'pd', procurement:'pc', stock:'st'};
 
 async function loadMainDetail(db, gran, limitOrders){
     /* заказы: дедуп до order_id, отсечение по марже — детали нужны для топа */
-  const S_MD = src(db,'marking_demand');
+  const S_MD = await src(db,'marking_demand');
 
   /* Набор колонок marking_demand различается между схемами/версиями:
      в части схем нет dmdstream, demand_demandtype, margin_per_hour и т.п.
@@ -780,7 +808,7 @@ async function loadMainDetail(db, gran, limitOrders){
         abs(${colOr('cost_rate_of_operation','0')}) AS r, ${colOr('supplier',"''")} AS vd,
         ${colOr('bom_num',"''")} AS rt, ${colOr('order_operation_id',"''")} AS oid,
         ${colOr('resource_consumption_operation','0')} AS rc
-      FROM ${src(db,'marking_demand', `${q('order_id')} IN (${chunk.join(',')})`)}`);
+      FROM ${await src(db,'marking_demand', `${q('order_id')} IN (${chunk.join(',')})`)}`);
     rows.forEach(r=>{
       const t = T2[String(r.type||'').toLowerCase()];
       if(!t) return;
@@ -807,7 +835,7 @@ CHX.loadOpsForOrder = async function(orderId){
       abs(${q('cost_rate_of_operation')}) AS r, ${q('supplier')} AS vd,
       ${q('bom_num')} AS rt, ${q('order_operation_id')} AS oid,
       ${q('resource_consumption_operation')} AS rc
-    FROM ${src(db,'marking_demand', `${q('order_id')} = ${Number(orderId)}`)}`);
+    FROM ${await src(db,'marking_demand', `${q('order_id')} = ${Number(orderId)}`)}`);
   const out = [];
   rows.forEach(r=>{
     const t = T2[String(r.type||'').toLowerCase()]; if(!t) return;
@@ -1157,7 +1185,10 @@ const VS_METRICS = [
 function vsFlat(v){
   const a = v.agg || {}, t = a.totals || {}, cov = t.cov || {}, op = t.byOp || {};
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
-  const demUnc = num(cov.demUnc) || (num(cov.ff)+num(cov.uf));
+  /* Неограниченный спрос: приоритет — independent_demand (первоисточник),
+     фолбэк — covered+uncovered из demand_coverage. */
+  const dU = t.demandUnc || {};
+  const demUnc = num(dU.demUnc) || num(cov.demUnc) || (num(cov.ff)+num(cov.uf));
   return {
     _v:v, label:v.label, id:v.id, isBase:v.isBase,
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
