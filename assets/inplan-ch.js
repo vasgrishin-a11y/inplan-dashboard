@@ -918,16 +918,66 @@ CHX.openModal = function(){
   drawModal();
 };
 
-/* Текст статуса PG-блока модалки подключения */
+/* Текст статуса PG-блока модалки подключения.
+   Отдельно показываем состояние backend-прокси: ошибка «нет такого адреса»
+   (страница открыта не с server.js) и ошибка Postgres — разные проблемы,
+   и раньше они обе выглядели как невнятное «Not found». */
 function pgStatText(){
   if(!window.PGX) return '';
   const ps = PGX.state;
-  if(ps.lastError) return `<span class="neg">${esc(ps.lastError)}</span>`;
-  if(ps.connected)
+  if(ps.lastError){
+    const hint = ps.stage==='backend' ? `<br><span class="chm-hint" style="max-width:none">${esc(PGX.backendHint())}</span>` : '';
+    return `<span class="neg">${esc(ps.lastError)}</span>${hint}`;
+  }
+  if(ps.connected){
+    const sel = (CHX.cfg.schemas||[]);
+    const plan = typeof PGX.schemaPlan==='function' ? PGX.schemaPlan(sel) : [];
+    const miss = plan.filter(m=>!m.ok);
+    const warn = miss.length
+      ? `<br><span class="neg">Схема не найдена у ${miss.length} из ${plan.length} выбранных версий — укажите её вручную ниже, иначе спрос будет взят из demand_coverage</span>`
+      : '';
     return `<span class="pos">PG подключён · схем с independentdemand: ${ps.schemas.length}${
-      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>`;
+      ps.schemas.length?' ('+esc(ps.schemas.slice(0,5).map(x=>x.schema).join(', '))+(ps.schemas.length>5?', …':'')+')':''}</span>${warn}`;
+  }
+  if(ps.backendOk===false)
+    return `<span class="neg">backend-прокси не найден (${esc(PGX.backendLabel())})</span>` +
+      `<br><span class="chm-hint" style="max-width:none">${esc(PGX.backendHint())}</span>`;
   if(PGX.enabled()) return 'PG задан — подключится при загрузке данных';
   return 'PG не задан — источник: demand_coverage (покрытый + непокрытый)';
+}
+
+/* Соответствие «версия ClickHouse → схема PostgreSQL».
+   Нумерация прогонов в CH и схем в PG совпадает не всегда (бывает выбрана
+   база data_public_4899, а схемы в Postgres — public_13…public_1726), поэтому
+   автоподбор по имени дополнен ручным выбором: он имеет приоритет над любыми
+   догадками и запоминается в автосессии. */
+function pgMapBlock(){
+  if(!window.PGX || !PGX.state.connected) return '';
+  const sel = CHX.cfg.schemas||[];
+  if(!sel.length)
+    return `<div class="chm-note">Выберите схемы ClickHouse ниже — здесь появится их
+      соответствие схемам PostgreSQL (откуда брать <code>independentdemand</code>).</div>`;
+  const plan = PGX.schemaPlan(sel);
+  const opts = PGX.state.schemas||[];
+  return `<div class="chm-sec">Соответствие версий и схем PostgreSQL</div>
+  <div class="chm-note">Неограниченный спрос версии читается из выбранной здесь схемы.
+    «Авто» подбирает по имени (<code>data_public_2</code> → <code>public_2</code>; регистр и
+    префикс <code>data_</code> не важны). Если нумерация ClickHouse и Postgres расходится —
+    выберите схему вручную, выбор сохранится в автосессии.</div>
+  ${plan.map(m=>{
+    const label = CHX.labelFor(m.db);
+    const auto = m.ok?`авто → ${m.schema}`:`авто → нет схемы «${m.schema}»`;
+    return `<div class="chm-row"><label title="${esc(m.db)}">${esc(label)}</label>
+      <select data-pgmap="${esc(m.db)}" style="flex:1">
+        <option value="">${esc(m.manual?'авто (подбор по имени)':auto)}</option>
+        ${opts.map(o=>`<option value="${esc(o.schema)}" ${
+          m.manual&&String(o.schema).toLowerCase()===String(m.schema).toLowerCase()?'selected':''}>${
+          esc(o.schema)}${o.n?' · '+nf(o.n)+' строк':''}</option>`).join('')}
+      </select>
+      <span class="chm-hint">${m.ok
+        ? `<span class="pos">✓ ${esc(m.schema)}${m.manual?' (вручную)':''}</span>`
+        : `<span class="neg">схемы «${esc(m.schema)}» нет — спрос из demand_coverage</span>`}</span></div>`;
+  }).join('')}`;
 }
 
 function drawModal(){
@@ -993,12 +1043,16 @@ function drawModal(){
   <div class="chm-row"><label>Backend</label>
     <input id="pgmBackend" type="text" value="${esc(PGX.cfg.backend)}"
       placeholder="пусто = этот же сервер (npm start)">
-    <span class="chm-hint">URL запущенного server.js — только если дашборд открыт со статического хостинга или file://</span></div>
+    <span class="chm-hint">URL запущенного server.js. Пусто — берётся адрес этой страницы, поэтому
+      открывать дашборд нужно по адресу server.js (http://localhost:8080): со статического хостинга
+      запросы <code>/api/pg/*</code> упираются в чужой 404</span></div>
   <div class="chm-row"><label>Хост / Порт</label>
     <input id="pgmHost" type="text" value="${esc(PGX.cfg.host)}" style="flex:1">
     <input id="pgmPort" type="number" value="${num(PGX.cfg.port)||48235}" style="width:110px;margin-left:8px"></div>
   <div class="chm-row"><label>База</label>
-    <input id="pgmDb" type="text" value="${esc(PGX.cfg.database)}"></div>
+    <input id="pgmDb" type="text" value="${esc(PGX.cfg.database)}" placeholder="pgs_app_data_db">
+    <span class="chm-hint">продуктивная база: <code>pgs_app_data_db</code> — в ней лежат схемы
+      <code>public_N</code> с <code>independentdemand</code></span></div>
   <div class="chm-row"><label>Логин</label>
     <input id="pgmUser" type="text" value="${esc(PGX.cfg.user)}" autocomplete="off"
       placeholder="рекомендуется read-only"></div>
@@ -1010,7 +1064,8 @@ function drawModal(){
     <button class="btn" id="pgmTest">Проверить PG</button>
     ${PGX.session.exists()?`<button class="btn d" id="pgmForget">Забыть PG-сессию</button>`:''}
     <span id="pgmStat" class="chm-stat">${pgStatText()}</span>
-  </div>`:''}
+  </div>
+  ${pgMapBlock()}`:''}
 
   ${st.connected?`
   <div class="chm-sec">Схемы (версии планов)</div>
@@ -1094,13 +1149,27 @@ function drawModal(){
   };
   if(g('pgmTest')) g('pgmTest').onclick = async ()=>{
     pgSync(); PGX.invalidate();
-    g('pgmStat').innerHTML = 'Подключение к PostgreSQL…';
-    try{ await PGX.ensureSchemas(); }
+    g('pgmStat').innerHTML = 'Поиск backend-прокси…';
+    try{
+      /* две стадии с разными причинами отказа: сначала ищем server.js,
+         потом логинимся в Postgres — пользователь видит, где именно встало */
+      await PGX.detectBackend();
+      if(g('pgmStat')) g('pgmStat').innerHTML = PGX.state.backendOk
+        ? 'Backend найден — подключение к PostgreSQL…'
+        : 'Backend не ответил на /api/health — пробуем запрос напрямую…';
+      await PGX.ensureSchemas();
+    }
     catch(e){ /* перерисовка покажет ошибку в pgmStat */ }
     if(st.connected) CHX.session.touch();
     drawModal();
   };
   if(g('pgmForget')) g('pgmForget').onclick = ()=>{ PGX.forgetSession(); drawModal() };
+  /* ручная привязка версии к схеме PG: сразу в cfg и в автосессию */
+  m.querySelectorAll('select[data-pgmap]').forEach(selEl=>selEl.onchange = ()=>{
+    PGX.setSchemaOverride(selEl.dataset.pgmap, selEl.value);
+    PGX.state.lastDataError = null;
+    drawModal();
+  });
   g('chmX').onclick = g('chmClose').onclick = CHX.closeModal;
   g('chmMode').onchange = e=>{ sync(); c.useProxy = (e.target.value==='proxy'); drawModal() };
   g('chmConn').onclick = async ()=>{
@@ -1184,11 +1253,14 @@ function drawModal(){
        const res = await CHX.loadAll(msg=>{ if(prog) prog.textContent = msg });
       CHX.closeModal();
       const stat = document.getElementById('stat');
+      /* В шапке — только короткий итог. Заметки загрузки (недоступная
+         independentdemand, смена periodtype и т.п.) уходят в значок ⚠:
+         длинные красные простыни в шапке больше не печатаем. */
       if(stat) stat.innerHTML =
         `<span class="pos">ClickHouse:</span> ${esc(res.ds.name)}<br>`
         + `${res.ds.orders.length} заказов${res.ds.detailLimited?' (лимит детализации)':''} | `
-        + `${res.ds.ops.length} операций | версий: ${res.versions.length}`
-        + (res.notes.length?`<br><span class="neg">${esc(res.notes.join(' · '))}</span>`:'');
+        + `${res.ds.ops.length} операций | версий: ${res.versions.length}`;
+      if(typeof window.setLoadWarnings==='function') window.setLoadWarnings(res.notes);
     }catch(e){
       if(prog) prog.innerHTML = `<span class="neg">${esc(e.message)}</span>`;
       g('chmLoad').disabled = false;
