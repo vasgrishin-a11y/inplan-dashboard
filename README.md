@@ -31,7 +31,7 @@ npm start        # → http://localhost:8080 (PORT/HOST настраиваютс
 | `GET  /api/health`    | проверка, что backend жив                                         |
 | `GET  /api/pg/defaults` | хост/порт/база PG по умолчанию для формы подключения            |
 | `POST /api/pg/schemas` | схемы, в которых есть таблица `independent_demand`               |
-| `POST /api/pg/unc`    | агрегат неограниченного спроса: `{schema, gran}` → итог и периоды; основной объём `Σ demandqty`, при его полном нуле и заполненном `adjusteddemandqty` — явно помеченный фолбэк |
+| `POST /api/pg/unc`    | агрегат неограниченного спроса: `{schema, gran}` → итог и периоды по `Σ demandqty` |
 
 Логин/пароль PostgreSQL вводятся в модалке подключения (блок «PostgreSQL —
 independent_demand»), уходят в теле каждого запроса и нигде на сервере не
@@ -92,26 +92,21 @@ demand_coverage`, — а выбранная вручную схема имеет
 1. **PostgreSQL** через backend-прокси — схема `public_N` по CH-базе
    `data_public_N`. Таблица `independent_demand` (legacy-алиас: `independentdemand`)
    физически лежит только там (в ClickHouse её нет — дашборд туда и не ходит).
-   Основная колонка — `demandqty`. Если после фильтра `periodtype` и дедупа
-   таблица непустая, но её сумма строго нулевая, backend проверяет
-   `adjusteddemandqty`: положительная сумма используется с явной подписью
-   колонки и предупреждением (обе суммы остаются в диагностике ответа API);
+   Единственная колонка объёма спроса — `demandqty`;
 2. фолбэк между источниками: покрытый + непокрытый
-   (`fullfilleddemandqty + unfullfilleddemandqty`) из `demand_coverage` — только
-   когда обе PG-колонки нулевые или PostgreSQL недоступен. Версия помечается в
+   (`fullfilleddemandqty + unfullfilleddemandqty`) из `demand_coverage` — когда
+   `Σ demandqty` нулевой или PostgreSQL недоступен. Версия помечается в
    статусе загрузки, в «Сравнении версий» и во вкладке «Данные и качество».
 
 Какой бы источник ни сработал, значение лежит в `agg.totals.cov.demUnc`, и все
 разделы читают одно определение; фактический источник фиксируется в
-`agg.totals.uncDetail` («PostgreSQL · public_2» либо «PostgreSQL · public_2 ·
-adjusteddemandqty»).
+`agg.totals.uncDetail` («PostgreSQL · public_2»).
 
 Сообщение вида «нулевой объём при periodtype 4 (строк: 210)» означает, что
 backend и PostgreSQL **доступны**, схема и таблица найдены, но после фильтра и
-дедупликации `Σ demandqty = 0`. Начиная с API 3 backend в этой ситуации сам
-проверяет `adjusteddemandqty`; если она тоже нулевая, предупреждение называет
-фактические схему/таблицу, обе суммы и число строк. Тогда нужно проверять ручное
-соответствие CH-версии схеме PG и сами данные, а не сеть или CORS.
+дедупликации `Σ demandqty = 0`. В этой ситуации нужно проверить выбранную
+гранулярность (periodtype), соответствие CH-версии схеме PG (Schema Map) и
+данные в PostgreSQL.
 
 ## Тесты
 

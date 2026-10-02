@@ -537,10 +537,8 @@ async function loadVersionAgg(db, gran){
 
      Таблица физически лежит в PostgreSQL (продуктивные столбцы: item,
      demandqty, periodid, sys_id, dmdstream, periodtype, demandtype, loc,
-     update_date_time, change_author, unit, date, adjusteddemandqty;
-     основной показатель — Σ demandqty; если в непустой выборке он равен нулю,
-     а Σ adjusteddemandqty положительна, backend берёт скорректированный вход
-     как явно помеченный фолбэк внутри той же PG-таблицы; дедуп по последней
+     update_date_time, change_author, unit;
+     основной показатель — Σ demandqty; дедуп по последней
      версии записи sys_id делается на backend); в ClickHouse её нет и не ищем. Источники:
      1) PostgreSQL через backend-прокси (PGX, assets/inplan-pg.js →
         server.js POST /api/pg/unc): схема PG = CH-базе без префикса data_
@@ -581,19 +579,12 @@ async function loadVersionAgg(db, gran){
       const u = await PGX.uncFor(db, gran);   // backend агрегирует в самой PG
       if(!(num(u.demUnc)>0)){
         const where = (u.schema||'?')+'.'+(u.table||'independent_demand');
-        const adj = u.adjustedDemUnc==null?'':', Σ adjusteddemandqty = '+num(u.adjustedDemUnc);
-        throw new Error('в '+where+' Σ demandqty = '+num(u.primaryDemUnc)+adj+
+        throw new Error('в '+where+' Σ demandqty = '+num(u.demUnc)+
           ' при periodtype '+gran+' (строк после дедупликации: '+(num(u.n)||0)+')');
       }
       const qty = u.qtySource||'demandqty';
-      const detail = 'PostgreSQL · '+u.schema+(qty!=='demandqty'?' · '+qty:'');
+      const detail = 'PostgreSQL · '+u.schema;
       applyUnc(num(u.demUnc), u.periods, detail, qty);
-      if(u.qtyFallback){
-        out.notes.push('independent_demand: в '+u.schema+'.'+(u.table||'independent_demand')+
-          ' Σ '+u.qtyFallback.from+' = '+num(u.primaryDemUnc)+' при periodtype '+gran+
-          ' ('+(num(u.n)||0)+' строк) — использован Σ '+u.qtyFallback.to+
-          ' = '+num(u.demUnc)+' из PostgreSQL');
-      }
     }catch(e){ uncErrs.push('PG: '+e.message); }
   }
   if(!out.totals.uncSrc){
@@ -1050,9 +1041,7 @@ function drawModal(){
   ${window.PGX?`
   <div class="chm-sec">PostgreSQL — independent_demand (неограниченный спрос)</div>
   <div class="chm-note">Неограниченный спрос (Σ <code>demandqty</code>) лежит в Postgres,
-    в схемах <code>public_N</code> ↔ базы ClickHouse <code>data_public_N</code>. Если строки есть,
-    но <code>demandqty</code> целиком нулевой, backend проверяет <code>adjusteddemandqty</code> и
-    использует его только с явной пометкой источника. Браузер не умеет открывать TCP к Postgres,
+    в схемах <code>public_N</code> ↔ базы ClickHouse <code>data_public_N</code>. Браузер не умеет открывать TCP к Postgres,
     поэтому запросы идут через backend-прокси (<code>server.js</code>, как в дашборде opti).
     Не задан — неограниченный спрос считается как покрытый + непокрытый из
     <code>demand_coverage</code> (ClickHouse).</div>
