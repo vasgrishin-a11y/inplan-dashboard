@@ -95,10 +95,27 @@ const TABLES = CHX.TABLES = {
     periodCol:'', ptypeCol:'', periodNumCol:'demand_period',
     label:'Ограниченный спрос и разузлование'
   },
-  demand_coverage:{
+  /* independent_demand — входной (неограниченный) спрос: одна строка на
+     item×loc×dmdstream×demandtype×период. Дедупликация по этому бизнес-ключу,
+     НЕ по sys_id/update_date_time: у ReplacingMergeTree sys_id уникален на
+     версию строки, а update_date_time отсутствует в выгрузках ряда версий
+     (запрос падал с «Unknown identifier», и неограниченный спрос в дашборде
+     не обновлялся). Для бизнес-анализа достаточно колонок
+     item, demandqty, periodid, dmdstream, periodtype, demandtype, loc, date. */
+  independent_demand:{
     role:'demand', mode:'agg',
-    dedupBy:['sys_id'], periodCol:'date', ptypeCol:'periodtype',
-    label:'Входной спрос и покрытие'
+    dedupBy:['item','loc','dmdstream','demandtype','periodid'],
+    periodCol:'date', ptypeCol:'periodtype',
+    qtyCol:'demandqty',
+    label:'Неограниченный (входной) спрос'
+  },
+  /* Совмещённая таблица покрытия: заполняется не во всех схемах.
+     Used as fallback for late/in-time split only. */
+  demand_coverage:{
+    role:'coverage', mode:'agg',
+    dedupBy:['item','loc','dmdstream','demandtype','periodid'],
+    periodCol:'date', ptypeCol:'periodtype',
+    label:'Покрытие спроса (covered/uncovered/late)'
   },
   capacity_view_sp:{
     role:'capacity_fact', mode:'agg',
@@ -177,15 +194,57 @@ CHX.query = chQuery;
 const q = s => '`' + String(s).replace(/`/g,'') + '`';
 const qs = s => "'" + String(s).replace(/'/g,"\\'") + "'";
 
-/* Источник с дедупликацией: is_deleted=0 + последняя версия строки.
-   ReplacingMergeTree без FINAL может отдать дубли, поэтому LIMIT 1 BY. */
-function src(db, tbl, extraWhere){
+/* Колонка «последней версии» таблицы: первая существующая из стандартных
+   имён (кэш колонок заполняется в tableCols; пустой кэш = нет данных —
+   считаем, что колонка есть, как раньше). В части таблиц (например,
+   independent_demand) служебных колонок sys_id/update_date_time нет вовсе —
+   запрос с ORDER BY по несуществующей колонке падал целиком, и агрегаты
+   (включая неограниченный спрос) в дашборд не попадали. */
+const TS_CANDIDATES = ['update_date_time','updatedatetime','sys_id','modified_on','modification_date'];
+function tsColumnFor(tbl, cols){
   const t = TABLES[tbl] || {};
-  const w = ['is_deleted = 0'];
+  const has = c => !cols || cols.has(String(c).toLowerCase());
+  if(t.dedupTsCol && has(t.dedupTsCol)) return t.dedupTsCol;
+  return TS_CANDIDATES.find(has) || '';
+}
+
+/* Кэш колонок таблиц конкретной схемы: чтобы не ссылаться на несуществующие
+   служебные колонки (is_deleted / update_date_time / periodtype). */
+CHX.state.colsByTable = CHX.state.colsByTable || {};
+CHX.tableCols = async function(db, tbl){
+  const key = db+'.'+tbl;
+  if(CHX.state.colsByTable[key]) return CHX.state.colsByTable[key];
+  try{
+    const cl = await chQuery(`SELECT name FROM system.columns
+      WHERE database = ${qs(db)} AND table = ${qs(tbl)}`);
+    const set = new Set(cl.map(r=>String(r.name).toLowerCase()));
+    if(set.size){ CHX.state.colsByTable[key] = set; return set }
+    return null;
+  }catch(e){ return null } // нет прав на system.columns — работаем полным набором, как раньше
+};
+
+/* Источник с дедупликацией: is_deleted=0 + LIMIT 1 BY по бизнес-ключу строки.
+   Дедупликация — по ключу реестра (dedupBy), а не по sys_id: у ReplacingMergeTree
+   sys_id уникален на каждую версию строки и сам по себе дубли не схлопывает.
+   Порядок «последней версии» — по существующей служебной колонке; если её нет —
+   без ORDER BY. */
+async function src(db, tbl, extraWhere){
+  const t = TABLES[tbl] || {};
+  const cols = await CHX.tableCols(db, tbl);
+  const has = c => !cols || cols.has(String(c).toLowerCase());
+  const w = [];
+  if(has('is_deleted')) w.push('is_deleted = 0');
   if(extraWhere) w.push('('+extraWhere+')');
-  let s = `SELECT * FROM ${q(db)}.${q(tbl)} WHERE ${w.join(' AND ')}`;
-  if(t.dedupBy && t.dedupBy.length)
-    s += ` ORDER BY update_date_time DESC LIMIT 1 BY ${t.dedupBy.map(q).join(', ')}`;
+  let s = `SELECT * FROM ${q(db)}.${q(tbl)}`;
+  if(w.length) s += ` WHERE ${w.join(' AND ')}`;
+  if(t.dedupBy && t.dedupBy.length){
+    const dedup = t.dedupBy.filter(has);
+    if(dedup.length){
+      const ts = tsColumnFor(tbl, cols);
+      if(ts) s += ` ORDER BY ${q(ts)} DESC`;
+      s += ` LIMIT 1 BY ${dedup.map(q).join(', ')}`;
+    }
+  }
   return '('+s+')';
 }
 
