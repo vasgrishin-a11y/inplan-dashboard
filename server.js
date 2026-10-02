@@ -38,6 +38,9 @@ const PG_DEFAULTS = {
   database: 'pgs_app_data_db'       // точное имя продуктивной базы (владелец, 2026-10)
 };
 const TABLE_NAME = 'independentdemand';
+/* В некоторых выгрузках имя приходит с разделителем: independent_demand.
+   Оба варианта означают один и тот же входной показатель. */
+const TABLE_CANDIDATES = ['independentdemand', 'independent_demand'];
 const MAX_SCHEMAS = 512;
 /* Подпись сервиса в каждом ответе (в т.ч. в ошибках). По ней фронтенд
    отличает три разные ситуации, которые раньше сливались в «Not found»:
@@ -226,20 +229,23 @@ class TableMissing extends HttpError {
     this.schema = schema;
   }
 }
-async function listColumns(db, schema) {
+async function listColumns(db, schema, tableName = TABLE_NAME) {
   let res;
   try {
     res = await db.query(
-      'SELECT column_name AS c FROM information_schema.columns ' +
-      'WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position',
-      [schema, TABLE_NAME]
+      'SELECT table_name AS t, column_name AS c FROM information_schema.columns ' +
+      'WHERE table_schema=$1 AND lower(table_name) IN ($2, $3) ORDER BY table_name, ordinal_position',
+      [schema, TABLE_CANDIDATES[0], TABLE_CANDIDATES[1]]
     );
   } catch (e) {
     throw friendlyPgError(e, null);
   }
-  const names = (res.rows || []).map(r => String(r.c));
+  const rows = res.rows || [];
+  const actual = rows.length && rows[0].t ? String(rows[0].t) : tableName;
+  const names = rows.filter(r => !r.t || String(r.t).toLowerCase() === actual.toLowerCase())
+    .map(r => String(r.c));
   if (!names.length) throw new TableMissing(schema);
-  return names;
+  return { names, tableName: actual };
 }
 
 /* ── Поиск схемы с independentdemand ─────────────────────────────────────
@@ -251,10 +257,14 @@ async function listColumns(db, schema) {
 async function listSchemaNames(db) {
   const r = await db.query(
     `SELECT table_schema AS s FROM information_schema.tables
-      WHERE lower(table_name) = $1
+      WHERE lower(table_name) IN ($1, $2)
+        AND table_schema NOT IN ('pg_catalog','information_schema')
+      UNION
+      SELECT table_schema AS s FROM information_schema.views
+      WHERE lower(table_name) IN ($1, $2)
         AND table_schema NOT IN ('pg_catalog','information_schema')
       ORDER BY 1`,
-    [TABLE_NAME]
+    TABLE_CANDIDATES
   );
   return (r.rows || []).map(x => String(x.s)).slice(0, MAX_SCHEMAS);
 }
@@ -306,8 +316,8 @@ function bucketKeyExpr(dateExpr, gran) {
   if (gran === 4 || gran === 5 || gran === 6) return `to_char(${d}, 'YYYY-MM')`;
   return `to_char(${d}::date, 'YYYY-MM-DD')`;
 }
-function uncSql(schema, cols, gran) {
-  let src = `SELECT * FROM ${qi(schema)}.${qi(TABLE_NAME)}`;
+function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
+  let src = `SELECT * FROM ${qi(schema)}.${qi(tableName)}`;
   /* is_deleted может быть numeric («0/1»), boolean или текстом — приводим
      к тексту; NULL трактуем как «не удалена» */
   if (cols.del) src += ` WHERE COALESCE(${qi(cols.del)}::text, '0') IN ('0','false','f')`;
@@ -365,14 +375,27 @@ function createApp(deps) {
       catch (e) { throw friendlyPgError(e, conn); }
       try {
         const t = await db.query(
-          `SELECT t.table_schema AS s, st.n_live_tup::bigint AS n
-             FROM information_schema.tables t
+          `SELECT x.s, st.n_live_tup::bigint AS n
+             FROM (
+               SELECT t.table_schema AS s, t.table_name AS t
+                 FROM information_schema.tables t
+                WHERE lower(t.table_name) = $1
+                  AND t.table_schema NOT IN ('pg_catalog','information_schema')
+               UNION
+               SELECT v.table_schema AS s, v.table_name AS t
+                 FROM information_schema.tables v
+                WHERE lower(v.table_name) = $2
+                  AND v.table_schema NOT IN ('pg_catalog','information_schema')
+               UNION
+               SELECT v.table_schema AS s, v.table_name AS t
+                 FROM information_schema.views v
+                WHERE lower(v.table_name) IN ($1, $2)
+                  AND v.table_schema NOT IN ('pg_catalog','information_schema')
+             ) x
              LEFT JOIN pg_stat_user_tables st
-               ON st.schemaname = t.table_schema AND lower(st.relname) = $1
-            WHERE lower(t.table_name) = $1
-              AND t.table_schema NOT IN ('pg_catalog','information_schema')
+               ON st.schemaname = x.s AND lower(st.relname) = $1
             ORDER BY 1`,
-          [TABLE_NAME]
+          TABLE_CANDIDATES
         );
         const schemas = (t.rows || []).slice(0, MAX_SCHEMAS)
           .map(r => ({ schema: String(r.s), n: Number(r.n) || 0 }));
@@ -397,9 +420,13 @@ function createApp(deps) {
            Иначе один раз спрашиваем реальный список схем с independentdemand
            и либо подбираем её (регистр / префикс data_ / номер версии),
            либо отвечаем ошибкой, в которой этот список перечислен. */
-        let schema = wanted, names = null, cols;
+        let schema = wanted, names = null, cols, tableName = null;
+        const discover = async s => {
+          const found = await listColumns(db, s);
+          return { cols: mapColumns(found.names, s), tableName: found.tableName };
+        };
         try {
-          cols = mapColumns(await listColumns(db, schema), schema);
+          ({ cols, tableName } = await discover(schema));
         } catch (e) {
           if (!(e instanceof TableMissing)) throw e;
           names = await listSchemaNames(db);
@@ -409,9 +436,9 @@ function createApp(deps) {
           const alt = matchSchema(names, wanted);
           if (!alt) throw tableMissingError(wanted, names, conn);
           schema = alt;
-          cols = mapColumns(await listColumns(db, schema), schema);
+          ({ cols, tableName } = await discover(schema));
         }
-        const q = uncSql(schema, cols, gran);
+        const q = uncSql(schema, cols, gran, tableName);
         let tot;
         try { tot = await db.query(q.total.sql, q.total.params); }
         catch (e) { throw friendlyPgError(e, conn); }
@@ -424,7 +451,7 @@ function createApp(deps) {
           } catch (e) { throw friendlyPgError(e, conn); }
         }
         res.json({
-          ok: true, schema, requested: wanted, exact, table: TABLE_NAME, gran,
+          ok: true, schema, requested: wanted, exact, table: tableName, gran,
           cols,
           demUnc: Number(row.demUnc) || 0,
           n: Number(row.n) || 0,
