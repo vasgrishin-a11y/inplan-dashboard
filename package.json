@@ -12,6 +12,6 @@
   },
   "license": "UNLICENSED",
   "devDependencies": {
-    "jsdom": "^30.0.1"
+    "jsdom": "^28.1.0"
   }
 }

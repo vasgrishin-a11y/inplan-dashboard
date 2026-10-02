@@ -2250,17 +2250,21 @@ function tabOV(){
 /* ═════════ 9. БЛОК: СПРОС И ПОКРЫТИЕ ═══════════ */
 function tabDM(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
-  const agg=DS.agg||{},T0=agg.totals||{},covT=T0.cov||{};
+  const agg=DS.agg||{},T0=agg.totals||{},covT=T0.cov||{},duT=T0.demandUnc||{};
   const hasDC=!!(((agg.dims||{}).coverage||[]).length);
+  const hasID=!!(((agg.dims||{}).demandUnc||[]).length);
   const fActive=Object.values(F).some(a=>a.length);
-  /* Неограниченный спрос известен только из demand_coverage (агрегат по всей схеме) — под фильтрами не применяем */
-  const useUnc=hasDC&&!fActive;
+  /* Неограниченный спрос известен только из агрегатов по всей схеме
+     (independent_demand — первоисточник; фолбэк — demand_coverage) —
+     под фильтрами не применяем */
+  const useUnc=(hasDC||hasID)&&!fActive;
+  const uncSrc = hasID ? 'independent_demand, вся схема' : 'demand_coverage, вся схема';
 
   const rev=S(D,o=>o.rev),mar=S(D,o=>o.mar),cost=S(D,o=>o.cost),dem=S(D,o=>o.dem),sal=S(D,o=>o.sal),unm=S(D,o=>o.unm);
   const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU'),p1=D.filter(o=>o.pr==1);
   const defOrders=D.filter(o=>o.unm>0),full=D.length-defOrders.length;
   const lm=S(defOrders,lmVal),lostRev=S(defOrders,o=>o.unm*o.price);
-  const demUnc=useUnc?(num(covT.demUnc)||(num(covT.ff)+num(covT.uf))):dem;
+  const demUnc=useUnc?(num(duT.demUnc)||num(covT.demUnc)||(num(covT.ff)+num(covT.uf))):dem;
   const notPlanned=Math.max(0,demUnc-dem),late=useUnc?num(covT.late):0,inTime=Math.max(0,sal-late);
   const sl=dem?sal/dem:0;
 
@@ -2282,7 +2286,7 @@ function tabDM(){
   if(useUnc)wf.push({k:'С опозданием',v:-late,type:'delta'},{k:'В срок',v:inTime,type:'total',c:CH.ok});
 
   const K=[
-    ['Неограниченный спрос',useUnc?nf(demUnc)+' т':'—',useUnc?'demand_coverage, вся схема':(hasDC?'снимите фильтры, чтобы увидеть':'demand_coverage не загружен'),''],
+    ['Неограниченный спрос',useUnc?nf(demUnc)+' т':'—',useUnc?uncSrc:(hasDC||hasID?'снимите фильтры, чтобы увидеть':'нет independent_demand / demand_coverage'),''],
     ['Ограниченный спрос (план)',nf(dem)+' т',D.length+' '+plural(D.length,['заказ','заказа','заказов']),''],
     ['Отгружено',nf(sal)+' т','Service Level '+pc(sl),sl>=.95?'pos':sl>=.8?'mid':'neg'],
     ['Дефицит',nf(unm)+' т',defOrders.length+' '+plural(defOrders.length,['заказ','заказа','заказов'])+' с дефицитом',unm?'neg':'pos'],
@@ -2294,9 +2298,9 @@ function tabDM(){
 
   const html=`
   <div class="dq ${useUnc?'i':'w'}" style="margin-bottom:14px"><span class="tag">Источник</span>
-    <div class="m">${useUnc?'Неограниченный спрос и опоздания — агрегаты <code>demand_coverage</code> по всей схеме; остальное — <code>marking_demand</code> под фильтрами.'
-      :hasDC?'Активны фильтры: неограниченный спрос (<code>demand_coverage</code>) не разрезается по фильтрам, водопад начинается с ограниченного спроса.'
-      :'Таблица <code>demand_coverage</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>.'}</div></div>
+    <div class="m">${useUnc?`Неограниченный спрос — <code>${hasID?'independent_demand':'demand_coverage (covered+uncovered)'}</code> по всей схеме; опоздания — <code>demand_coverage</code>; остальное — <code>marking_demand</code> под фильтрами.`
+      :hasDC||hasID?'Активны фильтры: неограниченный спрос (агрегат по всей схеме) не разрезается по фильтрам, водопад начинается с ограниченного спроса.'
+      :'Таблицы <code>independent_demand</code> и <code>demand_coverage</code> не загружены — водопад построен от ограниченного спроса <code>marking_demand</code>.'}</div></div>
   ${lmRowHtml()}
   <div class="kpis">${K.map(k=>`<div class="kpi"><div class="t">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="grid">
@@ -2400,7 +2404,7 @@ function tabDM(){
     {t:'Рекомендации',i:[
       `Расшивать дефицит по <span class="h">упущенной марже</span>, а не по тоннам — таблица уже отсортирована так.`,
       `По каждому дефицитному заказу смотреть колонки RCA: перегруз производства, блокировка маршрута и сырьё — три разных управленческих решения.`,
-      useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>demand_coverage</code>, чтобы водопад начинался с неограниченного спроса и включал опоздания.`]}]);
+      useUnc?`Сверять покрытие в разрезе periodtype — смешение гранулярностей искажает Service Level.`:`Загрузить <code>independent_demand</code> (или <code>demand_coverage</code>), чтобы водопад начинался с неограниченного спроса и включал опоздания.`]}]);
 }
 /* ═══════════════ 10. БЛОК: ЛОГИСТИКА ═══════════════ */
 function tabLG(){
