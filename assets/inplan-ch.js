@@ -529,17 +529,22 @@ async function loadVersionAgg(db, gran){
            Три группы — разбиение всех строк: A + B + C = orderRows (ловится
            проверкой в «Данных и качестве»). Допуск 1e-9 — тот же, что у
            countIf(unm <= 0.000000001) в marking_demand: Decimal(18,12) даёт
-           шум в двенадцатом знаке, и строгое «= 0» считало бы его данными. */
-        countIf(toFloat64OrZero(${q('fullfilleddemandqty')}) <= 0.000000001) AS fullyUncoveredOrders,
-        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) > 0.000000001 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0.000000001) AS partiallyCoveredOrders,
-        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0.000000001) AS fullyCoveredOrders,
+           шум в двенадцатом знаке, и строгое «= 0» считало бы его данными.
+           Приведение — toFloat64, а НЕ toFloat64OrZero: функции с постфиксом
+           OrZero/OrNull принимают только String, а столбцы demand_coverage —
+           Decimal, и реальный ClickHouse отвечает «Code: 43. DB::Exception:
+           Illegal type Decimal ... should take String argument», роняя весь
+           агрегат вместе с demUnc (фолбэком PG) — ошибка продакшена 2026-10-05. */
+        countIf(toFloat64(${q('fullfilleddemandqty')}) <= 0.000000001) AS fullyUncoveredOrders,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS partiallyCoveredOrders,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS fullyCoveredOrders,
         /* Опоздания в заказах: считаем среди ПОЛНОСТЬЮ покрытых (решение
            владельца 2026-10-05), чтобы водопад сходился:
            План продаж (заказов) = В срок + Отгружено с опозданием.
            lateOrdersAll — все строки с признаком опоздания (для тултипа:
            сколько опозданий скрывается у частично покрытых). */
-        countIf(toFloat64OrZero(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateOrdersAll,
-        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0.000000001 AND toFloat64OrZero(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateFullyCoveredOrders,
+        countIf(toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateOrdersAll,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateFullyCoveredOrders,
         sum(${q('lostrevenue')})   AS lostRev,
         sum(${q('plannedrevenue')}) AS planRev,
         sum(${q('propagated_demand')}) AS prop
