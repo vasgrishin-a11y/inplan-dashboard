@@ -3279,9 +3279,9 @@ function tabDM(){
 
   /* ── бизнес-водопад ── */
   const wf=[];
-  if(useUnc)wf.push({k:'Неограниченный спрос',v:demUnc,type:'total',c:CH.d1},{k:'Не принято в план',v:-notPlanned,type:'delta'});
-  wf.push({k:'Ограниченный спрос',v:dem,type:'total',c:CH.d2},{k:'Дефицит плана',v:-unm,type:'delta'},{k:'Отгружено',v:sal,type:'total',c:CH.d3});
-  if(useUnc)wf.push({k:'С опозданием',v:-late,type:'delta'},{k:'В срок',v:inTime,type:'total',c:CH.ok});
+  if(useUnc)wf.push({k:'Неограниченный спрос',v:demUnc,type:'total',c:CH.d1},{k:'Заказов 100% не покрыто',v:-notPlanned,type:'delta'});
+  wf.push({k:'Заказов в оптимизации',v:dem,type:'total',c:CH.d2},{k:'Дефицит плана',v:-unm,type:'delta'},{k:'План продаж',v:sal,type:'total',c:CH.d3});
+  if(useUnc)wf.push({k:'Фактически отгружено с опозданием',v:-late,type:'delta'},{k:'В срок',v:inTime,type:'total',c:CH.ok});
 
   /* Карточки выстроены в цепочку спроса — так, чтобы читались тождества:
        Неограниченный = Ограниченный + Не принято в план
@@ -3319,10 +3319,10 @@ function tabDM(){
       B.gapTotal?'neg':'pos',
       useUnc?'Неограниченный спрос − отгружено: полная цена отказа, база упущенной маржи при выборе «Непокрытый спрос»'
            :'Неограниченный спрос недоступен — непокрытый объём равен дефициту плана'],
-    ['Отгружено с опозданием',useUnc?nf(late)+' т':'—',
+    ['Фактически отгружено с опозданием',useUnc?nf(late)+' т':'—',
       useUnc?pc(sal?late/sal:0)+' отгруженного':'нужен demand_coverage',
       late&&late/Math.max(sal,1)>.05?'neg':late?'mid':'',
-      'Источник: demandfullfilledlateqty (demand_coverage)'],
+      'Факт поздней отгрузки: demandfullfilledlateqty > 0 в demand_coverage; разрешённое окно latedelivperiods показывается отдельно в RCA'],
     ['Упущенная маржа',bn(lm),lmKpiSub(T)+'<br>упущенная выручка '+bn(lostRev),lm?'neg':'',
       `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`],
     /* Деньги берутся в охвате цепочки: при урезанной детализации это агрегаты
