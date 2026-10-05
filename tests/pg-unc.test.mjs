@@ -234,21 +234,21 @@ test('неограниченный спрос приходит из PostgreSQL �
   assert.equal(w.PGX.pgSchemaFor('public_9'), 'public_9', 'без попадания в справочник — снятое имя как есть');
 });
 
-test('нулевой demandqty в independent_demand не маскируется demand_coverage', async (t) => {
+test('нулевой demandqty в independent_demand возвращает фолбэк demand_coverage', async (t) => {
   const ctx = await loadWithPG(t, 'zero');
   const v1 = ctx.w.CHX.versions.find((v) => v.id === 'data_public_1');
 
-  assert.equal(v1.agg.totals.uncSrc, 'independentdemand');
-  assert.equal(v1.agg.totals.uncDetail, 'PostgreSQL · public_1');
-  assert.equal(v1.agg.totals.cov.demUnc, 0, 'нулевой вход модели остаётся нулём');
-  assert.equal(v1.agg.totals.cov.demUncCov, 1200, 'покрытый+непокрытый сохранены только для сверки');
+  assert.equal(v1.agg.totals.uncSrc, 'demand_coverage');
+  assert.equal(v1.agg.totals.uncDetail, 'ClickHouse · demand_coverage');
+  assert.equal(v1.agg.totals.cov.demUnc, 1200, 'при нулевом PG-входе показан покрытый + непокрытый');
+  assert.equal(v1.agg.totals.cov.demUncCov, 1200, 'исход покрытия сохранён');
   const notes = (v1.agg.notes || []).join(' ');
   assert.match(notes, /Σ demandqty = 0/);
-  assert.match(notes, /фолбэк demand_coverage не применён/);
+  assert.match(notes, /применён фолбэк demand_coverage/);
   assert.ok(!/independent_demand недоступна/.test(notes), 'источник прочитан, это не ошибка доступности: ' + notes);
 
   await ctx.goTab('dm');
-  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 0);
+  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1200);
 });
 
 test('PG недоступен для схем — честный фолбэк на покрытый + непокрытый с причиной в статусе', async (t) => {

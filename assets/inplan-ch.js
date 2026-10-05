@@ -502,6 +502,7 @@ async function loadVersionAgg(db, gran){
      Сама таблица отдаёт и «покрытый + непокрытый» как demUnc — сохраняем его
      отдельным полем demUncCov: это сверка источников для DQ, а НЕ определение
      неограниченного спроса (см. 8.4.1). */
+  let coverageAvailable = false;
   try{
     const gw = granWhere('demand_coverage', gran);
     const pk = periodKeyExpr('demand_coverage', gran);
@@ -518,6 +519,7 @@ async function loadVersionAgg(db, gran){
       FROM ${S_DC}`);
     out.totals.cov = cov[0] || {};
     out.totals.cov.demUncCov = num(out.totals.cov.demUnc);
+    coverageAvailable = true;
     const covP = await chQuery(`SELECT ${pk} AS k,
         sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
         sum(${q('fullfilleddemandqty')}) AS ff,
@@ -530,10 +532,11 @@ async function loadVersionAgg(db, gran){
   }catch(e){ out.notes.push('demand_coverage: '+e.message) }
 
   /* 8.4.1 НЕОГРАНИЧЕННЫЙ СПРОС = Σ demandqty из таблицы independent_demand.
-     Это единое определение всего дашборда (владелец, 2026-10): входной спрос
-     клиентов до ограничений модели читается из independent_demand, а не как
-     «покрытый + непокрытый» из demand_coverage (покрытие — исход прогона,
-     остаётся источником ff/uf/late/lostrevenue).
+     Основной источник — вход модели independent_demand. Если PostgreSQL
+     прочитан, но после фильтра/дедупликации получен нулевой объём, возвращаем
+     прежний фолбэк «покрытый + непокрытый» из demand_coverage, когда покрытие
+     доступно. Это позволяет показать рабочий показатель, не скрывая причину
+     нулевого PG-входа в заметке загрузки.
 
      Таблица физически лежит в PostgreSQL (продуктивные столбцы: item,
      demandqty, periodid, sys_id, dmdstream, periodtype, demandtype, loc,
@@ -545,6 +548,7 @@ async function loadVersionAgg(db, gran){
         server.js POST /api/pg/unc): схема PG = CH-базе без префикса data_
         (data_public_2 ↔ public_2) — основной и единственный путь к таблице;
      2) фолбэк: прежний «покрытый + непокрытый» из demand_coverage,
+        если PG недоступен или вернул ноль при ненулевом покрытии;
         версия помечается uncSrc='demand_coverage'.
 
      Независимо от источника значение складываем в totals.cov.demUnc — все
@@ -574,28 +578,56 @@ async function loadVersionAgg(db, gran){
     }
     CHX.loaded.independentdemand = true;
   };
+  /* Фолбэк намеренно оформлен тем же helper-путём, что и PG-источник:
+     все потребители продолжают читать cov.demUnc, а источник и формула
+     остаются видны в totals. */
+  const applyCoverageFallback = (reason)=>{
+    const cov = out.totals.cov || {};
+    const total = num(cov.demUncCov);
+    cov.demUnc = total;
+    out.totals.cov = cov;
+    out.totals.unc = {
+      demUnc: total,
+      qtySource: 'fullfilleddemandqty + unfullfilleddemandqty'
+    };
+    out.totals.uncSrc = 'demand_coverage';
+    out.totals.uncDetail = 'ClickHouse · demand_coverage';
+    out.totals.uncQty = 'fullfilleddemandqty + unfullfilleddemandqty';
+    if(reason) out.notes.push(reason);
+  };
   const uncErrs = [];
   if(window.PGX && PGX.enabled()){
     try{
       const u = await PGX.uncFor(db, gran);   // backend агрегирует в самой PG
       const totalUnc = num(u.demUnc);
-      if(!(totalUnc>0)){
-        const where = (u.schema||'?')+'.'+(u.table||'independent_demand');
-        out.notes.push('independent_demand: в '+where+' Σ demandqty = '+totalUnc+
-          ' при periodtype '+gran+' (строк после дедупликации по ключевым столбцам: '+
-          (num(u.n)||0)+') — PostgreSQL прочитан, фолбэк demand_coverage не применён');
-      }
       const qty = u.qtySource||'demandqty';
       const detail = 'PostgreSQL · '+u.schema;
-      applyUnc(totalUnc, u.periods, detail, qty);
+      if(totalUnc>0){
+        applyUnc(totalUnc, u.periods, detail, qty);
+      }else{
+        const where = (u.schema||'?')+'.'+(u.table||'independent_demand');
+        const zeroNote = 'independent_demand: в '+where+' Σ demandqty = '+totalUnc+
+          ' при periodtype '+gran+' (строк после дедупликации по ключевым столбцам: '+
+          (num(u.n)||0)+') — PostgreSQL прочитан';
+        /* Пользовательский фолбэк: при ненулевом покрытии показываем рабочий
+           итог из demand_coverage, но не теряем информацию о нулевом PG-входе. */
+        if(coverageAvailable){
+          applyCoverageFallback(zeroNote+'; применён фолбэк demand_coverage (покрытый + непокрытый из demand_coverage)');
+        }else{
+          applyUnc(totalUnc, u.periods, detail, qty);
+          out.notes.push(zeroNote+'; demand_coverage пуст — фолбэк не применён');
+        }
+      }
     }catch(e){ uncErrs.push('PG: '+e.message); }
   }
   if(!out.totals.uncSrc){
-    if(num(((out.totals.cov||{}).demUncCov))>0) out.totals.uncSrc = 'demand_coverage';
-    out.notes.push('independent_demand недоступна ('+
-      (uncErrs.length?uncErrs.join(' · '):'нет подключения к PostgreSQL')+')'+(out.totals.uncSrc
-      ?' — неограниченный спрос показан как покрытый + непокрытый из demand_coverage'
-      :' — неограниченный спрос недоступен'));
+    if(coverageAvailable){
+      applyCoverageFallback('independent_demand недоступна ('+
+        (uncErrs.length?uncErrs.join(' · '):'нет подключения к PostgreSQL')+') — применён фолбэк demand_coverage (покрытый + непокрытый из demand_coverage)');
+    }else{
+      out.notes.push('independent_demand недоступна ('+
+        (uncErrs.length?uncErrs.join(' · '):'нет подключения к PostgreSQL')+') — неограниченный спрос недоступен');
+    }
   }
 
   /* 8.5 мощности: единицы — ЧАСЫ (calendarcapacity/OEE), не тонны.
@@ -1337,9 +1369,10 @@ function vsFlat(v){
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
   const ff = num(cov.ff), uf = num(cov.uf);
   /* Неограниченный спрос: primary — Σ demandqty из independent_demand (загрузчик
-     уже положил его в cov.demUnc). Нулевой PG-итог — тоже валидное прочитанное
-     значение, поэтому фолбэк ff+uf включаем только для старых данных без явного
-     источника. */
+     уже положил его в cov.demUnc). При нулевом PG-итоге загрузчик выбирает
+     demand_coverage заранее, если покрытие доступно; явный ноль здесь остаётся
+     только для старых/неполных данных без рабочего покрытия. Фолбэк ff+uf
+     включаем также для старых данных без явного источника. */
   const hasExplicitUnc = Object.prototype.hasOwnProperty.call(cov,'demUnc') && !!t.uncSrc;
   const demUnc = hasExplicitUnc ? num(cov.demUnc) : (ff+uf);
   const covOk = (ff>0||uf>0);          // demand_coverage по этой версии посчитана
