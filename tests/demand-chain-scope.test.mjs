@@ -61,8 +61,12 @@ const COLS = [
 /* агрегат по ВСЕЙ схеме: 5 заказов, план 5000, отгрузка 4500, дефицит 500 */
 const ORDERS_TOT = { orders: 5, rev: 26900, cost: 15850, mar: 11050, dem: 5000, sal: 4500, unm: 500, lm: 24000, full: 2 };
 /* покрытие: покрытый 4500 + непокрытый 1500 = 6000 */
-/* lostRev подобран так, чтобы денежная сверка сходилась: 175 000 × 41,1% ≈ 72 000 ₽ */
-const COV = { demUnc: 6000, ff: 4500, uf: 1500, inTime: 4300, late: 200, lostRev: 175000, planRev: 30000, prop: 6000 };
+/* lostRev подобран так, чтобы денежная сверка сходилась: 64 400 × 41,1% ≈ 26 456 ₽
+   (2026-10-05: база «Непокрытый спрос» считается по стадии заказа — см.
+   lmTotals() в index.html, — а не единой ставкой дефицита плана; выборка не
+   содержит ни одной строки «100% не покрыто»/вне плана, поэтому 1000 т «не
+   принято в план» оценены запасной портфельной маржой, а не ставкой выборки) */
+const COV = { demUnc: 6000, ff: 4500, uf: 1500, inTime: 4300, late: 200, lostRev: 64400, planRev: 30000, prop: 6000 };
 const COV_P = [{ k: '2026-09', demUnc: 6000, ff: 4500, uf: 1500, late: 200 }];
 /* неограниченный спрос — по умолчанию фолбэк «покрытый + непокрытый» из demand_coverage
    (таблица independent_demand лежит в PostgreSQL, в CH её нет и не ищем) */
@@ -112,6 +116,7 @@ async function waitFor(fn, timeout, label) {
   throw new Error('timeout: ' + (label || 'условие'));
 }
 const toNum = (s) => Number(String(s).replace(/\u00a0|\u202f|\s/g, '').replace(/[^\d.,-]/g, '').replace(',', '.'));
+const close = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps * Math.max(1, Math.abs(a), Math.abs(b));
 
 async function loadCH() {
   const virtualConsole = new VirtualConsole();
@@ -212,12 +217,15 @@ test('урезанная детализация названа явно, а ст
     'лимит детализации назван прямо');
   assert.match(warn.textContent.replace(/\s+/g, ' '), /2 заказов из 5/, 'сколько загружено из скольких');
 
-  /* ставка = упущенная маржа выборки / дефицит выборки = 4800 / 100 = 48 ₽/т,
-     база «дефицит плана» = 500 т схемы → LM = 24 000 ₽ */
+  /* ставка (база «дефицит плана») = упущенная маржа выборки / дефицит выборки
+     = 4800 / 100 = 48 ₽/т, база «дефицит плана» = 500 т схемы → LM = 24 000 ₽.
+     Эта часть не зависит от базы «Непокрытый спрос» и формулой 2026-10-05 не
+     затронута — обе загруженные строки частично покрыты (sal>0, unm>0). */
   const T = JSON.parse(ctx.ev(`(function(){
     const D=fOrders(), B=covBasis(D), T=lmTotals(B,D);
     return JSON.stringify({rate:T.rate, lmPlan:T.lmPlan, lmUnc:T.lmUnc, k:T.k,
-      unmDet:B.unmDet, gapPlan:B.gapPlan, gapTotal:B.gapTotal, partial:B.partial, scope:B.scope});
+      unmDet:B.unmDet, gapPlan:B.gapPlan, gapTotal:B.gapTotal, partial:B.partial, scope:B.scope,
+      partTons:T.partTons, fullTons:T.fullTons, ratePart:T.ratePart, rateFull:T.rateFull});
   })()`));
   assert.equal(T.scope, 'schema', 'цепочка считается в охвате схемы');
   assert.equal(T.partial, true, 'флаг урезанной детализации выставлен');
@@ -225,7 +233,20 @@ test('урезанная детализация названа явно, а ст
   assert.equal(T.gapPlan, 500, 'дефицит плана по схеме');
   assert.equal(T.rate, 48, 'средневзвешенная ставка ₽/т — с выборки (4800 / 100)');
   assert.equal(T.lmPlan, 24000, 'упущенная маржа по дефициту плана = 48 × 500');
-  assert.equal(T.lmUnc, 72000, 'по непокрытому спросу = 48 × 1500');
+  /* База «Непокрытый спрос» (2026-10-05): дефицит делится по стадии заказа, а
+     не по единой ставке выборки. Обе загруженные строки — «частично покрыто»
+     (своя маржа margin_per_unit), поэтому весь дефицит плана (500 т) относится
+     к этой группе по ставке 48 ₽/т (как и раньше). «Не принято в план»
+     (1000 т) — всегда «100% не покрыто»; детализации для него нет ни одной
+     строки (independent_demand в CH не ищем), поэтому ставка — запасная
+     портфельная маржа Σmar/Σsal загруженных заказов (2210/900 ₽/т). */
+  const refRate = 2210 / 900;
+  assert.ok(close(T.partTons, 500), 'вся выборка — частично покрытые заказы: дефицит плана целиком в этой группе');
+  assert.ok(close(T.fullTons, 1000), '100%-группа = только «не принято в план» (нет строк с нулевой отгрузкой в выборке)');
+  assert.ok(close(T.ratePart, 48), 'ставка частично покрытой группы — по собственной марже заказов (4800/100)');
+  assert.ok(close(T.rateFull, refRate), 'ставка 100%-группы — запасная портфельная маржа (нет ставки demand_cost и нет строк группы)');
+  assert.ok(close(T.lmUnc, 500 * 48 + 1000 * refRate),
+    'по непокрытому спросу = частично покрыто (500×48) + 100% не покрыто (1000×запасная маржа)');
 });
 
 test('Service Level считается в том же охвате, что и цепочка', async (t) => {
