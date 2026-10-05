@@ -513,6 +513,10 @@ async function loadVersionAgg(db, gran){
         sum(${q('unfullfilleddemandqty')})  AS uf,
         sum(${q('demandfullfilledintimeqty')}) AS inTime,
         sum(${q('demandfullfilledlateqty')})   AS late,
+        count() AS orderRows,
+        countIf(toFloat64OrZero(${q('fullfilleddemandqty')}) = 0) AS fullyUncoveredOrders,
+        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) > 0 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0) AS partiallyCoveredOrders,
+        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) = 0 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0) AS fullyCoveredOrders,
         sum(${q('lostrevenue')})   AS lostRev,
         sum(${q('plannedrevenue')}) AS planRev,
         sum(${q('propagated_demand')}) AS prop
