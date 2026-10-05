@@ -92,21 +92,26 @@ demand_coverage`, — а выбранная вручную схема имеет
 1. **PostgreSQL** через backend-прокси — схема `public_N` по CH-базе
    `data_public_N`. Таблица `independent_demand` (legacy-алиас: `independentdemand`)
    физически лежит только там (в ClickHouse её нет — дашборд туда и не ходит).
-   Единственная колонка объёма спроса — `demandqty`;
+   Единственная колонка объёма спроса — `demandqty`. Backend читает только
+   ключевые столбцы `item`, `demandqty`, `periodid`, `dmdstream`, `periodtype`,
+   `demandtype`, `loc`, `date`; служебные `sys_id`, `update_date_time`,
+   `change_author`, `unit`, `adjusteddemandqty` в SQL не участвуют;
 2. фолбэк между источниками: покрытый + непокрытый
-   (`fullfilleddemandqty + unfullfilleddemandqty`) из `demand_coverage` — когда
-   `Σ demandqty` нулевой или PostgreSQL недоступен. Версия помечается в
-   статусе загрузки, в «Сравнении версий» и во вкладке «Данные и качество».
+   (`fullfilleddemandqty + unfullfilleddemandqty`) из `demand_coverage` — только
+   когда PostgreSQL/схема/таблица/колонка недоступны. Если PostgreSQL прочитан,
+   но `Σ demandqty = 0`, дашборд показывает именно нулевой вход модели и даёт
+   предупреждение качества данных без подмены на `demand_coverage`.
 
 Какой бы источник ни сработал, значение лежит в `agg.totals.cov.demUnc`, и все
 разделы читают одно определение; фактический источник фиксируется в
 `agg.totals.uncDetail` («PostgreSQL · public_2»).
 
-Сообщение вида «нулевой объём при periodtype 4 (строк: 210)» означает, что
+Сообщение вида «Σ demandqty = 0 при periodtype 4 (строк: 210)» означает, что
 backend и PostgreSQL **доступны**, схема и таблица найдены, но после фильтра и
-дедупликации `Σ demandqty = 0`. В этой ситуации нужно проверить выбранную
-гранулярность (periodtype), соответствие CH-версии схеме PG (Schema Map) и
-данные в PostgreSQL.
+дедупликации по ключевым столбцам `Σ demandqty = 0`. Это не считается
+«недоступностью» источника и не маскируется `demand_coverage`; проверьте
+выбранную гранулярность (periodtype), соответствие CH-версии схеме PG (Schema
+Map) и данные в PostgreSQL.
 
 ## Тесты
 

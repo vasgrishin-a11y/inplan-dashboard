@@ -1,9 +1,8 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    Тесты backend-прокси PostgreSQL (server.js): эндпоинты /api/pg/schemas и
-   /api/pg/unc — SQL агрегата неограниченного спроса собирается по правилам
-   ClickHouse-семантики (is_deleted=0, дедуп по sys_id, фильтр periodtype,
-   ключи периодов как у дашборда), а колонки, которых нет в схеме, аккуратно
-   отключают свои части запроса вместо падения.
+   /api/pg/unc — SQL агрегата неограниченного спроса собирается по бизнес-ключам
+   independent_demand (item/demandqty/periodid/dmdstream/periodtype/demandtype/loc/date),
+   фильтрует periodtype и не зависит от технических колонок sys_id/update_date_time.
 
    DB-слой подменён: createApp({connect}) получает мок с записью вызовов.
 
@@ -37,32 +36,34 @@ const post = (base, p, body) => fetch(base + p, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
 });
 const CONN = { host: 'pg.test', port: 5432, database: 'db', user: 'u', password: 'p', ssl: 'auto' };
-const FULL_COLS = ['sys_id', 'is_deleted', 'update_date_time', 'date', 'periodtype', 'demandqty'];
+const FULL_COLS = ['item', 'demandqty', 'periodid', 'dmdstream', 'periodtype', 'demandtype', 'loc', 'date'];
 /* Реальный список столбцов продуктивной таблицы (pgs_app_data_db) — сообщён владельцем */
 const PROD_COLS = ['item', 'demandqty', 'periodid', 'sys_id', 'dmdstream', 'periodtype',
-  'demandtype', 'loc', 'update_date_time', 'change_author', 'unit'];
+  'demandtype', 'loc', 'update_date_time', 'change_author', 'unit', 'date', 'adjusteddemandqty'];
 
 /* ── Чистые юнит-проверки SQL-сборки ── */
-test('uncSql: продуктивные колонки — дедуп по sys_id, основной объём demandqty', () => {
+test('uncSql: продуктивные колонки — DISTINCT по бизнес-ключу, основной объём demandqty', () => {
   const cols = mapColumns(PROD_COLS, 'public_2');
-  assert.deepEqual(cols, { qty: 'demandqty',
-                           ptype: 'periodtype', date: 'periodid',
-                           sysId: 'sys_id', upd: 'update_date_time', del: null });
+  assert.deepEqual(cols, { item: 'item', qty: 'demandqty', periodid: 'periodid',
+                           dmdstream: 'dmdstream', ptype: 'periodtype',
+                           dtype: 'demandtype', loc: 'loc', date: 'date' });
   const q = uncSql('public_2', cols, 4);
   assert.match(q.total.sql,
-    /DISTINCT ON \("sys_id"\) \* FROM \(SELECT \* FROM "public_2"\."independent_demand" WHERE "periodtype" = \$1\) d ORDER BY "sys_id", "update_date_time" DESC/,
-    'periodtype фильтруется до дедупа, затем выбирается последняя версия строки');
-  assert.ok(!/is_deleted/.test(q.total.sql), 'фильтра удалённых нет — колонки не существует');
+    /SELECT DISTINCT "item", "demandqty", "periodid", "dmdstream", "periodtype", "demandtype", "loc", "date" FROM "public_2"\."independent_demand" WHERE "periodtype" = \$1/,
+    'periodtype фильтруется до дедупликации по ключевым столбцам');
+  assert.ok(!/sys_id|update_date_time|change_author|unit|adjusteddemandqty|is_deleted/.test(q.total.sql),
+    'технические и лишние столбцы не попадают в SQL');
   assert.match(q.total.sql, /sum\("demandqty"\) AS demUnc/);
   assert.equal(q.qty, 'demandqty');
-  assert.match(q.periods.sql, /substr\(s\."periodid"::text, 2, 4\)/, 'periodid распознаётся для помесячного разреза');
+  assert.deepEqual(q.keyCols, ['item','demandqty','periodid','dmdstream','periodtype','demandtype','loc','date']);
+  assert.equal(q.distinct, true);
+  assert.match(q.periods.sql, /s\."date"/, 'date используется для помесячного разреза, periodid остаётся ключом');
 });
 
-test('uncSql: полный набор колонок — periodtype до дедупа, ключи периодов', () => {
+test('uncSql: полный набор ключевых колонок — periodtype до DISTINCT, ключи периодов', () => {
   const cols = mapColumns(FULL_COLS, 'public_2');
   const q = uncSql('public_2', cols, 4);
-  assert.match(q.total.sql, /SELECT DISTINCT ON \("sys_id"\) \* FROM \(SELECT \* FROM "public_2"\."independent_demand" WHERE COALESCE\("is_deleted"::text, '0'\) IN \('0','false','f'\) AND "periodtype" = \$1\) d ORDER BY "sys_id", "update_date_time" DESC/);
-  assert.ok(!/s WHERE "periodtype"/.test(q.total.sql), 'после дедупа повторный фильтр не нужен');
+  assert.match(q.total.sql, /SELECT DISTINCT "item", "demandqty", "periodid", "dmdstream", "periodtype", "demandtype", "loc", "date" FROM "public_2"\."independent_demand" WHERE "periodtype" = \$1/);
   assert.deepEqual(q.total.params, [4]);
   assert.match(q.total.sql, /sum\("demandqty"\) AS demUnc/);
   assert.match(q.periods.sql, /s\."date"/);
@@ -71,7 +72,7 @@ test('uncSql: полный набор колонок — periodtype до дед�
 test('uncSql: минимум колонок — ничего лишнего не добавляем', () => {
   const cols = mapColumns(['demandqty'], 's1');
   const q = uncSql('s1', cols, 4);
-  assert.equal(q.total.sql, sq('SELECT sum("demandqty") AS demUnc, count(*)::bigint AS n FROM (SELECT * FROM "s1"."independent_demand") s'));
+  assert.equal(q.total.sql, sq('SELECT sum("demandqty") AS demUnc, count(*)::bigint AS n FROM (SELECT "demandqty" FROM "s1"."independent_demand") s'));
   assert.deepEqual(q.total.params, []);
   assert.equal(q.periods, null, 'без колонки date/periodid периодный разрез не строится');
 });

@@ -537,9 +537,10 @@ async function loadVersionAgg(db, gran){
 
      Таблица физически лежит в PostgreSQL (продуктивные столбцы: item,
      demandqty, periodid, sys_id, dmdstream, periodtype, demandtype, loc,
-     update_date_time, change_author, unit;
-     основной показатель — Σ demandqty; дедуп по последней
-     версии записи sys_id делается на backend); в ClickHouse её нет и не ищем. Источники:
+     update_date_time, change_author, unit, date, adjusteddemandqty;
+     основной показатель — Σ demandqty; backend использует только бизнес-ключи
+     item/demandqty/periodid/dmdstream/periodtype/demandtype/loc/date и не
+     зависит от sys_id/update_date_time/adjusteddemandqty); в ClickHouse её нет и не ищем. Источники:
      1) PostgreSQL через backend-прокси (PGX, assets/inplan-pg.js →
         server.js POST /api/pg/unc): схема PG = CH-базе без префикса data_
         (data_public_2 ↔ public_2) — основной и единственный путь к таблице;
@@ -577,14 +578,16 @@ async function loadVersionAgg(db, gran){
   if(window.PGX && PGX.enabled()){
     try{
       const u = await PGX.uncFor(db, gran);   // backend агрегирует в самой PG
-      if(!(num(u.demUnc)>0)){
+      const totalUnc = num(u.demUnc);
+      if(!(totalUnc>0)){
         const where = (u.schema||'?')+'.'+(u.table||'independent_demand');
-        throw new Error('в '+where+' Σ demandqty = '+num(u.demUnc)+
-          ' при periodtype '+gran+' (строк после дедупликации: '+(num(u.n)||0)+')');
+        out.notes.push('independent_demand: в '+where+' Σ demandqty = '+totalUnc+
+          ' при periodtype '+gran+' (строк после дедупликации по ключевым столбцам: '+
+          (num(u.n)||0)+') — PostgreSQL прочитан, фолбэк demand_coverage не применён');
       }
       const qty = u.qtySource||'demandqty';
       const detail = 'PostgreSQL · '+u.schema;
-      applyUnc(num(u.demUnc), u.periods, detail, qty);
+      applyUnc(totalUnc, u.periods, detail, qty);
     }catch(e){ uncErrs.push('PG: '+e.message); }
   }
   if(!out.totals.uncSrc){
@@ -1334,9 +1337,11 @@ function vsFlat(v){
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
   const ff = num(cov.ff), uf = num(cov.uf);
   /* Неограниченный спрос: primary — Σ demandqty из independent_demand (загрузчик
-     уже положил его в cov.demUnc); сумма ff+uf — фолбэк для старых сохранённых
-     датасетов, у которых cov.demUnc ещё нет. */
-  const demUnc = num(cov.demUnc)>0 ? num(cov.demUnc) : (ff+uf);
+     уже положил его в cov.demUnc). Нулевой PG-итог — тоже валидное прочитанное
+     значение, поэтому фолбэк ff+uf включаем только для старых данных без явного
+     источника. */
+  const hasExplicitUnc = Object.prototype.hasOwnProperty.call(cov,'demUnc') && !!t.uncSrc;
+  const demUnc = hasExplicitUnc ? num(cov.demUnc) : (ff+uf);
   const covOk = (ff>0||uf>0);          // demand_coverage по этой версии посчитана
   const uncSrc = t.uncSrc || (covOk?'demand_coverage':'');  // откуда взят demUnc
   const uncDetail = t.uncDetail || '';                      // схема PG / CH
@@ -1407,10 +1412,12 @@ CHX.tabVS = function(){
      (Σ demandqty), ограниченный/неудовлетворённый — из demand_coverage; версии
      с фолбэком перечисляем поимённо — это другая база, молчать нельзя. */
   const covFb = rows.filter(r=>!r.covOk);
-  const uncFb = rows.filter(r=>r.demUnc>0 && r.uncSrc!=='independentdemand');
+  const uncFb = rows.filter(r=>r.uncSrc && r.uncSrc!=='independentdemand');
   /* откуда реально прочитан входной спрос каждой версии (PostgreSQL-схема или
-     таблица в ClickHouse) — удобно для сверки, иначе смешение схем незаметно */
-  const uncDet = uq(rows.filter(r=>r.demUnc>0 && r.uncSrc==='independentdemand')
+     таблица в ClickHouse) — удобно для сверки, иначе смешение схем незаметно;
+     показываем и нулевой demandqty, потому что это валидный ответ PG, а не
+     отсутствие источника. */
+  const uncDet = uq(rows.filter(r=>r.uncSrc==='independentdemand')
     .map(r=>r.label+' ← '+r.uncDetail).filter(s=>!/ ← $/.test(s)),x=>x);
   const covNote = [
     `Неограниченный спрос — <code>independent_demand</code> (Σ <code>demandqty</code>,
