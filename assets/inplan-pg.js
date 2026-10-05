@@ -348,6 +348,7 @@ PGX.uncFor = async function(db, gran){
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:Number(p.demUnc)||0})),
            schema:r.schema||schema, table:r.table||'independent_demand',
            qtySource:r.qtySource||((r.cols||{}).qty)||'demandqty',
+           keyCols:Array.isArray(r.keyCols)?r.keyCols:[], distinct:!!r.distinct,
            diagnostics:r.diagnostics||null };
 };
 

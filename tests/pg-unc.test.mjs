@@ -124,7 +124,7 @@ async function boot(t) {
 
 /* pgMode 'ok' — backend отвечает агрегатами; 'lost' — backend жив, но таблицы
    independent_demand нет ни в одной схеме (ответ 400 «не найдена»);
-   'zero' — demandqty равен 0. */
+   'zero' — demandqty равен 0, но PG-источник считается прочитанным. */
 async function loadWithPG(t, pgMode) {
   const { w, d } = await boot(t);
   w.fetch = async (url, opts) => {
@@ -143,7 +143,7 @@ async function loadWithPG(t, pgMode) {
         const payload = pgMode === 'zero'
           ? { ...rec, demUnc: 0 }
           : rec;
-        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date', sysId: 'sys_id', upd: 'update_date_time', del: null }, ...payload }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, schema: body.schema, table: 'independent_demand', gran: body.gran, cols: { item: 'item', qty: 'demandqty', periodid: 'periodid', dmdstream: 'dmdstream', ptype: 'periodtype', dtype: 'demandtype', loc: 'loc', date: 'date' }, keyCols: ['item','demandqty','periodid','dmdstream','periodtype','demandtype','loc','date'], distinct: true, ...payload }) };
       }
       return { ok: false, status: 404, json: async () => ({ error: 'Not found' }) };
     }
@@ -234,18 +234,21 @@ test('неограниченный спрос приходит из PostgreSQL �
   assert.equal(w.PGX.pgSchemaFor('public_9'), 'public_9', 'без попадания в справочник — снятое имя как есть');
 });
 
-test('нулевой demandqty в independent_demand переходит в demand_coverage с понятной причиной', async (t) => {
+test('нулевой demandqty в independent_demand не маскируется demand_coverage', async (t) => {
   const ctx = await loadWithPG(t, 'zero');
   const v1 = ctx.w.CHX.versions.find((v) => v.id === 'data_public_1');
 
-  assert.equal(v1.agg.totals.uncSrc, 'demand_coverage');
-  assert.equal(v1.agg.totals.cov.demUnc, 1200);
+  assert.equal(v1.agg.totals.uncSrc, 'independentdemand');
+  assert.equal(v1.agg.totals.uncDetail, 'PostgreSQL · public_1');
+  assert.equal(v1.agg.totals.cov.demUnc, 0, 'нулевой вход модели остаётся нулём');
+  assert.equal(v1.agg.totals.cov.demUncCov, 1200, 'покрытый+непокрытый сохранены только для сверки');
   const notes = (v1.agg.notes || []).join(' ');
   assert.match(notes, /Σ demandqty = 0/);
-  assert.match(notes, /demand_coverage/);
+  assert.match(notes, /фолбэк demand_coverage не применён/);
+  assert.ok(!/independent_demand недоступна/.test(notes), 'источник прочитан, это не ошибка доступности: ' + notes);
 
   await ctx.goTab('dm');
-  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1200);
+  assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 0);
 });
 
 test('PG недоступен для схем — честный фолбэк на покрытый + непокрытый с причиной в статусе', async (t) => {

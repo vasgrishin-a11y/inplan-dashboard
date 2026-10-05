@@ -49,7 +49,7 @@ const MAX_SCHEMAS = 512;
      • ответил наш, но без нужного эндпоинта  → backend устарел, нужен npm start свежей версии;
      • ответил наш и с эндпоинтом             → настоящая ошибка Postgres. */
 const SERVICE = 'inplan-dashboard';
-const API_LEVEL = 4;
+const API_LEVEL = 5;
 const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/unc'];
 
 class HttpError extends Error {
@@ -105,22 +105,23 @@ function normalizeGran(v) {
 /* ── Мэппинг столбцов independent_demand ─────────────────────────────────
    Продуктивная база (pgs_app_data_db), реальные столбцы:
      item, demandqty, periodid, sys_id, dmdstream, periodtype, demandtype,
-     loc, update_date_time, change_author, unit.
-   • sys_id и update_date_time ЕСТЬ → запрос включает дедуп строк: последняя
-     версия записи (DISTINCT ON (sys_id) … ORDER BY update_date_time DESC NULLS LAST);
-   • is_deleted НЕТ → фильтра удалённых нет;
-   • единственный канонический показатель — Σ demandqty;
-   • колонка даты/периода — date или periodid (формат 4YYYYMMDD, e.g. 420260401).
-   Маппинг при этом оставлен толерантным: если в какой-то схеме sys_id или
-   update_date_time отсутствуют, запрос аккуратно собирается без них, а
-   схема с is_deleted получит и фильтр удалённых (COALESCE-к-тексту). */
+     loc, update_date_time, change_author, unit, date, adjusteddemandqty.
+
+   По уточнению владельца для расчёта нужны только бизнес-ключи строки:
+     item, demandqty, periodid, dmdstream, periodtype, demandtype, loc, date.
+   Технические/служебные поля sys_id, update_date_time, change_author, unit и
+   adjusteddemandqty в SQL больше не используются. Это убирает зависимость от
+   схемной «истории» записей: backend берёт DISTINCT по доступным ключевым
+   столбцам и суммирует только demandqty. */
 const COL_CANDIDATES = {
+  item:        ['item'],
   qty:         ['demandqty', 'demand_qty'],
+  periodid:    ['periodid', 'period_id'],
+  dmdstream:   ['dmdstream', 'dmd_stream'],
   ptype:       ['periodtype', 'period_type'],
-  date:        ['date', 'period_date', 'periodid', 'period_id'],
-  sysId:       ['sys_id'],
-  upd:         ['update_date_time', 'update_datetime', 'updated_at'],
-  del:         ['is_deleted']
+  dtype:       ['demandtype', 'demand_type'],
+  loc:         ['loc', 'location'],
+  date:        ['date', 'period_date']
 };
 function colIndex(columnNames) {
   const lower = new Map();
@@ -306,15 +307,16 @@ function tableMissingError(wanted, names, conn) {
 }
 
 /* ── SQL агрегата неограниченного спроса ─────────────────────────────────
-   Семантика повторяет ClickHouse-выгрузку дашборда (src() в inplan-ch.js):
-   WHERE periodtype + is_deleted = 0, затем последняя строка на sys_id
-   (LIMIT 1 BY → DISTINCT ON … ORDER BY update_date_time DESC NULLS LAST),
-   затем сумма demandqty. Фильтр periodtype принципиально стоит ДО дедупа:
-   один sys_id может встречаться в нескольких гранулярностях, и более свежая
-   строка другого periodtype не должна вытеснить строку выбранного периода.
-   Ключи периодов совпадают с расчётом ClickHouse: неделя — дата понедельника,
-   месяц/квартал/год — «YYYY-MM», день — дата. Поддерживаются столбцы date
-   и целочисленный periodid (4YYYYMMDD, e.g. 420260401). */
+   Семантика independent_demand теперь привязана только к бизнес-ключу строки:
+   item + demandqty + periodid + dmdstream + periodtype + demandtype + loc + date
+   (берём те колонки, которые реально есть в схеме). Технические sys_id,
+   update_date_time, change_author, unit и adjusteddemandqty не участвуют ни в
+   фильтрах, ни в дедупликации, ни в выборе источника объёма.
+
+   Фильтр periodtype применяется до DISTINCT. Ключи периодов совпадают с
+   расчётом ClickHouse: неделя — дата понедельника, месяц/квартал/год —
+   «YYYY-MM», день — дата. Поддерживаются столбцы date и целочисленный periodid
+   (4YYYYMMDD, e.g. 420260401). */
 function bucketKeyExpr(dateExpr, gran) {
   return `CASE
     WHEN ${dateExpr}::text ~ '^[0-9]{9}$' AND ${gran} IN (4, 5, 6)
@@ -330,36 +332,49 @@ function bucketKeyExpr(dateExpr, gran) {
     ELSE to_char(${dateExpr}::timestamp::date, 'YYYY-MM-DD')
   END`;
 }
+function uniq(arr) {
+  const out = [];
+  for (const v of arr || []) {
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+function independentDemandKeyCols(cols) {
+  return uniq([
+    cols.item, cols.qty, cols.periodid, cols.dmdstream,
+    cols.ptype, cols.dtype, cols.loc, cols.date
+  ]);
+}
 function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
   const qty = cols.qty;
   if (!qty) throw new HttpError(400, `Схема «${schema}»: не выбрана колонка объёма спроса.`);
   const filters = [];
   const params = [];
-  /* is_deleted может быть numeric («0/1»), boolean или текстом — приводим
-     к тексту; NULL трактуем как «не удалена» */
-  if (cols.del) filters.push(`COALESCE(${qi(cols.del)}::text, '0') IN ('0','false','f')`);
   if (cols.ptype) {
     params.push(gran);
     filters.push(`${qi(cols.ptype)} = $${params.length}`);
   }
-  let src = `SELECT * FROM ${qi(schema)}.${qi(tableName)}`;
+
+  const keyCols = independentDemandKeyCols(cols);
+  const identityCols = uniq([cols.item, cols.periodid, cols.dmdstream, cols.dtype, cols.loc, cols.date]);
+  const selectCols = keyCols.length ? keyCols : [qty];
+  const distinct = identityCols.length > 0;
+  let src = `SELECT ${distinct ? 'DISTINCT ' : ''}${selectCols.map(qi).join(', ')} FROM ${qi(schema)}.${qi(tableName)}`;
   if (filters.length) src += ` WHERE ${filters.join(' AND ')}`;
-  if (cols.sysId) {
-    src = `SELECT DISTINCT ON (${qi(cols.sysId)}) * FROM (${src}) d ORDER BY ${qi(cols.sysId)}` +
-          (cols.upd ? `, ${qi(cols.upd)} DESC NULLS LAST` : '');
-  }
+
   const total = {
     sql: `SELECT sum(${qi(qty)}) AS demUnc, count(*)::bigint AS n FROM (${src}) s`,
     params
   };
-  const periods = cols.date
+  const periodCol = cols.date || cols.periodid;
+  const periods = periodCol
     ? {
-        sql: `SELECT ${bucketKeyExpr('s.' + qi(cols.date), gran)} AS k, sum(${qi(qty)}) AS demUnc ` +
+        sql: `SELECT ${bucketKeyExpr('s.' + qi(periodCol), gran)} AS k, sum(${qi(qty)}) AS demUnc ` +
              `FROM (${src}) s GROUP BY k ORDER BY k`,
         params
       }
     : null;
-  return { total, periods, qty };
+  return { total, periods, qty, keyCols, distinct };
 }
 
 /* ── Приложение ── */
@@ -477,10 +492,10 @@ function createApp(deps) {
         }
         res.json({
           ok: true, schema, requested: wanted, exact, table: tableName, gran,
-          cols, qtySource: cols.qty,
+          cols, keyCols: q.keyCols, distinct: q.distinct, qtySource: cols.qty,
           demUnc, n,
           diagnostics: {
-            demandqty: { column: cols.qty, demUnc, n }
+            demandqty: { column: cols.qty, demUnc, n, keyCols: q.keyCols, distinct: q.distinct }
           },
           periods,
           service: SERVICE, api: API_LEVEL
@@ -525,7 +540,7 @@ if (require.main === module) {
 module.exports = {
   createApp, defaultConnect,
   normalizeConn, normalizeSchema, normalizeGran,
-  mapColumns, COL_CANDIDATES, uncSql, bucketKeyExpr,
+  mapColumns, COL_CANDIDATES, uncSql, bucketKeyExpr, independentDemandKeyCols,
   schemaCandidates, matchSchema,
   qi, friendlyPgError, HttpError, PG_DEFAULTS, TABLE_NAME,
   SERVICE, API_LEVEL, ENDPOINTS

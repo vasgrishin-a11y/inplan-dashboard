@@ -205,7 +205,7 @@ test('когда вход (independent_demand) согласован с исхо�
     'подтверждение, а не предупреждение');
 });
 
-test('без independent_demand — честный фолбэк на покрытый + непокрытый с пометкой в статусе загрузки', async (t) => {
+test('нулевой independent_demand — не маскируем demand_coverage, а показываем нулевой вход', async (t) => {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', () => {});
   const dom = new JSDOM(fs.readFileSync(HTML, 'utf8'), {
@@ -244,16 +244,20 @@ test('без independent_demand — честный фолбэк на покры�
   d.getElementById('chmLoad').click();
   await waitFor(() => w.CHX.versions.length === 2, 20000, 'версии загружены');
 
-  /* загрузчик зафиксировал фолбэк: заметка и источник — demand_coverage */
+  /* загрузчик зафиксировал прочитанный PG-источник: заметка есть, но фолбэка нет */
   const notes = w.CHX.versions.map((v) => (v.agg.notes || []).join(' ')).join(' ');
-  assert.match(notes, /independent_demand/, 'причина фолбэка зафиксирована в заметках загрузки');
-  assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'demand_coverage',
-    'источник неограниченного спроса помечен как demand_coverage');
+  assert.match(notes, /Σ demandqty = 0/, 'нулевой вход зафиксирован в заметках загрузки');
+  assert.match(notes, /фолбэк demand_coverage не применён/, 'подмена источника не скрывает нулевой demandqty');
+  assert.ok(!/independent_demand недоступна/.test(notes), 'нулевой PG-ответ не называется недоступностью');
+  assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'independentdemand',
+    'источник неограниченного спроса остаётся independent_demand');
+  assert.equal(w.CHX.versions[0].agg.totals.cov.demUncCov, 1200,
+    'покрытый+непокрытый сохранены отдельно для сверки');
 
   w.go('dm');
   await settle(250);
   const unlim = [...d.querySelectorAll('#main .kpi')]
     .find((k) => ((k.querySelector('.t') || {}).textContent || '').trim() === 'Неограниченный спрос');
-  assert.equal(toNum(unlim.querySelector('.v').textContent), 1200,
-    'карточка показывает покрытый 950 + непокрытый 250 — старое поведение сохранено');
+  assert.equal(toNum(unlim.querySelector('.v').textContent), 0,
+    'карточка показывает прочитанный нулевой вход, а не покрытый+непокрытый');
 });

@@ -136,7 +136,8 @@ async function waitFor(fn, timeout, label) {
 /** Ответ backend-прокси для PG-схемы: одно и то же входное значение на схему. */
 function pgUncPayload(schema) {
   return { ok: true, schema, table: 'independent_demand', gran: 4,
-           cols: { qty: 'demandqty', ptype: 'periodtype', date: 'date', sysId: null, upd: null, del: null },
+           cols: { item: 'item', qty: 'demandqty', periodid: 'periodid', dmdstream: 'dmdstream', ptype: 'periodtype', dtype: 'demandtype', loc: 'loc', date: 'date' },
+           keyCols: ['item','demandqty','periodid','dmdstream','periodtype','demandtype','loc','date'], distinct: true,
            ...UNC, periods: UNC_P };
 }
 

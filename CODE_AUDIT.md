@@ -1405,3 +1405,31 @@ ClickHouse выбраны `Data_public_4899` и `Data_public_4941`, а в
 - дедупликация строк использует `ORDER BY sys_id, update_date_time DESC NULLS LAST` для защиты от всплытия `NULL`-значений в дате обновления;
 - backend и API очищены от полей `adjustedDemUnc`, `adjustedN`, `qtyFallback`.
 
+
+---
+
+## 18. Приложение (2026-10-05): ключевые колонки independent_demand и нулевой demandqty
+
+По уточнению владельца реальная таблица `independent_demand` может содержать
+служебные поля `sys_id`, `update_date_time`, `change_author`, `unit` и
+`adjusteddemandqty`, но расчёт неограниченного спроса должен опираться только на
+ключевые бизнес-колонки:
+
+`item`, `demandqty`, `periodid`, `dmdstream`, `periodtype`, `demandtype`, `loc`,
+`date`.
+
+Изменения:
+- backend `/api/pg/unc` больше не строит дедупликацию по `sys_id` и не сортирует
+  по `update_date_time`; эти поля, а также `change_author`, `unit`,
+  `adjusteddemandqty`, `is_deleted`, не попадают в SQL;
+- источник для суммы остаётся единственным: `Σ demandqty`; строки дедуплицируются
+  через `SELECT DISTINCT` по доступным ключевым столбцам из списка выше;
+- `periodtype` фильтруется до `DISTINCT`, периодный разрез строится по `date`,
+  а при её отсутствии — по `periodid`;
+- нулевой ответ PostgreSQL (`Σ demandqty = 0`, даже при ненулевом числе строк)
+  больше не считается недоступностью `independent_demand` и не маскируется
+  фолбэком `demand_coverage`. Дашборд показывает нулевой вход модели и добавляет
+  предупреждение качества данных: PostgreSQL прочитан, фолбэк не применён;
+- фолбэк `fullfilleddemandqty + unfullfilleddemandqty` из `demand_coverage`
+  оставлен только для настоящих ошибок доступа/схемы/таблицы/колонки или для
+  старых сохранённых датасетов без явного источника.
