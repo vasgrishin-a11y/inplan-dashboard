@@ -327,6 +327,25 @@ PGX.problem = function(){
     hint: backend?PGX.backendHint():''
   };
 };
+/* Числа в ответе обычно уже JSON-number: server.js нормализует PG numeric.
+   Но совместимый/старый прокси может вернуть numeric строкой, в том числе с
+   десятичной запятой. Не превращаем такое значение в ноль на границе API. */
+function apiNumber(value){
+  if(typeof value === 'number') return Number.isFinite(value)?value:0;
+  if(value===undefined || value===null) return 0;
+  let s=String(value).trim().replace(/[\s\u00a0\u202f]/g,'');
+  if(!s) return 0;
+  const comma=s.lastIndexOf(','), dot=s.lastIndexOf('.');
+  if(comma>=0 && dot>=0){
+    if(comma>dot) s=s.replace(/\./g,'').replace(',','.');
+    else s=s.replace(/,/g,'');
+  }else if(comma>=0){
+    const p=s.split(',');
+    s=p.length===2 && p[1].length<=2 ? p[0]+'.'+p[1] : s.replace(/,/g,'');
+  }
+  const n=Number(s);
+  return Number.isFinite(n)?n:0;
+}
 /* Агрегат неограниченного спроса версии: {demUnc, n, periods:[{k,demUnc}], schema}.
    Бросает ошибку — вызывающий (loadVersionAgg) перейдёт к следующему источнику. */
 PGX.uncFor = async function(db, gran){
@@ -344,8 +363,8 @@ PGX.uncFor = async function(db, gran){
     throw e;
   }
   PGX.state.lastDataError = null;
-  return { demUnc:Number(r.demUnc)||0, n:Number(r.n)||0,
-           periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:Number(p.demUnc)||0})),
+  return { demUnc:apiNumber(r.demUnc), n:Math.max(0,Math.trunc(apiNumber(r.n))),
+           periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:apiNumber(p.demUnc)})),
            schema:r.schema||schema, table:r.table||'independent_demand',
            qtySource:r.qtySource||((r.cols||{}).qty)||'demandqty',
            keyCols:Array.isArray(r.keyCols)?r.keyCols:[], distinct:!!r.distinct,
