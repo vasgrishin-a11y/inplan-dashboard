@@ -471,7 +471,14 @@ async function loadVersionAgg(db, gran){
       sum(toFloat64(o_rev)) AS rev, sum(toFloat64(o_cost)) AS cost, sum(toFloat64(o_mar)) AS mar,
       sum(toFloat64(o_dem)) AS dem, sum(toFloat64(o_sal)) AS sal, sum(toFloat64(o_unm)) AS unm,
       sum(toFloat64(o_unm)*toFloat64(o_mpt)) AS lm,
-      countIf(toFloat64(o_unm) <= 0.000000001) AS full
+      countIf(toFloat64(o_unm) <= 0.000000001) AS full,
+      /* Классификация заказов плана по marking_demand — фолбэк для водопада
+         по заказам, когда demand_coverage недоступна (или под фильтрами):
+         ff ≈ sal (покрытый = отгруженный), uf ≈ unm. Те же три группы, что
+         у countIf из demand_coverage, поэтому обе схемы счёта сопоставимы. */
+      countIf(toFloat64(o_sal) <= 0.000000001) AS zeroSalOrders,
+      countIf(toFloat64(o_sal) > 0.000000001 AND toFloat64(o_unm) > 0.000000001) AS partCoveredOrders,
+      countIf(toFloat64(o_sal) > 0.000000001 AND toFloat64(o_unm) <= 0.000000001) AS fullCoveredOrders
     FROM ${ordSub}`);
   Object.assign(out.totals, tot[0]||{});
 
@@ -514,9 +521,30 @@ async function loadVersionAgg(db, gran){
         sum(${q('demandfullfilledintimeqty')}) AS inTime,
         sum(${q('demandfullfilledlateqty')})   AS late,
         count() AS orderRows,
-        countIf(toFloat64OrZero(${q('fullfilleddemandqty')}) = 0) AS fullyUncoveredOrders,
-        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) > 0 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0) AS partiallyCoveredOrders,
-        countIf(toFloat64OrZero(${q('unfullfilleddemandqty')}) = 0 AND toFloat64OrZero(${q('fullfilleddemandqty')}) > 0) AS fullyCoveredOrders,
+        /* Классификация заказов по demand_coverage (задача владельца 2026-10-05):
+           всего строк = все заказы неограниченного спроса;
+           100% не покрыто — fullfilleddemandqty = 0;
+           частично покрыто — unfullfilleddemandqty > 0 И fullfilleddemandqty > 0;
+           полностью покрыто — unfullfilleddemandqty = 0 И fullfilleddemandqty > 0.
+           Три группы — разбиение всех строк: A + B + C = orderRows (ловится
+           проверкой в «Данных и качестве»). Допуск 1e-9 — тот же, что у
+           countIf(unm <= 0.000000001) в marking_demand: Decimal(18,12) даёт
+           шум в двенадцатом знаке, и строгое «= 0» считало бы его данными.
+           Приведение — toFloat64, а НЕ toFloat64OrZero: функции с постфиксом
+           OrZero/OrNull принимают только String, а столбцы demand_coverage —
+           Decimal, и реальный ClickHouse отвечает «Code: 43. DB::Exception:
+           Illegal type Decimal ... should take String argument», роняя весь
+           агрегат вместе с demUnc (фолбэком PG) — ошибка продакшена 2026-10-05. */
+        countIf(toFloat64(${q('fullfilleddemandqty')}) <= 0.000000001) AS fullyUncoveredOrders,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS partiallyCoveredOrders,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS fullyCoveredOrders,
+        /* Опоздания в заказах: считаем среди ПОЛНОСТЬЮ покрытых (решение
+           владельца 2026-10-05), чтобы водопад сходился:
+           План продаж (заказов) = В срок + Отгружено с опозданием.
+           lateOrdersAll — все строки с признаком опоздания (для тултипа:
+           сколько опозданий скрывается у частично покрытых). */
+        countIf(toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateOrdersAll,
+        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateFullyCoveredOrders,
         sum(${q('lostrevenue')})   AS lostRev,
         sum(${q('plannedrevenue')}) AS planRev,
         sum(${q('propagated_demand')}) AS prop
@@ -1337,6 +1365,13 @@ const VS_METRICS = [
   ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v),'demand_coverage'],
   ['sl','Service Level',1,pc,'marking_demand'],
   ['late','Отгружено с опозданием, т',-1,v=>nf(v),'demand_coverage'],
+  /* Заказы — по demand_coverage (задача владельца 2026-10-05): всего строк =
+     все заказы неограниченного спроса; 100% не покрыто — fullfilleddemandqty = 0.
+     Показываем только при наличии счётчиков (старые снапшоты без них выведут 0 —
+     поле помечено источником demand_coverage, пустышки не будет). */
+  ['ordTotal','Заказов (неогр. спрос)',0,v=>nf(v),'demand_coverage'],
+  ['ordFullUnc','Заказов 100% не покрыто',-1,v=>nf(v),'demand_coverage'],
+  ['ordFull','Заказов полностью покрыто',1,v=>nf(v),'demand_coverage'],
   ['lm','Упущенная маржа (база: маржа/т заказа)',-1,bn,'marking_demand'],
   ['penNonDel','Штраф за непоставку',-1,bn,'demand_cost × demand_coverage'],
   ['penLate','Штраф за опоздание',-1,bn,'demand_cost × demand_coverage'],
@@ -1390,6 +1425,13 @@ function vsFlat(v){
     /* Service Level остаётся «отгружено / принято в план» по marking_demand:
        на базе покрытия он выродился бы в ff/(ff+uf) и дублировал бы строки спроса. */
     sl: demPlan?sal/demPlan:0, late: num(cov.late),
+    /* Счёт заказов по demand_coverage (классификация 2026-10-05) —
+       null, когда счётчиков нет (старые снапшоты): матрица покажет «—»,
+       а не вводящий в заблуждение ноль. */
+    ordTotal: num(cov.orderRows)>0 ? num(cov.orderRows) : null,
+    ordFullUnc: num(cov.orderRows)>0 ? num(cov.fullyUncoveredOrders) : null,
+    ordPart: num(cov.orderRows)>0 ? num(cov.partiallyCoveredOrders) : null,
+    ordFull: num(cov.orderRows)>0 ? num(cov.fullyCoveredOrders) : null,
     lm: num(t.lm), penNonDel: num(t.penaltyNonDel), penLate: num(t.penaltyLate),
     pd:(op.production||{}).c||0, mv:(op.movement||{}).c||0,
     pcst:(op.procurement||{}).c||0, st:(op.stock||{}).c||0,
@@ -1547,22 +1589,24 @@ CHX.tabVS = function(){
         }
         rows.forEach(r=>{
           rec['v_'+r.id] = r[k];
-          rec['d_'+r.id] = r[k] - base[k];
+          rec['d_'+r.id] = (r[k]==null||base[k]==null)?null:r[k] - base[k];
         });
-        const vals = rows.map(r=>r[k]);
-        rec.spread = Math.max(...vals) - Math.min(...vals);
+        /* null (нет счётчиков заказов у старых снапшотов) не участвует в разбросе */
+        const vals = rows.map(r=>r[k]).filter(v=>v!=null);
+        rec.spread = vals.length ? Math.max(...vals) - Math.min(...vals) : null;
         return rec;
       });
       const cols = [
         {k:'n', t:'Показатель', left:1, flt:1,
          f:(v,r)=>`${esc(v)}${r._src?` <span class="tag" style="margin-left:6px">${esc(r._src)}</span>`:''}`},
-        {k:'base', t:base.label+' (база)', num:1, f:(v,r)=>r._fmt(v)}
+        {k:'base', t:base.label+' (база)', num:1, f:(v,r)=>v==null?'—':r._fmt(v)}
       ];
       rows.filter(r=>!r.isBase).forEach(r=>{
     cols.push({k:'v_'+r.id,
       t:r.label + (vGran(r)!==vGran(base)?' · '+CHX.granLabel(vGran(r)):''),
       num:1,
           f:(v,row)=>{
+            if(v==null) return '—';
             const d = row['d_'+r.id], dir = row._dir;
             const star = (best[row._k]===r.id && dir) ? ' ★' : '';
             const cls = !dir ? '' : (d*dir>0 ? 'pos' : d*dir<0 ? 'neg' : '');
@@ -1571,7 +1615,7 @@ CHX.tabVS = function(){
             return `${row._fmt(v)}${dd}${star}`;
           }});
       });
-      cols.push({k:'spread', t:'Разброс', num:1, f:(v,r)=>r._fmt(v)});
+      cols.push({k:'spread', t:'Разброс', num:1, f:(v,r)=>v==null?'—':r._fmt(v)});
       dtable('#vsMat', cols, data,
         {key:'vs_matrix', sort:'n', dir:'asc', h:520, csv:1, name:'versions_matrix'});
     }

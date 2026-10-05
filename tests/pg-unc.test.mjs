@@ -204,7 +204,8 @@ test('неограниченный спрос приходит из PostgreSQL �
   /* «Спрос и покрытие»: карточка и производные — от PG-входа */
   await ctx.goTab('dm');
   assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1500);
-  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 500, '1500 − 1000 плана');
+  /* 2026-10-05: «Не принято в план» — столбец водопада, не карточка */
+  assert.equal(JSON.parse(w.eval('(function(){return JSON.stringify(covBasis(fOrders()).notPlanned)})()')), 500, '1500 − 1000 плана');
   assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 600, '1500 − 900 отгрузки');
 
   /* «Сравнение версий»: у версий разные PG-значения, источник подписан */
