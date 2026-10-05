@@ -165,12 +165,16 @@ test('неограниченный спрос = Σ demandqty (independent_demand
   assert.equal(toNum(unlim.querySelector('.v').textContent), 1500,
     'показан вход 1500 из independent_demand, а не покрытый+непокрытый 1200');
 
-  /* производные от него величины считаются от того же числа */
-  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 500, '1500 − 1000 плана');
+  /* производные от него величины считаются от того же числа.
+     2026-10-05: карточка «Не принято в план» убрана из верхнего ряда (её место —
+     водопад), величины читаются из covBasis — единой точки определения */
+  const B = JSON.parse(ctx.window.eval('(function(){const b=covBasis(fOrders());return JSON.stringify({np:b.notPlanned,gap:b.gapTotal})})()'));
+  assert.equal(B.np, 500, '1500 − 1000 плана');
   assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 600, '1500 − 900 отгрузки');
+  assert.equal(B.gap, 600, 'gapTotal в covBasis — то же число');
 
   await ctx.goTab('ov');
-  assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 600,
+  assert.equal(JSON.parse(ctx.window.eval('(function(){return JSON.stringify(covBasis(fOrders()).gapTotal)})()')), 600,
     '«Общий» использует то же определение');
 
   await ctx.goTab('vs');
@@ -194,7 +198,8 @@ test('когда вход (independent_demand) согласован с исхо�
 
   await ctx.goTab('dm');
   assert.equal(toNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent), 1200);
-  assert.equal(toNum(ctx.kpi('Не принято в план').querySelector('.v').textContent), 200, '1200 − 1000 плана');
+  /* 2026-10-05: «Не принято в план» — в водопаде, не в карточках */
+  assert.equal(JSON.parse(ctx.window.eval('(function(){return JSON.stringify(covBasis(fOrders()).notPlanned)})()')), 200, '1200 − 1000 плана');
   assert.equal(toNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent), 300, '1200 − 900 отгрузки');
 
   await ctx.goTab('data');

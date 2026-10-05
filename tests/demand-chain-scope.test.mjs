@@ -156,14 +156,19 @@ test('пять величин цепочки спроса бьются межд�
   t.after(ctx.close);
   await ctx.goTab('dm');
 
-  const unlim = ctx.kpiVal('Неограниченный спрос');
-  const notPlanned = ctx.kpiVal('Не принято в план');
-  const limited = ctx.kpiVal('Ограниченный спрос (план)');
-  const shipped = ctx.kpiVal('Отгружено');
-  const deficit = ctx.kpiVal('Дефицит плана');
-  const gapTotal = ctx.kpiVal('Не покрыто всего');
+  /* 2026-10-05: карточки «Не принято в план», «Ограниченный спрос (план)»,
+     «Дефицит плана» убраны из верхнего ряда (их место — водопад), поэтому
+     величины читаются из той же covBasis, которой считаются карточки и водопад */
+  const V = JSON.parse(ctx.ev(`(function(){
+    const D=fOrders(),B=covBasis(D);
+    return JSON.stringify({unlim:B.demUnc,notPlanned:B.notPlanned,limited:B.dem,
+      shipped:B.sal,deficit:B.unm,gapTotal:B.gapTotal,scope:B.scope});
+  })()`));
+  const { unlim, notPlanned, limited, shipped, deficit, gapTotal } = V;
+  assert.equal(ctx.kpiVal('Неограниченный спрос'), 6000, 'карточка «Неограниченный спрос» — агрегат схемы');
 
   /* значения — в охвате всей схемы, а не загруженных двух заказов */
+  assert.equal(V.scope, 'schema', 'цепочка считается в охвате всей схемы');
   assert.equal(unlim, 6000, 'неограниченный = покрытый 4500 + непокрытый 1500');
   assert.equal(limited, 5000, 'ограниченный спрос — агрегат схемы, а не 1000 т загруженной выборки');
   assert.equal(shipped, 4500, 'отгружено — агрегат схемы, а не 900 т выборки');
@@ -228,9 +233,17 @@ test('Service Level считается в том же охвате, что и ц
   t.after(ctx.close);
 
   await ctx.goTab('dm');
-  assert.match(ctx.kpi('Отгружено').querySelector('.s').textContent, /90,0%/,
+  /* 2026-10-05: карточка «Отгружено» переименована в «План продаж» */
+  assert.match(ctx.kpi('План продаж').querySelector('.s').textContent, /SL 90,0%/,
     'SL = 4500 / 5000 по схеме, а не 900 / 1000 по выборке');
+  assert.equal(ctx.kpiVal('Не покрыто всего'), 1500, '«Не покрыто всего» = 6000 − 4500');
 
   await ctx.goTab('ov');
-  assert.equal(ctx.kpiVal('Не покрыто всего'), 1500, '«Общий» согласован с «Спросом и покрытием»');
+  /* 2026-10-05: карточка «Не покрыто всего» из «Общего» удалена (осталась в «Спросе
+     и покрытии»); согласованность вкладок проверяем по Service Level того же охвата */
+  const sl = ctx.kpi('Service Level');
+  assert.ok(sl, 'карточка Service Level есть');
+  assert.equal(sl.querySelector('.v').textContent.trim(), '90,0%',
+    '«Общий» согласован с «Спросом и покрытием»: SL в охвате схемы');
+  assert.match(sl.querySelector('.s').textContent, /4.500 из 5.000 т/, 'подпись в том же охвате схемы');
 });

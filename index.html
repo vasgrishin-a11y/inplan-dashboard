@@ -395,6 +395,21 @@ tbody tr:hover{background:var(--scp-b-50)}
 .tag-wrap{display:inline-flex;align-items:center;gap:4px}
 .tag.gear{padding:2px 6px;cursor:pointer;color:var(--scp-text-3);background:transparent}
 .tag.gear:hover{border-color:var(--scp-accent);color:var(--scp-accent)}
+/* ═══ Чипы стадий водопада + заметка об ограничениях данных (задача 2026-10-05):
+     быстрые фильтры таблицы RCA по названиям столбцов водопада. Активная стадия —
+     заливка акцентом; счётчик стадии — в чипе, чтобы фильтр читался без клика. */
+.stage-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.stage-chip{font:600 12px/18px 'Open Sans',sans-serif;color:var(--scp-text-2);
+  background:var(--scp-surface-2);border:1px solid var(--scp-line-2);border-radius:9999px;
+  padding:3px 11px;cursor:pointer;transition:border-color .12s ease,color .12s ease}
+.stage-chip:hover{border-color:var(--scp-accent);color:var(--scp-accent)}
+.stage-chip.on{background:var(--scp-accent);border-color:var(--scp-accent);color:#fff}
+.stage-chip.on .n{color:#fff;opacity:.85}
+.stage-chip .n{font-weight:400;color:var(--scp-text-3);margin-left:3px}
+.stage-chip:disabled{opacity:.45;cursor:not-allowed}
+.stage-note{background:var(--scp-warn-bg);border:1px solid var(--scp-warn);border-radius:var(--r-m);
+  padding:8px 12px;font-size:12.5px;line-height:18px;margin:0 0 10px;color:var(--scp-text)}
+.stage-note b{font-weight:700}
 select{background:var(--scp-surface);color:var(--scp-text);border:1px solid var(--scp-ctrl);
   border-radius:var(--r-s);padding:7px 10px;font:400 13px 'Open Sans',sans-serif}
 select:focus{outline:none;border-color:var(--scp-accent)}
@@ -1149,6 +1164,43 @@ function lmSegBuild(){
    Если неограниченного спроса нет (нет independent_demand и demand_coverage),
    он нулевой или активны фильтры — база автоматически возвращается к
    «Дефициту плана» (прежнее поведение). */
+/* ═══ 3.6.0 СЧЁТ ЗАКАЗОВ: СТАДИИ ВОДОПАДА СПРОСА ═══
+   Классификация заказов по правилам demand_coverage (задача владельца
+   2026-10-05):
+     100% не покрыто   — fullfilleddemandqty = 0;
+     частично покрыто  — unfullfilleddemandqty > 0 И fullfilleddemandqty > 0;
+     полностью покрыто — unfullfilleddemandqty = 0 И fullfilleddemandqty > 0.
+   Три группы — разбиение всех строк: сумма равна общему числу строк.
+   В demand_coverage нет идентификатора заказа (подтверждено владельцем),
+   поэтому по-заказная стадия строится по marking_demand: ff ≈ sal
+   (покрытый = отгруженный), uf ≈ unm. Заказы вне плана в marking_demand
+   отсутствуют — они видны только агрегатом (водопад по заказам, счётчики). */
+const ORD_TOL=1e-9;
+const orderStageOf=o=>num(o.sal)<=ORD_TOL?'fullUnc':(num(o.unm)>ORD_TOL?'part':'full');
+const ORDER_STAGES={
+  all:{t:'Неограниченный спрос'},
+  fullUnc:{t:'Заказов 100% не покрыто'},
+  inOpt:{t:'Заказов в оптимизации'},
+  deficit:{t:'Дефицит плана'},
+  plan:{t:'План продаж'},
+  late:{t:'Фактически отгружено с опозданием'},
+  intime:{t:'В срок'}
+};
+/* Короткая подпись стадии для колонки таблицы */
+const orderStageLabel=o=>({fullUnc:'100% не покрыто',part:'Частично покрыто',full:'Полностью покрыто'})[orderStageOf(o)];
+/* Подходит ли заказ под стадию водопада. Для «С опозданием»/«В срок»
+   по-заказных данных нет (нет order_id в demand_coverage): фильтруем до
+   надёжного надмножества — полностью покрытых заказов, — а точные агрегаты
+   показываем в заметке над таблицей. */
+function orderStageMatch(o,st){
+  const s=orderStageOf(o);
+  if(st==='all')return true;
+  if(st==='fullUnc')return s==='fullUnc';
+  if(st==='inOpt')return s!=='fullUnc';
+  if(st==='deficit')return s==='part';
+  if(st==='plan'||st==='late'||st==='intime')return s==='full';
+  return true;
+}
 function covBasis(D){
   const agg=(DS&&DS.agg)||{}, cov=(agg.totals||{}).cov||{}, dims=((agg.dims||{}).coverage||[]);
   const demo=!!agg.demo;   // агрегат синтезирован для демо-набора, а не пришёл из ClickHouse
@@ -1198,12 +1250,63 @@ function covBasis(D){
   const notPlanned=useUnc?Math.max(0,demUnc-dem):0;
   const gapTotal=useUnc?Math.max(0,demUnc-sal):unm;   // непокрытый спрос от неограниченного
   const late=useUnc?num(cov.late):0;
+  /* ── Счёт заказов: demand_coverage → marking_demand → выборка ──
+     Один источник на всю вкладку, чтобы карточки, водопад по заказам и чипы
+     таблицы RCA показывали одни и те же числа.
+     1) demand_coverage (агрегат countIf, вся схема, без фильтров) — основной:
+        тот же охват, что и тонны водопада при useUnc;
+     2) marking_demand (агрегат countIf по заказам плана) — когда demand_coverage
+        недоступна, но агрегаты схемы есть (CH без coverage, фильтры сняты);
+        заказов «вне плана» в этом охвате нет — водопад по заказам начинается
+        с «Заказов в оптимизации», как и водопад в тоннах;
+     3) загруженная выборка D — Excel и активные фильтры. */
+  const ordDC={rows:num(cov.orderRows),fullUnc:num(cov.fullyUncoveredOrders),
+    part:num(cov.partiallyCoveredOrders),full:num(cov.fullyCoveredOrders),
+    lateAll:num(cov.lateOrdersAll),lateFull:num(cov.lateFullyCoveredOrders)};
+  const mdOrders=num(aggT.orders);
+  let zMD=num(aggT.zeroSalOrders),pMD=num(aggT.partCoveredOrders),fMD=num(aggT.fullCoveredOrders);
+  if(!(zMD>0||pMD>0||fMD>0)&&mdOrders>0&&Object.prototype.hasOwnProperty.call(aggT,'full')){
+    /* старый снапшот без новых счётчиков: full = countIf(unm<=tol) — полное
+       покрытие; остальное считаем частичным, нулевая отгрузка неизвестна */
+    fMD=num(aggT.full);pMD=Math.max(0,mdOrders-fMD);zMD=0;
+  }
+  let ord,ordSrc;
+  if(useUnc&&ordDC.rows>0){
+    /* опоздания — среди полностью покрытых (решение владельца 2026-10-05):
+       План продаж (заказов) = В срок + С опозданием — водопад сходится точно */
+    const lateFC=Math.max(0,Math.min(ordDC.lateFull,ordDC.full));
+    ord={total:ordDC.rows,fullUnc:ordDC.fullUnc,part:ordDC.part,full:ordDC.full,
+      inOpt:ordDC.rows-ordDC.fullUnc,late:lateFC,intime:ordDC.full-lateFC,
+      lateAll:ordDC.lateAll,byOrder:false};
+    ordSrc='demand_coverage';
+  }else if(!fActive&&mdOrders>0&&(zMD>0||pMD>0||fMD>0)){
+    ord={total:mdOrders,fullUnc:zMD,part:pMD,full:fMD,inOpt:pMD+fMD,
+      late:null,intime:null,lateAll:null,byOrder:false};
+    ordSrc='marking_demand';
+  }else{
+    const z=D.filter(o=>orderStageOf(o)==='fullUnc').length,
+      p=D.filter(o=>orderStageOf(o)==='part').length,
+      f=D.filter(o=>orderStageOf(o)==='full').length;
+    ord={total:D.length,fullUnc:z,part:p,full:f,inOpt:p+f,
+      late:null,intime:null,lateAll:null,byOrder:false};
+    ordSrc=fActive?'выборка под фильтрами':'загруженные заказы';
+  }
+  ord.src=ordSrc;
+  ord.srcLong={['demand_coverage']:'demand_coverage — все заказы неограниченного спроса, агрегат по всей схеме',
+    ['marking_demand']:'marking_demand — заказы плана, агрегат по всей схеме (demand_coverage недоступна)',
+    ['выборка под фильтрами']:'загруженная выборка под фильтрами (demand_coverage не режется фильтрами)',
+    ['загруженные заказы']:'загруженные заказы (demand_coverage недоступна)'}[ordSrc];
   return {hasDC,useUnc,fActive,demo,orders:D.length,
     ordersAll:num(aggT.orders)||D.length,
     scope:schemaScope?'schema':'detail',partial,
     dem,sal,unm,demDet,salDet,unmDet,
     rev,cost,mar,full,revDet,costDet,marDet,fullDet,finScope,
     demUnc,ff,uf,late,
+    /* счёт заказов по стадиям водопада + фактический источник */
+    ord,ordSrc,
+    /* заказы плана с нулевой отгрузкой (marking_demand) — для сверки
+       «строки demand_coverage = заказы плана + вне плана» */
+    zeroSalMD:Object.prototype.hasOwnProperty.call(aggT,'zeroSalOrders')?num(aggT.zeroSalOrders):null,
     /* откуда взят неограниченный спрос: independent_demand или demand_coverage */
     uncSrc:demo?'demo':(aggT.uncSrc||(demUnc>0?'demand_coverage':'')),
     uncQty:aggT.uncQty||'demandqty',
@@ -1235,6 +1338,27 @@ function covIds(B){
   if(B.useUnc&&B.uf>0)ids.push({kind:'check',t:'Не покрыто всего = unfullfilleddemandqty из demand_coverage',
     a:B.gapTotal,b:B.uf,ok:ok(B.gapTotal,B.uf),
     bad:'Расхождение двух источников непокрытого спроса: fullfilleddemandqty ≠ отгрузке marking_demand'});
+  /* ── Тождества счёта заказов (demand_coverage, задача 2026-10-05) ── */
+  if(B.ord&&B.ordSrc==='demand_coverage'&&B.ord.total>0){
+    const u='ord';
+    ids.push({kind:'def',unit:u,t:'Всего заказов = 100% не покрыто + частично + полностью',
+      a:B.ord.total,b:B.ord.fullUnc+B.ord.part+B.ord.full,ok:ok(B.ord.total,B.ord.fullUnc+B.ord.part+B.ord.full),
+      bad:'Три countIf не покрывают все строки demand_coverage — проверить запрос агрегата'});
+    ids.push({kind:'def',unit:u,t:'Заказов в оптимизации = частично покрытых + полностью покрытых',
+      a:B.ord.inOpt,b:B.ord.part+B.ord.full,ok:ok(B.ord.inOpt,B.ord.part+B.ord.full),
+      bad:'Непоследовательная классификация строк demand_coverage'});
+    ids.push({kind:'def',unit:u,t:'План продаж (заказов) = В срок + Отгружено с опозданием',
+      a:B.ord.full,b:B.ord.intime+B.ord.late,ok:ok(B.ord.full,B.ord.intime+B.ord.late),
+      bad:'Опоздания считаются вне группы полностью покрытых заказов'});
+    /* строка demand_coverage = заказ? сверяем два независимых способа
+       получить «вне плана»: разница числа строк и разница классификаций */
+    if(B.zeroSalMD!=null){
+      const dRows=B.ord.total-B.ordersAll,dCls=B.ord.fullUnc-B.zeroSalMD;
+      ids.push({kind:'check',unit:u,t:'Строк demand_coverage = заказов плана + заказов вне плана',
+        a:B.ord.total,b:B.ordersAll+Math.max(0,dCls),ok:ok(dRows,dCls),
+        bad:'Строка demand_coverage — не заказ (несколько строк на заказ) или источники расходятся: счёт заказов водопада может быть завышен'});
+    }
+  }
   return ids;
 }
 /* Базы упущенной маржи: те же поля, что у методов (t/d/f/b/w/lim), поэтому
@@ -1290,12 +1414,25 @@ function lmState(D){
   LM_B=B;LM_T=T;LM_K=T.k;LM_UNATTR=T.unattr;
   return {B,T};
 }
-/* Подпись KPI «Упущенная маржа»: метод + активная база + значение по второй базе */
+/* Подпись KPI «Упущенная маржа» — одна строка: база расчёта. Метод подсвечен
+   кнопкой в переключателе над карточками, полная расшифровка (метод, ставка,
+   вторая база) — в подсказке «?» (задача 2026-10-05, п.6: подпись влезает
+   целиком, минимум текста). */
 function lmKpiSub(T){
   const base=T.base==='unc'?'непокрытый спрос':'дефицит плана';
-  const alt=T.base==='unc'?`по дефициту плана ${bn(T.lmPlan)}`:`по непокрытому спросу ${bn(T.lmUnc)}`;
-  return `метод: ${LM_MODES[LM_MODE].t} · база: ${base}<br>`
-    +(T.uncAvail?alt:`вторая база недоступна (${LM_B?LM_B.uncWhy:'нет данных'})`);
+  return `база: ${base}`;
+}
+/* Развёрнутая подсказка «?» карточки упущенной маржи (и выручки):
+   формула, ставка, вторая база, куда идти за сверкой. */
+function lmCardHelp(T,lostRev){
+  const B=LM_B;
+  const alt=T.base==='unc'
+    ?`по дефициту плана: ${bn(T.lmPlan)} (${nf(B?B.gapPlan:0)} т)`
+    :`по непокрытому спросу: ${bn(T.lmUnc)} (${nf(B?B.gapTotal:0)} т)`;
+  return `Упущенная выручка — ставка ₽/т дефицита по загруженным заказам × объём дефицита цепочки = ${bn(lostRev||0)}.`
+    +`<br>Упущенная маржа — ${T.base==='unc'?'непокрытый спрос (вне плана + дефицит)':'дефицит плана'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc}).`
+    +(T.uncAvail?`<br>Вторая база — ${alt}.`:`<br>Вторая база недоступна: ${esc(B?B.uncWhy:'нет данных')}.`)
+    +`<br>Денежная сверка с lostrevenue (demand_coverage) — в «Своде спроса» ниже.`;
 }
 /* Денежная сверка упущенной маржи с lostrevenue из demand_coverage.
    Одна формула и один допуск (25%) для блока «Спрос и покрытие» и для вкладки
@@ -1313,10 +1450,12 @@ function covMoneyCheck(B,T,mrgp){
    mrgp — маржинальность портфеля (маржа / выручка) для денежной сверки с lostrevenue. */
 function covReconHtml(B,T,mrgp){
   const ids=covIds(B);
+  /* Единица тождества: тонны или заказы (счёт заказов 2026-10-05) */
+  const unit=i=>i.unit==='ord'?` ${plural(i.a,['заказ','заказа','заказов'])}`:' т';
   const rows=ids.map(i=>`<tr class="${i.ok?'':'bad'}">
       <td>${esc(i.t)} <span class="tag">${i.kind==='def'?'по построению':'сверка источников'}</span></td>
-      <td class="n">${nf(i.a)} т</td><td class="n">${nf(i.b)} т</td>
-      <td class="st">${i.ok?'✓ сходится':`⚠ ${nf(Math.abs(i.a-i.b))} т — ${esc(i.bad||'расхождение')}`}</td></tr>`).join('');
+      <td class="n">${nf(i.a)}${unit(i)}</td><td class="n">${nf(i.b)}${unit(i)}</td>
+      <td class="st">${i.ok?'✓ сходится':`⚠ ${nf(Math.abs(i.a-i.b))}${unit(i)} — ${esc(i.bad||'расхождение')}`}</td></tr>`).join('');
   const M=covMoneyCheck(B,T,mrgp), lmSrc=M.lmSrc;
   const money=(B.useUnc&&B.lostRev>0)
     ?`<tr><td>Упущенная маржа по непокрытому спросу = lostrevenue × маржинальность портфеля <span class="tag">сверка источников</span></td>
@@ -2905,16 +3044,17 @@ const METRIC_HELP={
  'Маржинальность':'<b>Валовая маржа / Валовая выручка</b>, %.',
  'Маржинальность продаж':'<b>Валовая маржа / Валовая выручка</b>, % по заказам вкладки «Спрос и покрытие».',
  'Service Level':'<b>Σ sal / Σ dem</b> — доля удовлетворённого планового спроса в тоннах.',
- 'Заказов без дефицита':'Заказы с <b>unm = 0</b> к общему числу заказов выборки.',
- 'Упущенная выручка':'<b>Σ (unm × цена заказа)</b>, ₽ — выручка, не полученная из-за дефицита плана.<br>Цена берётся по заказу (<code>demand_coverage.price</code>), а не средней по портфелю.',
+ /* Счёт заказов — по demand_coverage (задача владельца 2026-10-05):
+    всего строк = все заказы неограниченного спроса; 100% не покрыто —
+    fullfilleddemandqty = 0; частично — uf > 0 и ff > 0; полностью — uf = 0
+    и ff > 0. Фолбэк без demand_coverage — классификация по marking_demand. */
+ 'Заказов без дефицита':'<b>Полностью покрытые заказы</b>: <code>unfullfilleddemandqty = 0</code> и <code>fullfilleddemandqty &gt; 0</code> — ко всем заказам неограниченного спроса (строкам <code>demand_coverage</code>).<br>Без <code>demand_coverage</code> — по <code>marking_demand</code>: заказы с <code>unm = 0</code> к заказам плана.',
+ 'Упущенная маржа и выручка':'<b>Упущенная маржа</b> = непокрытый объём × ставка ₽/т выбранного метода; <b>упущенная выручка</b> = дефицит плана × цена отказа ₽/т по загруженным заказам.<br>Метод и база (дефицит плана / непокрытый спрос) — переключатели в шапке вкладки; сверка с <code>lostrevenue</code> — в «Своде спроса».',
  'Не покрыто всего':'<b>Дефицит плана + не принятый в план спрос</b> (<code>gapTotal</code>), т.<br>Не принятый в план = неограниченный спрос − ограниченный спрос.',
- 'Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽.<br>Ставка — выбранный метод (маржа заказа / маржа на тонну продукта / предельная / смесь / ставка штрафа), объём — выбранная база (дефицит плана или непокрытый спрос от неограниченного спроса). Переключатели — в шапке вкладки, сверка со строкой <code>lostrevenue</code> — в «Экономике отказов».',
- 'Неограниченный спрос':'<b>Σ demandqty</b>, т — весь входной спрос клиентов до ограничения планом.<br>Источник: <code>independent_demand</code> — из PostgreSQL через backend-прокси (схема <code>public_N</code> ↔ база ClickHouse <code>data_public_N</code>). Если PostgreSQL недоступен — фолбэк: покрытый + непокрытый из <code>demand_coverage</code>; под фильтрами и без агрегата карточка не считается («—»).',
- 'Не принято в план':'<b>Неограниченный спрос − Ограниченный спрос (план)</b>, т: объём, который не дошёл до планирования.',
- 'Ограниченный спрос (план)':'<b>Σ dem</b>, т — спрос, принятый в план (<code>demand</code> / <code>demand_limited</code>).',
- 'Отгружено':'<b>Σ sal</b>, т — объём, покрытый планом продаж.',
- 'Дефицит плана':'<b>Σ unm = Ограниченный спрос − Отгружено</b>, т: непокрытая часть планового спроса.',
- 'Отгружено с опозданием':'<b>Σ sal</b> заказов с признаком <code>late_delivery = 1</code> (<code>demand_coverage</code>), т.',
+ 'Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽.<br>Ставка — выбранный метод (маржа заказа / маржа на тонну продукта / предельная / смесь / ставка штрафа), объём — выбранная база (дефицит плана или непокрытый спрос от неограниченного спроса). Переключатели — в шапке вкладки, сверка со строкой <code>lostrevenue</code> — в «Своде спроса».',
+ 'Неограниченный спрос':'<b>Σ demandqty</b>, т — весь входной спрос клиентов до ограничения планом.<br>Источник: <code>independent_demand</code> — из PostgreSQL через backend-прокси (схема <code>public_N</code> ↔ база ClickHouse <code>data_public_N</code>). Если PostgreSQL недоступен — фолбэк: покрытый + непокрытый из <code>demand_coverage</code>; под фильтрами и без агрегата карточка не считается («—»). Число заказов — строки <code>demand_coverage</code> (вся схема).',
+ 'План продаж':'<b>Σ results_sale</b> заказов <code>marking_demand</code>, т — объём, покрытый планом продаж. Заказов «полностью покрыто» — стадия <code>demand_coverage</code>: <code>unfullfilleddemandqty = 0</code> и <code>fullfilleddemandqty &gt; 0</code>.',
+ 'Дефицит плана':'<b>Σ unm = Ограниченный спрос − Отгружено</b>, т: непокрытая часть планового спроса. В водопаде по заказам — частично покрытые заказы (<code>uf &gt; 0</code> и <code>ff &gt; 0</code>).',
  'tree|Объём отгрузки':'<b>sal</b> выбранного заказа, т; рядом — плановый спрос и Service Level заказа.',
  'tree|Себестоимость заказа':'<b>cost</b> выбранного заказа, ₽; рядом — себестоимость на тонну (<code>cpt</code>).',
  'tree|Маржа заказа':'<b>mar = rev − cost</b> выбранного заказа; рядом — рентабельность <b>mar / rev</b>.',
@@ -3052,27 +3192,27 @@ function tabOV(){
   /* Итоги берём из covBasis — в том же охвате, что и цепочка спроса: при
      урезанной детализации это агрегаты всей схемы, иначе суммы по выборке.
      Иначе «Общий» и «Спрос и покрытие» показывали бы разный Service Level. */
-  const rev=B.rev,cost=B.cost,mar=B.mar,dem=B.dem,sal=B.sal,unm=B.unm,full=B.full;
+  const rev=B.rev,cost=B.cost,mar=B.mar,dem=B.dem,sal=B.sal,unm=B.unm;
   /* Упущенная выручка — тот же принцип «ставка × объём», что у упущенной маржи:
      цена отказа ₽/т считается по загруженным заказам, объём — по цепочке. */
   const lrRate=B.unmDet>0?S(D,o=>o.unm*o.price)/B.unmDet:0;
   const lr=lrRate*unm,lm=T.lm;
   const ops=fOps(),byT=grp(ops,r=>r.type,v=>({c:S(v,r=>r.cost)}));
   const scopeNote=B.partial?` · ${B.scope==='schema'?'агрегат всей схемы':'загруженная выборка'}`:'';
+  /* Карточки (задача владельца 2026-10-05): «Упущенная выручка» и «Упущенная
+     маржа» объединены в одну карточку (значение — маржа, в подписи — выручка),
+     «Не покрыто всего» удалена (осталась в «Спросе и покрытии»), «Заказов без
+     дефицита» считается по classification demand_coverage (см. covBasis.ord). */
+  const ord=B.ord;
   const K=[['Валовая выручка',bn(rev),'план продаж × цена'+scopeNote,''],
    ['Себестоимость',bn(cost),pc(cost/rev)+' от выручки',''],
    ['Валовая маржа',bn(mar),'маржинальность '+pc(mar/rev),''],
    ['Маржа на тонну',nf(mar/sal)+' ₽/т','взвешенно',''],
    ['Service Level',pc(sal/dem),nf(sal)+' из '+nf(dem)+' т',sal/dem>.9?'pos':sal/dem>.7?'mid':'neg'],
-   ['Заказов без дефицита',full+' из '+B.ordersAll,pc(B.ordersAll?full/B.ordersAll:0)+' портфеля',''],
-   ['Упущенная выручка',bn(lr),nf(unm)+' т дефицита плана','neg'],
-   ['Не покрыто всего',nf(B.gapTotal)+' т',
-     B.useUnc?`${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана`:`= дефицит плана · ${B.uncWhy}`,
-     B.gapTotal?'neg':'pos',
-     B.useUnc?`Неограниченный спрос (independent_demand.${B.uncQty}) − отгружено (marking_demand)`
-             :'Неограниченный спрос недоступен — показан дефицит плана marking_demand'],
-   ['Упущенная маржа',bn(lm),lmKpiSub(T),lm?'neg':'',
-     `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`]];
+   ['Заказов без дефицита',ord.full+' из '+ord.total,pc(ord.total?ord.full/ord.total:0)+' портфеля','',
+     `Полностью покрытые заказы (unfullfilleddemandqty = 0 и fullfilleddemandqty > 0) ко всем заказам неограниченного спроса. Источник: ${ord.srcLong||ord.src}.`],
+   ['Упущенная маржа и выручка',bn(lm),`упущенная выручка ${bn(lr)}<br>${lmKpiSub(T)}`,lm?'neg':'',
+     lmCardHelp(T,lr)]];
   const per=grp(D,o=>o.p,v=>({rev:S(v,o=>o.rev),cost:S(v,o=>o.cost),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
     .sort((a,b)=>a.k-b.k);
   const pr=grp(D,o=>o.prod,v=>({rev:S(v,o=>o.rev),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),
@@ -3181,6 +3321,13 @@ function tabOV(){
       {k:'cl',t:'Клиент',left:1,flt:1},
       {k:'chan',t:'Канал',flt:1},
       {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
+      {k:'stage',t:'Стадия',left:1,flt:1,title:'Классификация заказа по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
+        v:o=>orderStageLabel(o),
+        f:(v,o)=>{const s=orderStageOf(o);
+          const st=s==='fullUnc'?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
+            :s==='part'?'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)'
+            :'color:var(--scp-ok);border-color:var(--scp-ok);background:var(--scp-ok-bg)';
+          return `<span class="tag" style="${st}">${orderStageLabel(o)}</span>`}},
       {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
       {k:'sal',t:'Продажи',num:1,f:v=>nf(v,1)},
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:v=>v?'neg':''},
@@ -3203,7 +3350,7 @@ function tabOV(){
       `Портфель даёт <span class="h">${bn(mar)}</span> валовой маржи при выручке ${bn(rev)} — маржинальность <span class="h">${pc(mar/rev)}</span>.`,
       `Service Level <span class="h">${pc(sal/dem)}</span> к ограниченному спросу: не отгружено ${nf(unm)} т, это ${bn(lm)} упущенной маржи по базе «${LM_BASES[T.base].t}» — ${lm>mar?`в ${nf(lm/Math.max(mar,1),1)} раза больше`:`${pc(lm/Math.max(mar,1))} от`} текущего результата.`,
       T.uncAvail
-        ?`От неограниченного спроса не покрыто <span class="h">${nf(B.gapTotal)} т</span> (${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана): упущенная маржа по этой базе — <span class="h">${bn(T.lmUnc)}</span>, по дефициту плана — ${bn(T.lmPlan)}.`
+        ?`От неограниченного спроса не покрыто <span class="h">${nf(B.gapTotal)} т</span> (${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана): упущенная маржа по этой базе — <span class="h">${bn(T.lmUnc)}</span>, по дефициту плана — ${bn(T.lmPlan)}. Заказов: ${nf(B.ord.total)} всего, 100% не покрыто ${nf(B.ord.fullUnc)}, частично ${nf(B.ord.part)}, полностью ${nf(B.ord.full)}.`
         :`Неограниченный спрос недоступен (${B.uncWhy}) — упущенная маржа считается только по дефициту плана и может занижать потери.`,
       `Концентрация: топ-3 продукта (${top3.map(p=>p.k).join(', ')}) формируют <span class="h">${pc(conc)}</span> всей маржи.`,
       `Маржа на тонну ${mptTrend<0?'снижается':'растёт'} на <span class="h">${pc(Math.abs(mptTrend))}</span> от первого к последнему периоду.`,
@@ -3225,6 +3372,32 @@ function tabOV(){
 }
 
 /* ═════════ 9. БЛОК: СПРОС И ПОКРЫТИЕ ═══════════ */
+/* Режим водопада: 'tons' | 'orders' (задача владельца 2026-10-05). В режиме
+   «Заказы» — те же названия столбцов, но в количестве заказов по правилам
+   demand_coverage. Выбор сохраняется в localStorage. */
+let DM_WF_MODE=(()=>{try{const v=localStorage.getItem('inplan_dm_wf_mode');return v==='orders'?'orders':'tons'}catch(e){return 'tons'}})();
+/* Активная стадия водопада для таблицы RCA: null — все заказы; ключ
+   ORDER_STAGES. Ставится кликом по столбцу водопада или чипу над таблицей. */
+let DM_STAGE=null;
+/* Водопад по заказам из счёта covBasis(B).ord — единая точка построения
+   (вкладка «Спрос и покрытие» и тесты). Разбиение полное:
+     Всего = 100% не покрыто + Заказов в оптимизации
+     Заказов в оптимизации = Дефицит плана + План продаж
+     План продаж = В срок + С опозданием (опоздания — среди полностью покрытых).
+   Без demand_coverage (marking_demand/выборка) водопад начинается с «Заказов
+   в оптимизации» — зеркально водопаду в тоннах. */
+function dmOrderWaterfall(ord){
+  const dc=ord.src==='demand_coverage';
+  const w=[];
+  if(dc)w.push({k:'Неограниченный спрос',v:ord.total,st:'all',type:'total',c:CH.d1},
+    {k:'Заказов 100% не покрыто',v:-ord.fullUnc,st:'fullUnc',type:'delta'});
+  w.push({k:'Заказов в оптимизации',v:ord.inOpt,st:'inOpt',type:'total',c:CH.d2},
+    {k:'Дефицит плана',v:-ord.part,st:'deficit',type:'delta'},
+    {k:'План продаж',v:ord.full,st:'plan',type:'total',c:CH.d3});
+  if(dc)w.push({k:'Фактически отгружено с опозданием',v:-ord.late,st:'late',type:'delta'},
+    {k:'В срок',v:ord.intime,st:'intime',type:'total',c:CH.ok});
+  return w;
+}
 function tabDM(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
   /* База покрытия: неограниченный спрос (independent_demand.demandqty), план и
@@ -3232,6 +3405,9 @@ function tabDM(){
      под фильтрами он отключается (useUnc=false) и все цифры считаются по плану. */
   const {B,T}=lmState(D);
   const hasDC=B.hasDC,useUnc=B.useUnc;
+  /* Счёт заказов по стадиям водопада (demand_coverage → marking_demand →
+     выборка) — один источник для карточек, водопада «Заказы» и чипов RCA. */
+  const ord=B.ord;
   /* Финансы — из covBasis, в том же охвате, что и объёмы: иначе «Маржинальность
      продаж» здесь и «Валовая маржа» на «Общем» считались по разным множествам
      заказов и отличались на долю непогруженной детализации. */
@@ -3254,7 +3430,10 @@ function tabDM(){
         :`Приоритет ${esc(topPrio.k)} (наивысший из ${prioGrp.length}) обслужен полностью.`)
       :`Service Level по типам спроса (<code>demandtype</code>, порядок в данных не задан): ${prioGrp.slice(0,4).map(g=>`${esc(g.dtl||g.k)} — ${pc(g.sl)}`).join(', ')}${prioGrp.length>4?` и ещё ${prioGrp.length-4}`:''}.`
         +(prioGrp.some(g=>g.sl<.9)?` <span class="h">Есть типы спроса с покрытием ниже 90%</span> — проверить, осознанно ли модель их урезает.`:'');
-  const defOrders=D.filter(o=>o.unm>1e-9),full=B.full;
+  const defOrders=D.filter(o=>o.unm>1e-9);
+  /* Строки таблицы RCA: ВСЕ заказы водопада (задача 2026-10-05), отфильтрованные
+     по активной стадии — клик по столбцу водопада или чипу над таблицей. */
+  const stageRows=DM_STAGE?D.filter(o=>orderStageMatch(o,DM_STAGE)):D;
   /* Упущенная маржа — через lmS(): при базе «Непокрытый спрос» значения заказов
      масштабированы так, что их сумма равна KPI (плюс нераспределённый остаток,
      если дефицита плана нет вовсе). */
@@ -3277,11 +3456,26 @@ function tabDM(){
   const rcaCache=new Map();
   const rcaFor=o=>{if(!rcaCache.has(o.id))rcaCache.set(o.id,CapacityRCA.analyzeOrderChain(o));return rcaCache.get(o.id)};
 
-  /* ── бизнес-водопад ── */
-  const wf=[];
-  if(useUnc)wf.push({k:'Неограниченный спрос',v:demUnc,type:'total',c:CH.d1},{k:'Заказов 100% не покрыто',v:-notPlanned,type:'delta'});
-  wf.push({k:'Заказов в оптимизации',v:dem,type:'total',c:CH.d2},{k:'Дефицит плана',v:-unm,type:'delta'},{k:'План продаж',v:sal,type:'total',c:CH.d3});
-  if(useUnc)wf.push({k:'Фактически отгружено с опозданием',v:-late,type:'delta'},{k:'В срок',v:inTime,type:'total',c:CH.ok});
+  /* ── бизнес-водопад ──
+     Два режима с одинаковыми названиями столбцов (задача владельца 2026-10-05):
+     • тонны — цепочка объёмов (неограниченный → план → отгрузка → дефицит);
+     • заказы — счёт заказов по правилам demand_coverage: всего строк = все
+       заказы неограниченного спроса; 100% не покрыто — fullfilleddemandqty = 0;
+       частично — uf > 0 и ff > 0; полностью — uf = 0 и ff > 0. Разбиение
+       полное, поэтому сумма частей равна целому по построению:
+         Всего = 100% не покрыто + Заказов в оптимизации
+         Заказов в оптимизации = Дефицит плана + План продаж
+         План продаж = В срок + С опозданием (опоздания — среди полностью
+       покрытых, решение владельца). Без demand_coverage водопад по заказам
+       строится по marking_demand/выборке и начинается с «Заказов в
+       оптимизации» — как и водопад в тоннах.
+     st — стадия для фильтрации таблицы RCA по клику на столбец. */
+  const wfT=[];
+  if(useUnc)wfT.push({k:'Неограниченный спрос',v:demUnc,st:'all',type:'total',c:CH.d1},{k:'Заказов 100% не покрыто',v:-notPlanned,st:'fullUnc',type:'delta'});
+  wfT.push({k:'Заказов в оптимизации',v:dem,st:'inOpt',type:'total',c:CH.d2},{k:'Дефицит плана',v:-unm,st:'deficit',type:'delta'},{k:'План продаж',v:sal,st:'plan',type:'total',c:CH.d3});
+  if(useUnc)wfT.push({k:'Фактически отгружено с опозданием',v:-late,st:'late',type:'delta'},{k:'В срок',v:inTime,st:'intime',type:'total',c:CH.ok});
+  const ordDCready=ord.src==='demand_coverage';
+  const wfO=dmOrderWaterfall(ord);
 
   /* Карточки выстроены в цепочку спроса — так, чтобы читались тождества:
        Неограниченный = Ограниченный + Не принято в план
@@ -3289,47 +3483,40 @@ function tabDM(){
        Неограниченный = Отгружено + Не покрыто всего
      Сверка с фактическими числами — в карточке «Свод спроса» ниже.
      Пятый элемент карточки — title-подсказка с источником и формулой: техническая
-     деталь убрана из подписи, чтобы в подписи оставался бизнес-смысл. */
+     деталь убрана из подписи, чтобы в подписи оставался бизнес-смысл.
+     Задача владельца 2026-10-05: карточки «Не принято в план», «Ограниченный
+     спрос (план)», «Дефицит плана» и «Фактически отгружено с опозданием» убраны
+     из верхнего ряда — они остались столбцами водопада с новыми названиями
+     («Заказов 100% не покрыто», «Заказов в оптимизации», «План продаж»);
+     «Отгружено» переименована в «План продаж»; «Упущенная маржа» — последняя
+     в ряду. Подписи — максимум две строки, детали — в подсказке «?». */
   /* Охват цепочки: агрегаты всей схемы или только загруженные заказы. Пишем это
      в подсказках карточек — иначе непонятно, почему «заказов» в цепочке больше,
      чем строк в таблицах ниже (детализация грузится с лимитом). */
   const scopeTxt=B.scope==='schema'?'агрегат по всей схеме':'загруженные заказы выборки';
-  const sampleTxt=B.partial?` · детализация ниже — ${ordW(D.length)} из ${ordW(B.ordersAll)}`:'';
   const K=[
     ['Неограниченный спрос',useUnc?nf(demUnc)+' т':'—',
-      useUnc?`${ordW(B.ordersAll)} · весь спрос до ограничений модели`:B.uncWhy,'',
+      useUnc?`${ordW(ord.total)} · весь спрос до ограничений модели`:B.uncWhy,'',
       useUnc?(B.uncSrc==='demand_coverage'
             ?'Источник: demand_coverage (fullfilleddemandqty + unfullfilleddemandqty) — фолбэк: таблицы independent_demand в схеме нет, агрегат по всей схеме'
             :`Источник: independent_demand (Σ ${B.uncQty}), агрегат по всей схеме — фильтрами не режется`)
            :'Неограниченный спрос известен только из агрегата independent_demand по всей схеме'],
-    ['Не принято в план',useUnc?nf(notPlanned)+' т':'—',
-      useUnc?pc(demUnc?notPlanned/demUnc:0)+' неограниченного спроса':'нужен independent_demand',useUnc&&notPlanned?'mid':'',
-      'Неограниченный спрос − ограниченный спрос: объём, который оптимизатор не принял в план. Обе величины берутся в одном охвате ('+scopeTxt+'), иначе разница вобрала бы в себя незагруженные заказы'],
-    ['Ограниченный спрос (план)',nf(dem)+' т',
-      ordW(B.ordersAll)+(useUnc?` · принято ${pc(demUnc?dem/demUnc:0)} неограниченного спроса`:'')+sampleTxt,'',
-      'Источник: demand_volume заказов marking_demand ('+scopeTxt+')'],
-    ['Отгружено',nf(sal)+' т',
-      `Service Level ${pc(sl)} к плану · ${full} из ${nf(B.ordersAll)} заказов без дефицита`,
+    ['План продаж',nf(sal)+' т',
+      `SL ${pc(sl)} · ${ord.full} из ${ord.total} заказов полностью`,
       sl>=.95?'pos':sl>=.8?'mid':'neg',
-      'Источник: results_sale заказов marking_demand ('+scopeTxt+')'],
-    ['Дефицит плана',nf(unm)+' т',ordW(defOrders.length)+' с дефицитом'+(B.partial?' в загруженной выборке':''),unm?'neg':'pos',
-      'Ограниченный спрос − отгружено (unsatisfied_demand, '+scopeTxt+')'],
+      'Источник: results_sale заказов marking_demand ('+scopeTxt+'). Полностью покрытых заказов (unfullfilleddemandqty = 0, fullfilleddemandqty > 0) — '+ord.full+' из '+ord.total+' ('+ord.src+')'],
     ['Не покрыто всего',nf(B.gapTotal)+' т',
-      useUnc?`${nf(notPlanned)} т вне плана + ${nf(unm)} т в плане`:'= дефицит плана ('+B.uncWhy+')',
+      useUnc?`${nf(notPlanned)} т вне плана + ${nf(unm)} т дефицита`:'= дефицит плана ('+B.uncWhy+')',
       B.gapTotal?'neg':'pos',
       useUnc?'Неограниченный спрос − отгружено: полная цена отказа, база упущенной маржи при выборе «Непокрытый спрос»'
            :'Неограниченный спрос недоступен — непокрытый объём равен дефициту плана'],
-    ['Фактически отгружено с опозданием',useUnc?nf(late)+' т':'—',
-      useUnc?pc(sal?late/sal:0)+' отгруженного':'нужен demand_coverage',
-      late&&late/Math.max(sal,1)>.05?'neg':late?'mid':'',
-      'Факт поздней отгрузки: demandfullfilledlateqty > 0 в demand_coverage; разрешённое окно latedelivperiods показывается отдельно в RCA'],
-    ['Упущенная маржа',bn(lm),lmKpiSub(T)+'<br>упущенная выручка '+bn(lostRev),lm?'neg':'',
-      `База: ${T.base==='unc'?'непокрытый спрос '+nf(B.gapTotal)+' т':'дефицит плана '+nf(B.gapPlan)+' т'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc})`],
     /* Деньги берутся в охвате цепочки: при урезанной детализации это агрегаты
        всей схемы (marking_demand), иначе — суммы по загруженным заказам.
        Подпись называет охват, чтобы рубли не читались неверно. */
     ['Маржинальность продаж',pc(rev?mar/rev:0),
-      `Выручка ${bn(rev)} | Маржа ${bn(mar)}`+(B.partial?(B.finScope?' · агрегат всей схемы':' · по загруженной выборке'):''),'pos']
+      `выручка ${bn(rev)} · маржа ${bn(mar)}`+(B.partial&&B.finScope?' · схема':''),'pos'],
+    ['Упущенная маржа',bn(lm),`упущенная выручка ${bn(lostRev)}<br>${lmKpiSub(T)}`,lm?'neg':'',
+      lmCardHelp(T,lostRev)]
   ];
 
   /* «Свод спроса» — карточка-сверка тождеств. По задаче владельца (2026-09-16)
@@ -3341,8 +3528,9 @@ function tabDM(){
       <div class="sub">Тождества между неограниченным спросом, планом, отгрузкой и непокрытым объёмом — проверка «бьётся / не бьётся»${B.demo?' · демо-агрегат (в демо нет independent_demand)':''}</div>
       ${covReconHtml(B,T,rev?mar/rev:0)}
       <p class="rec-note"><b>Как читать:</b> неограниченный спрос — сколько всего хотели клиенты; ограниченный спрос — сколько оптимизатор принял в план;
-      «не принято в план» — спрос, отсечённый ограничениями до плана; «дефицит плана» — что не отгрузили из принятого;
+      «не принято в план» (в водопаде — «Заказов 100% не покрыто») — спрос, отсечённый ограничениями до плана; «дефицит плана» — что не отгрузили из принятого;
       «не покрыто всего» — сумма двух потерь, это и есть база упущенной маржи при выборе «Непокрытый спрос».
+      Тождества в заказах (2026-10-05) — та же цепочка в счёте строк <code>demand_coverage</code>: всего = 100% не покрыто + частично + полностью.
       Строки «по построению» следуют из определений и расходятся только при ошибке данных; строки «сверка источников» независимо сравнивают
       <code>demand_coverage</code> и <code>marking_demand</code>.</p></div>
   </div>`;
@@ -3350,9 +3538,9 @@ function tabDM(){
   const html=`
   ${srcFold(B.partial?'w':(useUnc?'i':'w'),
     (B.partial?`детализация ${nf(B.orders)} из ${nf(B.ordersAll)} заказов · `:'')+(B.demo?'демо-агрегат покрытия · ':'')+(useUnc
-      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · база «${LM_BASES[T.base].t}»`
+      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · заказов ${nf(ord.total)} (${ordDCready?'demand_coverage':ord.src}) · база «${LM_BASES[T.base].t}»`
       :hasDC?'активны фильтры — расчёт по marking_demand':'нет independent_demand — расчёт по marking_demand'),
-    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; опоздания — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}».`
+    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; опоздания и счёт заказов — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}». Счёт заказов: ${ord.srcLong}.`
       :hasDC?`Активны фильтры: неограниченный спрос (<code>independent_demand</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
       :'Таблица <code>independent_demand</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}${
       B.partial?` <b>Детализация ограничена лимитом загрузки:</b> ${nf(B.orders)} заказов из ${nf(B.ordersAll)} по схеме. Цепочка спроса и Service Level посчитаны по агрегатам всей схемы (${nf(B.dem)} т плана), иначе незагруженные заказы попали бы в «не принято в план». Таблицы, разрезы и упущенная маржа ниже строятся по загруженной выборке: её средневзвешенная ставка ₽/т перенесена на полный объём базы.`:''}`)}
@@ -3360,7 +3548,12 @@ function tabDM(){
   ${kpisHtml(K)}
   <div class="grid">
     <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
-      <div class="sub">Тонны. Синие столбцы — уровни, красные — потери на каждом шаге. Клик по «Дефицит плана» — к таблице ниже</div><canvas id="d0"></canvas></div>
+      <div class="sub" id="d0sub">Тонны. Синие столбцы — уровни, красные — потери. Клик по столбцу — фильтр таблицы RCA</div>
+      <div class="seg" id="d0mode" role="group" aria-label="Единица водопада: тонны или заказы" style="margin:2px 0 10px">
+        <button type="button" class="btn" data-wfmode="tons">Тонны</button>
+        <button type="button" class="btn" data-wfmode="orders">Заказы</button>
+      </div>
+      <canvas id="d0" role="img" aria-label="Водопад спроса в выбранной единице измерения"></canvas></div>
     <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду</div>
       ${lg('#d1',[[CH.d3,'Отгружено'],[CH.d5,'Дефицит'],[CH.warn,'Service Level']])}<canvas id="d1"></canvas></div>
     <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div><canvas id="d2"></canvas></div>
@@ -3371,14 +3564,92 @@ function tabDM(){
     <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽. Клик — фильтр клиент + период</div><canvas id="d6"></canvas></div>
     <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту</div><canvas id="d8"></canvas></div>
     <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита</div><canvas id="d9"></canvas></div>
-    <div class="card w"><h3>Дефициты, упущенная маржа и корневые причины (RCA)</h3>
-      <div class="sub">Единая таблица покрытия. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей с фокусом на лимите${T.k!==1?`. Упущенная маржа приведена к непокрытому спросу неограниченного спроса (×${nf(T.k,2)} к дефициту заказа), поэтому сумма строк сходится с KPI`:''}</div><div id="d7"></div></div>
+    <div class="card w"><h3>Заказы, упущенная маржа и корневые причины (RCA)</h3>
+      <div class="sub">Все заказы водопада. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей${T.k!==1?`. Упущенная маржа приведена к базе KPI (×${nf(T.k,2)} к дефициту заказа) — сумма строк сходится с карточкой`:''}</div>
+      <div class="stage-chips" id="d7chips" role="group" aria-label="Быстрые фильтры по столбцам водопада"></div>
+      <div id="d7note"></div>
+      <div id="d7"></div></div>
   </div>`;
 
   setTimeout(()=>{
-    chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,v=>nf(v/1000,1)+'k т',
-      i=>{const b=wf[i];return `<b>${b.k}</b><br>${nf(Math.abs(b.v))} т`+(b.type==='delta'&&demUnc?`<br>${pc(Math.abs(b.v)/demUnc)} от неограниченного спроса`:'')},
-      i=>{if(wf[i].k==='Дефицит плана'){const el=$('#d7');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}});
+    /* ── Водопад: тонны/заказы + клик по столбцу = фильтр стадии таблицы RCA ──
+       Переключалка перерисовывает только этот канвас (как разрез упущенной
+       маржи в «Общем»), выбор запоминается в localStorage. */
+    const wfDraw=()=>{
+      const isOrd=DM_WF_MODE==='orders';
+      const wf=isOrd?wfO:wfT;
+      const sub=$('#d0sub');
+      if(sub)sub.textContent=isOrd
+        ?'Заказы (demand_coverage: 100% не покрыто + частично + полностью = все). Клик по столбцу — фильтр RCA'
+        :'Тонны. Синие — уровни, красные — потери. Клик по столбцу — фильтр RCA';
+      chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,
+        isOrd?v=>nf(v,0):v=>nf(v/1000,1)+'k т',
+        i=>{const b=wf[i],val=Math.abs(b.v);
+          let tip=`<b>${b.k}</b><br>`;
+          if(isOrd){
+            tip+=`${nf(val)} ${plural(val,['заказ','заказа','заказов'])}`;
+            const rule={all:'все строки demand_coverage — все заказы неограниченного спроса',
+              fullUnc:'fullfilleddemandqty = 0 — включая заказы вне плана',
+              inOpt:'все заказы минус 100% не покрытых (fullfilleddemandqty > 0)',
+              deficit:'частично покрытые: unfullfilleddemandqty > 0 и fullfilleddemandqty > 0',
+              plan:'полностью покрытые: unfullfilleddemandqty = 0 и fullfilleddemandqty > 0',
+              late:'полностью покрытые с demandfullfilledlateqty > 0',
+              intime:'полностью покрытые без опозданий'}[b.st];
+            if(rule)tip+=`<br>${rule}`;
+            if(b.type==='delta'&&ord.total>0)
+              tip+=`<br>${pc(val/ord.total)} ${ordDCready?'всех заказов':'заказов плана'}`;
+          }else{
+            tip+=`${nf(val)} т`;
+            if(b.type==='delta'&&demUnc>0)tip+=`<br>${pc(val/demUnc)} от неограниченного спроса`;
+          }
+          tip+=`<br>Клик — фильтр таблицы RCA`;
+          return tip},
+        i=>{DM_STAGE=wf[i].st||null;render();
+          setTimeout(()=>{const el=$('#d7');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})},0)});
+      $$('#d0mode .btn').forEach(b=>{const on=b.dataset.wfmode===DM_WF_MODE;
+        b.classList.toggle('p',on);b.setAttribute('aria-pressed',String(on))});
+    };
+    wfDraw();
+    $$('#d0mode .btn').forEach(b=>b.onclick=()=>{
+      if(DM_WF_MODE===b.dataset.wfmode)return;
+      DM_WF_MODE=b.dataset.wfmode==='orders'?'orders':'tons';
+      try{localStorage.setItem('inplan_dm_wf_mode',DM_WF_MODE)}catch(e){}
+      wfDraw();
+    });
+
+    /* ── Чипы быстрых фильтров по столбцам водопада + заметки о границах данных ── */
+    const stageCount=st=>st==='all'?ord.total:st==='fullUnc'?ord.fullUnc:st==='inOpt'?ord.inOpt
+      :st==='deficit'?ord.part:st==='plan'?ord.full:st==='late'?ord.late:st==='intime'?ord.intime:null;
+    const chipsHost=$('#d7chips');
+    if(chipsHost){
+      chipsHost.innerHTML=Object.entries(ORDER_STAGES).map(([k,v])=>{
+        const c=stageCount(k),on=DM_STAGE===k,dim=(k==='late'||k==='intime')&&c==null;
+        return `<button type="button" class="stage-chip${on?' on':''}" data-stage="${k}"${dim?' disabled':''}`
+          +` aria-pressed="${String(on)}"`
+          +` title="${dim?'Опоздания по заказам неизвестны — demand_coverage недоступна':'Показать в таблице заказы стадии «'+esc(v.t)+'» (повторный клик — сброс)'}"`
+          +`>${esc(v.t)}${c!=null?` <span class="n">${nf(c)}</span>`:''}</button>`;
+      }).join('');
+      chipsHost.querySelectorAll('[data-stage]').forEach(b=>b.onclick=()=>{
+        DM_STAGE=DM_STAGE===b.dataset.stage?null:b.dataset.stage;
+        render();
+        setTimeout(()=>{const el=$('#d7');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})},0);
+      });
+    }
+    const noteHost=$('#d7note');
+    if(noteHost){
+      let note='';
+      if(DM_STAGE==='late'||DM_STAGE==='intime'){
+        note=ord.late!=null
+          ?`Опоздания известны только агрегатом: с опозданием — <b>${nf(ord.late)}</b> из ${nf(ord.full)} полностью покрытых заказов${ord.lateAll>ord.late?`, всего с признаком опоздания — ${nf(ord.lateAll)} (включая частично покрытые)`:''}. По-заказная разбивка недоступна: в <code>demand_coverage</code> нет идентификатора заказа. Показаны все полностью покрытые заказы.`
+          :`Опоздания по заказам неизвестны — счётчики demand_coverage недоступны. Показаны все полностью покрытые заказы.`;
+      }else if(DM_STAGE==='fullUnc'&&ordDCready&&ord.fullUnc>stageRows.length){
+        note=`В столбце ${ordW(ord.fullUnc)}, в таблице — ${ordW(stageRows.length)}: остальные вне плана (их нет в <code>marking_demand</code>) и/или за лимитом детализации.`;
+      }else if(DM_STAGE&&stageCount(DM_STAGE)!=null&&stageCount(DM_STAGE)>stageRows.length&&DM_STAGE!=='all'){
+        note=`Стадия «${ORDER_STAGES[DM_STAGE].t}» — ${ordW(stageCount(DM_STAGE))} по всей схеме, в таблице — ${ordW(stageRows.length)}: детализация загружена с лимитом.`;
+      }
+      noteHost.innerHTML=note?`<div class="stage-note">${note}</div>`:'';
+    }
+
     chStackLine('#d1',H('#d1',270,0.48),per.map(p=>'P'+p.k),
       [{c:CH.d3,v:per.map(p=>p.sal)},{c:CH.d5,v:per.map(p=>p.unm)}],
       {c:CH.warn,v:per.map(p=>p.dem?p.sal/p.dem:0)},v=>nf(v/1000,0)+'k',
@@ -3411,6 +3682,14 @@ function tabDM(){
 
     dtable('#d7',[
       {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}" data-tree-mode="stages">№${v} ↗</span>`},
+      {k:'stage',t:'Стадия водопада',left:1,flt:1,
+        title:'Классификация по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично покрыто — есть отгрузка и дефицит; полностью покрыто — дефицита нет. Быстрые фильтры — чипы над таблицей',
+        v:o=>orderStageLabel(o),
+        f:(v,o)=>{const s=orderStageOf(o);
+          const st=s==='fullUnc'?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg);font-weight:600'
+            :s==='part'?'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)'
+            :'color:var(--scp-ok);border-color:var(--scp-ok);background:var(--scp-ok-bg)';
+          return `<span class="tag" style="${st}">${orderStageLabel(o)}</span>`}},
       {k:'loc',t:'Локация',left:1,flt:1},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
@@ -3448,14 +3727,16 @@ function tabDM(){
           +`<span class="tag gear" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" title="Открыть цепочку логистических мощностей заказа №${o.id} с фокусом на лимите">⚙</span></span>`}},
       {k:'lostRev',t:'Потер. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v),cls:()=>'neg'},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>lmS(o),f:v=>mln(v),cls:()=>'neg'}
-    ],defOrders,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
+    ],stageRows,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
   },0);
 
   const topDef=def[0],hiMar=D.slice().sort((a,b)=>b.mpt-a.mpt)[0];
   return html+summary('Резюме: спрос и покрытие',[
     {t:'Водопад',i:[
-      useUnc?`Неограниченный спрос <span class="h">${nf(demUnc)} т</span> = в план принято ${nf(dem)} т (${pc(demUnc?dem/demUnc:0)}) + не принято ${nf(notPlanned)} т; отгружено ${nf(sal)} т, из них в срок ${nf(inTime)} т.`
-        :`Ограниченный спрос <span class="h">${nf(dem)} т</span>, отгружено ${nf(sal)} т — Service Level ${pc(sl)}.`,
+      useUnc?`Неограниченный спрос <span class="h">${nf(demUnc)} т</span> (${ordW(ord.total)}) = в план принято ${nf(dem)} т (${pc(demUnc?dem/demUnc:0)}) + не принято ${nf(notPlanned)} т; план продаж ${nf(sal)} т, из них в срок ${nf(inTime)} т.`
+        :`Ограниченный спрос <span class="h">${nf(dem)} т</span>, план продаж ${nf(sal)} т — Service Level ${pc(sl)}.`,
+      ordDCready?`Заказы: всего ${nf(ord.total)} = 100% не покрыто ${nf(ord.fullUnc)} + в оптимизации ${nf(ord.inOpt)} (= частично покрытых ${nf(ord.part)} + полностью ${nf(ord.full)}); с опозданием — ${nf(ord.late)}, в срок — ${nf(ord.intime)}.`
+        :`Заказы (по ${ord.src==='marking_demand'?'marking_demand':'загруженной выборке'}): всего ${nf(ord.total)}, частично покрытых ${nf(ord.part)}, полностью ${nf(ord.full)}.`,
       useUnc?`Не покрыто всего <span class="h">${nf(B.gapTotal)} т</span> (${pc(demUnc?B.gapTotal/demUnc:0)} неограниченного спроса) = ${nf(notPlanned)} т вне плана + ${nf(unm)} т дефицита плана.`:'',
       (unm||B.gapTotal)?`Потери: ${bn(lostRev)} упущенной выручки по дефициту плана и <span class="h">${bn(T.lm)}</span> упущенной маржи по базе «${LM_BASES[T.base].t}» (${pc(mar?T.lm/mar:0)} текущего результата)${T.uncAvail?`; по дефициту плана — ${bn(T.lmPlan)}, по непокрытому спросу — ${bn(T.lmUnc)}`:''}.`:`Дефицита нет — спрос покрыт полностью.`,
       def.length?`Топ-позиция по упущенной марже: <span class="h">${topDef.k}</span> — ${nf(topDef.v)} т, ${bn(topDef.lm)}.`:'',
@@ -4475,6 +4756,36 @@ function tabDQ(){
       npShare>.5?'Больше половины спроса не дошло до плана: проверить ограничения модели (горизонт, мощности, лимиты заявок) — возможно, оптимизатор «не видит» часть спроса, а не отказывается от неё осознанно.'
               :'Объём вне плана учтён в базе «Непокрытый спрос» (переключатель рядом с методом расчёта LM).');
 
+    /* ── Счёт заказов по demand_coverage (задача владельца 2026-10-05) ──
+       Проверяем: (1) три countIf покрывают все строки; (2) строка
+       demand_coverage соответствует заказу — два независимых способа получить
+       «заказы вне плана» (разница числа строк и разница классификаций) должны
+       сойтись, иначе счёт заказов водопада завышен кратностью строк. */
+    const ordRowsD=num(covD.orderRows);
+    if(ordRowsD>0){
+      const aD=num(covD.fullyUncoveredOrders),bD=num(covD.partiallyCoveredOrders),cD=num(covD.fullyCoveredOrders);
+      const sumABC=aD+bD+cD;
+      add(sumABC===ordRowsD?'i':'e','Заказы: классификация',
+        sumABC===ordRowsD
+          ?`Все ${nf(ordRowsD)} ${plural(ordRowsD,['строка','строки','строк'])} <code>demand_coverage</code> разложены: 100% не покрыто ${nf(aD)} + частично покрыто ${nf(bD)} + полностью покрыто ${nf(cD)}; с опозданием (из полностью покрытых) — ${nf(num(covD.lateFullyCoveredOrders))}.`
+          :`Разбиение не сходится: 100% не покрыто ${nf(aD)} + частично ${nf(bD)} + полностью ${nf(cD)} = ${nf(sumABC)} против ${nf(ordRowsD)} строк.`,
+        sumABC===ordRowsD
+          ?'Водопад по заказам построен на полном разбиении — сумма частей равна целому.'
+          :'Проверить агрегат: три countIf обязаны покрывать все строки demand_coverage.');
+      const hasZeroSal=Object.prototype.hasOwnProperty.call(aggTD,'zeroSalOrders');
+      if(hasZeroSal&&num(aggTD.orders)>0){
+        const dRows=ordRowsD-num(aggTD.orders),dCls=aD-num(aggTD.zeroSalOrders);
+        const okOrd=Math.abs(dRows-dCls)<=Math.max(Math.abs(dRows),Math.abs(dCls))*0.005+1;
+        add(okOrd?'i':'w','Заказы: строка = заказ',
+          okOrd
+            ?`Строки <code>demand_coverage</code> соответствуют заказам: ${nf(ordRowsD)} строк = ${nf(num(aggTD.orders))} заказов плана + ${nf(Math.max(0,dCls))} вне плана (два независимых расчёта сошлись).`
+            :`Число строк <code>demand_coverage</code> (${nf(ordRowsD)}) расходится с заказами плана (${nf(num(aggTD.orders))}) + заказами с нулевой отгрузкой вне группы «100% не покрыто»: разница строк ${nf(dRows)}, разница классификаций ${nf(dCls)}.`,
+          okOrd
+            ?'Счёт заказов водопада корректен.'
+            :'Вероятно, строка demand_coverage — не заказ (несколько строк на заказ/период): счёт заказов водопада может быть завышен. Проверить гранулярность таблицы.');
+      }
+    }
+
     /* денежная сверка: та же формула и тот же допуск, что в блоке «Спрос и
        покрытие» (covMoneyCheck) — две вкладки не могут расходиться в оценке */
     const lostRevD=num(covD.lostRev);
@@ -4759,6 +5070,14 @@ function tabRAW(){
     {k:'prod',t:'Продукт',left:1,flt:1},
     {k:'cl',t:'Клиент',left:1,flt:1},
     {k:'chan',t:'Канал',flt:1},
+    /* Стадия водопада (2026-10-05): классификация заказа по правилам demand_coverage */
+    {k:'stage',t:'Стадия',left:1,flt:1,title:'Классификация заказа по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
+      v:o=>orderStageLabel(o),
+      f:(v,o)=>{const s=orderStageOf(o);
+        const st=s==='fullUnc'?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
+          :s==='part'?'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)'
+          :'color:var(--scp-ok);border-color:var(--scp-ok);background:var(--scp-ok-bg)';
+        return `<span class="tag" style="${st}">${orderStageLabel(o)}</span>`}},
     {k:'dem',t:'Спрос, т',num:1,f:v=>nf(v)},
     {k:'sal',t:'Продажи, т',num:1,f:v=>nf(v,1)},
     {k:'unm',t:'Дефицит, т',num:1,f:v=>nf(v,1),cls:v=>v>0?'neg':''},
@@ -7203,10 +7522,23 @@ function demoCoverage(ds){
      по средней цене дефицита (иначе демо-сверка с маржой расходилась бы в разы
      из-за того, что дешёвые отгрузки перевешивают в средней цене портфеля) */
   const defPrice=unm>0?S(ds.orders,o=>o.unm*o.price)/unm:(sal>0?S(ds.orders,o=>o.price*o.sal)/sal:0);
+  /* Счёт заказов по правилам demand_coverage (демо-синтез, задача 2026-10-05):
+     у загруженных заказов стадия считается по sal/unm (как в фолбэке
+     marking_demand), плюс ~12% заказов синтезируется «вне плана» — их нет
+     в marking_demand, поэтому в таблице RCA они не видны, но в счётчиках
+     водопада по заказам участвуют. Опоздания — 4% полностью покрытых. */
+  const ordFull=ds.orders.filter(o=>orderStageOf(o)==='full').length,
+    ordPart=ds.orders.filter(o=>orderStageOf(o)==='part').length,
+    ordFullUncDet=ds.orders.filter(o=>orderStageOf(o)==='fullUnc').length,
+    unpl=Math.round(ds.orders.length*0.12),
+    lateOrd=Math.round(ordFull*0.04);
   const byP=grp(ds.orders,o=>o.d||('P'+o.p),v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
     .sort((a,b)=>String(a.k).localeCompare(String(b.k)));
   ds.agg={demo:true,
     totals:{cov:{demUnc,ff:sal,uf:notPlanned+unm,inTime:Math.max(0,sal-late),late,
+      orderRows:ds.orders.length+unpl,
+      fullyUncoveredOrders:ordFullUncDet+unpl,partiallyCoveredOrders:ordPart,
+      fullyCoveredOrders:ordFull,lateOrdersAll:lateOrd,lateFullyCoveredOrders:lateOrd,
       lostRev:S(ds.orders,o=>o.unm*o.price)+notPlanned*defPrice,
       planRev:S(ds.orders,o=>o.rev)}},
     dims:{coverage:byP.map(r=>{const np=Math.round(r.dem*0.12);

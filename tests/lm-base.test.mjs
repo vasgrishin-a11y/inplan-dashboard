@@ -273,20 +273,36 @@ test('свод спроса: все тождества сходятся и по�
     assert.ok(close(left, right, 0.005), `тождество не сходится: ${left} против ${right}`);
     assert.match(cells[3].textContent, /сходится/, 'статус тождества — «сходится»');
   });
+  /* 2026-10-05: тождества счёта заказов (demand_coverage) — тоже равенства.
+     Единица — правильная форма множественного числа (41 заказ, 22 заказа, 37 заказов). */
+  const ordRowsN = rows.filter((r) => /заказ[аов]*$/.test(r.querySelectorAll('td')[1]?.textContent.trim() || ''));
+  assert.ok(ordRowsN.length >= 3, `тождеств по заказам не меньше трёх (факт: ${ordRowsN.length})`);
+  ordRowsN.forEach((r) => {
+    const cells = [...r.querySelectorAll('td')];
+    const left = parseNum(cells[1].textContent), right = parseNum(cells[2].textContent);
+    assert.ok(close(left, right, 0.005), `тождество заказов не сходится: ${left} против ${right}`);
+    assert.match(cells[3].textContent, /сходится/, 'статус тождества заказов — «сходится»');
+  });
+  assert.match(rows.map((r) => r.textContent).join(' | '), /Всего заказов = 100% не покрыто \+ частично \+ полностью/,
+    'тождество разбиения заказов показано');
   const moneyRow = rows.find((r) => /lostrevenue/i.test(r.textContent));
   assert.ok(moneyRow, 'денежная сверка с lostrevenue показана');
   assert.ok(parseBn(moneyRow.querySelectorAll('td')[1].textContent) > 0,
     'в демо-наборе денежная сверка ненулевая');
 
-  const cards = ['Неограниченный спрос', 'Не принято в план', 'Ограниченный спрос (план)',
-    'Отгружено', 'Дефицит плана', 'Не покрыто всего'];
+  /* 2026-10-05: карточки «Не принято в план», «Ограниченный спрос (план)»,
+     «Дефицит плана» убраны из ряда; «Отгружено» → «План продаж» */
+  const cards = ['Неограниченный спрос', 'План продаж', 'Не покрыто всего',
+    'Маржинальность продаж', 'Упущенная маржа'];
   cards.forEach((c) => assert.ok(ctx.kpi(c), `карточка «${c}» присутствует`));
+  for (const gone of ['Не принято в план', 'Ограниченный спрос (план)', 'Дефицит плана', 'Фактически отгружено с опозданием'])
+    assert.equal(ctx.kpi(gone), undefined, `карточки «${gone}» больше нет`);
   const unc = parseNum(ctx.kpi('Неограниченный спрос').querySelector('.v').textContent);
-  const lim = parseNum(ctx.kpi('Ограниченный спрос (план)').querySelector('.v').textContent);
-  const notPlan = parseNum(ctx.kpi('Не принято в план').querySelector('.v').textContent);
   const gap = parseNum(ctx.kpi('Не покрыто всего').querySelector('.v').textContent);
-  const ship = parseNum(ctx.kpi('Отгружено').querySelector('.v').textContent);
-  assert.ok(close(unc, lim + notPlan, 0.005), 'Неограниченный = Ограниченный + Не принято в план (карточки)');
+  const ship = parseNum(ctx.kpi('План продаж').querySelector('.v').textContent);
+  const V = JSON.parse(ctx.ev('(function(){const b=covBasis(fOrders());'
+    + 'return JSON.stringify({lim:b.dem,np:b.notPlanned})})()'));
+  assert.ok(close(unc, V.lim + V.np, 0.005), 'Неограниченный = Ограниченный + Не принято в план (covBasis)');
   assert.ok(close(unc, ship + gap, 0.005), 'Неограниченный = Отгружено + Не покрыто всего (карточки)');
 });
 
@@ -303,10 +319,12 @@ test('обе базы упущенной маржи видны одноврем�
   assert.equal(btns.filter((b) => b.disabled).length, 0, 'на демо-наборе обе базы доступны');
 
   const lmCard = () => ctx.kpi('Упущенная маржа');
+  const lmHelp = () => (lmCard().querySelector('.kpi-q') || {}).getAttribute('data-help') || '';
   const planVal = parseBn(lmCard().querySelector('.v').textContent);
   assert.match(lmCard().querySelector('.s').innerHTML, /база: дефицит плана/, 'по умолчанию база — дефицит плана');
-  assert.match(lmCard().querySelector('.s').textContent, /по непокрытому спросу/,
-    'в подписи сразу видно значение второй базы');
+  /* 2026-10-05 (п.6): подпись карточки сокращена до двух строк; значение второй
+     базы видно в подсказке «?» (метод/база/альтернатива) */
+  assert.match(lmHelp(), /по непокрытому спросу/, 'в подсказке «?» видно значение второй базы');
 
   const uncBtn = btns.find((b) => b.dataset.lmb === 'unc');
   uncBtn.click();
@@ -315,7 +333,7 @@ test('обе базы упущенной маржи видны одноврем�
   assert.equal(ctx.window.localStorage.getItem(LM_BASE_KEY), 'unc', 'выбор базы сохранён');
   const uncVal = parseBn(lmCard().querySelector('.v').textContent);
   assert.match(lmCard().querySelector('.s').innerHTML, /база: непокрытый спрос/, 'база переключилась');
-  assert.match(lmCard().querySelector('.s').textContent, /по дефициту плана/, 'вторая база осталась видна');
+  assert.match(lmHelp(), /по дефициту плана/, 'вторая база осталась видна в подсказке');
   assert.ok(uncVal > planVal, `по непокрытому спросу потери больше: ${uncVal} > ${planVal}`);
 
   const expected = JSON.parse(ctx.ev(`(function(){
@@ -388,7 +406,9 @@ test('упущенная маржа одна и та же в блоках «Об
   const read = async (tab) => {
     ctx.ev(`go('${tab}')`);
     await ctx.tick(40);
-    return parseBn(ctx.kpi('Упущенная маржа').querySelector('.v').textContent);
+    /* 2026-10-05: в «Общем» карточка объединена — «Упущенная маржа и выручка» */
+    const k = ctx.kpi('Упущенная маржа') || ctx.kpi('Упущенная маржа и выручка');
+    return parseBn(k.querySelector('.v').textContent);
   };
   const ov = await read('ov');
   const dm = await read('dm');
