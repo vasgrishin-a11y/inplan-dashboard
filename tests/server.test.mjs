@@ -259,6 +259,27 @@ test('POST /api/pg/unc — populated rows recover a false zero from the PG aggre
   });
 });
 
+test('POST /api/pg/unc — value-only recovery не зависит от bucket date/periodid', async () => {
+  const values = Array.from({ length: 210 }, (_, i) => ({ value: i === 0 ? '10000' : '0' }));
+  await withServer((sql) => {
+    if (/information_schema\.columns/.test(sql)) return { rows: PROD_COLS.map((c) => ({ c })) };
+    if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 0, n: 210 }] };
+    if (/AS value FROM/.test(sql)) return { rows: values };
+    if (/AS value, CASE/.test(sql)) return {
+      rows: [{ value: '10000', k: '2026-04' }],
+    };
+    throw new Error('period aggregate must not replace row-level recovery');
+  }, async (base) => {
+    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_4941', gran: 4 });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.demUnc, 10000, 'значение demandqty из 210 строк не теряется');
+    assert.equal(data.n, 210);
+    assert.equal(data.periods[0].demUnc, 10000);
+    assert.equal(data.diagnostics.demandqty.recovered, true);
+  });
+});
+
 test('POST /api/pg/unc — таблица без demandqty в схеме → 400 с объяснением', async () => {
   await withServer((sql) => {
     if (/information_schema\.columns/.test(sql)) return { rows: [{ c: 'x' }, { c: 'y' }] };

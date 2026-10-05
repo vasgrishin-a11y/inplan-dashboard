@@ -49,7 +49,7 @@ const MAX_SCHEMAS = 512;
      • ответил наш, но без нужного эндпоинта  → backend устарел, нужен npm start свежей версии;
      • ответил наш и с эндпоинтом             → настоящая ошибка Postgres. */
 const SERVICE = 'inplan-dashboard';
-const API_LEVEL = 5;
+const API_LEVEL = 6;
 const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/unc'];
 
 class HttpError extends Error {
@@ -382,13 +382,21 @@ function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
      for that case.  It uses exactly the same filtered/DISTINCT source, so it
      cannot silently change the definition or the deduplication semantics.
   */
+  /* A value-only probe is deliberately kept separate from the period
+     expression.  The latter is useful for the normal result, but it can be
+     the one thing that fails for an unusual date/periodid type.  It must not
+     prevent us from recovering the actual demandqty total. */
+  const rawTotal = {
+    sql: `SELECT s.${qi(qty)} AS value FROM (${src}) s`,
+    params
+  };
   const raw = {
     sql: `SELECT s.${qi(qty)} AS value` +
       (periodCol ? `, ${bucketKeyExpr('s.' + qi(periodCol), gran)} AS k` : '') +
       ` FROM (${src}) s`,
     params
   };
-  return { total, periods, raw, qty, keyCols, distinct };
+  return { total, periods, rawTotal, raw, qty, keyCols, distinct };
 }
 
 /* node-postgres returns numeric values as strings.  The normal form uses a
@@ -534,7 +542,11 @@ function createApp(deps) {
         try { tot = await db.query(q.total.sql, q.total.params); }
         catch (e) { throw friendlyPgError(e, conn); }
         const row = (tot.rows || [])[0] || {};
-        const sqlDemUnc = pgNumber(row.demUnc);
+        /* PostgreSQL folds an unquoted alias such as AS demUnc to demunc.
+           Test doubles often preserve the JavaScript spelling, so accept both
+           forms at the boundary instead of treating a valid SUM as NaN. */
+        const sqlValue = row.demUnc !== undefined ? row.demUnc : row.demunc;
+        const sqlDemUnc = pgNumber(sqlValue);
         let demUnc = Number.isFinite(sqlDemUnc) ? sqlDemUnc : 0;
         const n = Number(row.n) || 0;
         let recovered = false;
@@ -550,25 +562,69 @@ function createApp(deps) {
          * not a demand_coverage fallback and does not change the source.
          */
         if (n > 0 && (!Number.isFinite(sqlDemUnc) || sqlDemUnc === 0)) {
+          /* First read only demandqty.  This is intentionally independent of
+             date/periodid conversion: a malformed period value must never
+             turn a populated demand source into a zero. */
+          let raw = null;
           try {
-            const rawResult = await db.query(q.raw.sql, q.raw.params);
-            const raw = sumPgRows(rawResult.rows || []);
+            const rawResult = await db.query(q.rawTotal.sql, q.rawTotal.params);
+            raw = sumPgRows(rawResult.rows || []);
             rawDiagnostics = { n: rawResult.rows ? rawResult.rows.length : 0,
                                numericN: raw.count, demUnc: raw.total };
-            if (raw.count > 0 && raw.total !== 0) {
-              demUnc = raw.total;
-              recovered = true;
-              rawPeriods = raw.periods;
-            }
           } catch (e) {
-            /* Keep the primary aggregate result; diagnostics still identify
-               the source and the original SQL error is not an availability
-               failure. */
-            rawDiagnostics = { error: String((e && e.message) || 'не удалось прочитать строки') };
+            /* Older/custom PG drivers may reject the value-only probe.  The
+               period probe is the same DISTINCT set and is a useful second
+               chance because it also exercises the actual selected column. */
+            rawDiagnostics = { totalError: String((e && e.message) || 'не удалось прочитать demandqty') };
+          }
+
+          if (!raw || raw.count === 0) {
+            try {
+              const rawResult = await db.query(q.raw.sql, q.raw.params);
+              raw = sumPgRows(rawResult.rows || []);
+              rawDiagnostics = Object.assign(rawDiagnostics || {}, {
+                n: rawResult.rows ? rawResult.rows.length : 0,
+                numericN: raw.count, demUnc: raw.total
+              });
+            } catch (e) {
+              /* Keep the primary aggregate result; diagnostics still identify
+                 the source and the original SQL error is not an availability
+                 failure. */
+              rawDiagnostics = Object.assign(rawDiagnostics || {}, {
+                rowsError: String((e && e.message) || 'не удалось прочитать строки')
+              });
+            }
+          }
+
+          if (raw && raw.count > 0 && raw.total !== 0) {
+            demUnc = raw.total;
+            recovered = true;
+            /* If the value-only query happened to be mocked/served with a
+               period key, retain it; otherwise the period probe below fills
+               the map from the exact same DISTINCT source. */
+            rawPeriods = raw.periods.size ? raw.periods : null;
           }
         }
 
         let periods = [];
+        if (recovered && q.periods && !rawPeriods) {
+          try {
+            const rawResult = await db.query(q.raw.sql, q.raw.params);
+            const raw = sumPgRows(rawResult.rows || []);
+            rawPeriods = raw.periods.size ? raw.periods : null;
+            rawDiagnostics = Object.assign(rawDiagnostics || {}, {
+              periodRows: rawResult.rows ? rawResult.rows.length : 0,
+              periodNumericN: raw.count
+            });
+          } catch (e) {
+            /* The total is already recovered from demandqty.  Do not throw
+               and make the dashboard lose the whole source merely because
+               the optional period bucket cannot be built. */
+            rawDiagnostics = Object.assign(rawDiagnostics || {}, {
+              periodError: String((e && e.message) || 'не удалось построить разрез по периодам')
+            });
+          }
+        }
         if (recovered && rawPeriods) {
           periods = [...rawPeriods.entries()]
             .map(([k, value]) => ({ k, demUnc: value }))
@@ -576,7 +632,10 @@ function createApp(deps) {
         } else if (q.periods) {
           try {
             const p = await db.query(q.periods.sql, q.periods.params);
-            periods = (p.rows || []).map(r => ({ k: String(r.k), demUnc: pgNumber(r.demUnc) || 0 }));
+            periods = (p.rows || []).map(r => {
+              const value = r.demUnc !== undefined ? r.demUnc : r.demunc;
+              return { k: String(r.k), demUnc: pgNumber(value) || 0 };
+            });
           } catch (e) { throw friendlyPgError(e, conn); }
         }
         res.json({

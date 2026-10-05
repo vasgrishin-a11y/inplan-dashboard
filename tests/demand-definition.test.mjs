@@ -205,7 +205,7 @@ test('когда вход (independent_demand) согласован с исхо�
     'подтверждение, а не предупреждение');
 });
 
-test('нулевой independent_demand — не маскируем demand_coverage, а показываем нулевой вход', async (t) => {
+test('нулевой independent_demand — возвращаем demand_coverage как фолбэк', async (t) => {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', () => {});
   const dom = new JSDOM(fs.readFileSync(HTML, 'utf8'), {
@@ -244,20 +244,22 @@ test('нулевой independent_demand — не маскируем demand_cover
   d.getElementById('chmLoad').click();
   await waitFor(() => w.CHX.versions.length === 2, 20000, 'версии загружены');
 
-  /* загрузчик зафиксировал прочитанный PG-источник: заметка есть, но фолбэка нет */
+  /* PostgreSQL прочитан, но нулевой вход переключает показатель на покрытие. */
   const notes = w.CHX.versions.map((v) => (v.agg.notes || []).join(' ')).join(' ');
   assert.match(notes, /Σ demandqty = 0/, 'нулевой вход зафиксирован в заметках загрузки');
-  assert.match(notes, /фолбэк demand_coverage не применён/, 'подмена источника не скрывает нулевой demandqty');
+  assert.match(notes, /применён фолбэк demand_coverage/, 'фолбэк явно зафиксирован');
   assert.ok(!/independent_demand недоступна/.test(notes), 'нулевой PG-ответ не называется недоступностью');
-  assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'independentdemand',
-    'источник неограниченного спроса остаётся independent_demand');
+  assert.equal(w.CHX.versions[0].agg.totals.uncSrc, 'demand_coverage',
+    'источник переключён на demand_coverage');
+  assert.equal(w.CHX.versions[0].agg.totals.cov.demUnc, 1200,
+    'покрытый+непокрытый используются как итог');
   assert.equal(w.CHX.versions[0].agg.totals.cov.demUncCov, 1200,
-    'покрытый+непокрытый сохранены отдельно для сверки');
+    'покрытый+непокрытый сохранены');
 
   w.go('dm');
   await settle(250);
   const unlim = [...d.querySelectorAll('#main .kpi')]
     .find((k) => ((k.querySelector('.t') || {}).textContent || '').trim() === 'Неограниченный спрос');
-  assert.equal(toNum(unlim.querySelector('.v').textContent), 0,
-    'карточка показывает прочитанный нулевой вход, а не покрытый+непокрытый');
+  assert.equal(toNum(unlim.querySelector('.v').textContent), 1200,
+    'карточка показывает фолбэк из demand_coverage');
 });
