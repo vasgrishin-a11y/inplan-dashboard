@@ -947,12 +947,26 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
     return s ? Number(s.slice(0,8)) : 0;
   };
   const dueRanks=[...new Set(inputRows.map(r=>rank(r.periodid||r.date)).filter(Boolean))].sort((a,b)=>a-b);
-  const periodPosition=v=>{
-    const r=rank(v);if(!r)return 0;
-    /* marking_demand.demand_period часто хранит номер бакета P1/P2, тогда
-       как PG periodid хранит 4YYYYMMDD. Сопоставляем номер с позицией даты
-       во временном горизонте; календарные значения сравниваем напрямую. */
-    return r<10000 ? r : (dueRanks.indexOf(r)+1||r);
+  const planPeriods=[...new Set(markingOrders.map(o=>pnum(o.p)))].sort((a,b)=>a-b);
+  /* Совпавшие строки дают точный мост «календарный periodid → P-бакет плана».
+     Он нужен непарным строкам: раньше 420270401 превращался в P420270401, пока
+     тот же апрель в marking_demand назывался P0. */
+  const dueToPlan=new Map();
+  const periodPosition=(v,isDue)=>{
+    const r=rank(v);if(!r&&String(v)!=='0'&&String(v).toUpperCase()!=='P0')return 0;
+    if(isDue||r>=10000){const i=dueRanks.indexOf(r);return i>=0?i+1:0}
+    const p=pnum(v);return planPeriods.includes(0)?p+1:(p===0?1:p);
+  };
+  const canonicalPeriod=due=>{
+    const r=rank(due),i=dueRanks.indexOf(r);
+    if(dueToPlan.has(r))return dueToPlan.get(r);
+    /* Для неизвестной даты продолжаем ближайшее известное соответствие. */
+    const anchors=[...dueToPlan.entries()].map(([dr,p])=>({i:dueRanks.indexOf(dr),p:pnum(p)}))
+      .filter(a=>a.i>=0).sort((a,b)=>Math.abs(a.i-i)-Math.abs(b.i-i));
+    if(anchors.length&&i>=0)return Math.max(0,anchors[0].p+(i-anchors[0].i));
+    if(i>=0&&planPeriods[i]!==undefined)return planPeriods[i];
+    if(i>=0&&planPeriods.length)return Math.max(0,planPeriods[0]+i);
+    return Math.max(0,i);
   };
   const pools=new Map();
   inputRows.forEach((r,i)=>{
@@ -976,11 +990,12 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
     if(!list.length)return o;
     list.sort((a,b)=>Math.abs(num(a.demandqty)-num(o.dem))-Math.abs(num(b.demandqty)-num(o.dem)));
     const r=list[0];r._used=true;
-    const due=r.periodid||r.date, allowed=lateAllowed(o);
-    const late=allowed&&num(o.sal)>ORD_TOL&&periodPosition(o.p)>0&&periodPosition(due)>0
-      &&periodPosition(o.p)>periodPosition(due);
+    const due=r.periodid||r.date, dueRank=rank(due),allowed=lateAllowed(o);
+    if(dueRank)dueToPlan.set(dueRank,pnum(o.p));
+    const late=allowed&&num(o.sal)>ORD_TOL&&periodPosition(o.p,false)>0&&periodPosition(due,true)>0
+      &&periodPosition(o.p,false)>periodPosition(due,true);
     return Object.assign({},o,{independentSourceId:r.sourceId,duePeriod:due,
-      lateAllowed:allowed,late:!!late});
+      duePeriodKey:normalizePeriodKey(due),lateAllowed:allowed,late:!!late});
   });
   inputRows.forEach((r,i)=>{
     const pool=pools.get(key(r.item,r.loc,r.demandtype,r.dmdstream))||[];
@@ -989,7 +1004,8 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
     const qty=num(r.demandqty), due=r.periodid||r.date;
     out.push({
       id:-1000000000-i, idLabel:'ID-'+(r.sourceId||i+1), independentOnly:true,
-      independentSourceId:r.sourceId||i+1, p:pnum(due), d:String(r.date||''),
+      independentSourceId:r.sourceId||i+1, p:canonicalPeriod(due), d:normalizePeriodKey(r.date||due),
+      periodSource:String(due||''), periodKey:normalizePeriodKey(due),
       loc:String(r.loc||''), prod:String(r.item||''), cl:'—', stream:String(r.dmdstream||''),
       dt:r.demandtype, dtype:r.demandtype, pr:0, dem:qty, sal:0, unm:qty,
       price:0,cpt:0,mpt:0,rev:0,cost:0,mar:0,mph:0,duePeriod:due,
@@ -1007,7 +1023,10 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
     const src=byProd.length?byProd:refs;
     o.price=median(src.map(x=>num(x.price)).filter(v=>v>0))||gp;
     o.cpt=median(src.map(x=>num(x.cpt)).filter(v=>v>=0))||gc;
-    o.mpt=Math.max(0,o.price-o.cpt); o.rev=o.dem*o.price; o.cost=o.dem*o.cpt; o.mar=o.dem*o.mpt;
+    /* Цена и маржа на тонну нужны для оценки потерь. Фактические выручка,
+       себестоимость и валовая маржа остаются нулевыми: заказ не был продан и
+       не должен попадать в финансовый результат как будто выполненный. */
+    o.mpt=Math.max(0,o.price-o.cpt); o.rev=0; o.cost=0; o.mar=0;
   });
   let next=out.filter(o=>!o.independentOnly).length;
   out.filter(o=>o.independentOnly).forEach(o=>o.idLabel='ID-'+(++next));

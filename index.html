@@ -285,6 +285,20 @@ main{padding:20px 32px 72px;flex:1}
 .card.w{grid-column:1/-1}
 .card h3{margin:0;font:600 15px/20px 'Open Sans',sans-serif;color:var(--scp-text)}
 .card .sub{font-size:12px;line-height:16px;color:var(--scp-text-3);margin:3px 0 10px}
+/* Локальный переключатель охвата графика. По умолчанию каждый график строится
+   только по заказам «Плана продаж»; флажок точечно добавляет 100% непокрытые
+   заказы, не меняя KPI, таблицы и соседние графики. */
+.chart-scope{display:inline-flex;align-items:center;gap:7px;margin:-3px 0 8px;
+  font:400 11.5px/16px 'Open Sans',sans-serif;color:var(--scp-text-3);cursor:pointer;
+  user-select:none}
+.chart-scope input{position:absolute;opacity:0;pointer-events:none}
+.chart-scope .track{position:relative;width:28px;height:16px;flex:0 0 28px;border-radius:9999px;
+  background:var(--scp-n-300);transition:background .15s ease}
+.chart-scope .track::after{content:'';position:absolute;left:2px;top:2px;width:12px;height:12px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .15s ease}
+.chart-scope input:checked+.track{background:var(--scp-accent)}
+.chart-scope input:checked+.track::after{transform:translateX(12px)}
+.chart-scope input:focus-visible+.track{outline:2px solid var(--scp-accent);outline-offset:2px}
 canvas{width:100%;display:block;cursor:pointer}
 .lg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--scp-text-2);
   padding:2px 0 8px;justify-content:center}
@@ -952,6 +966,22 @@ const rate=(a,b,unit,d)=>b>0?nf(a/b,d||0)+(unit||''):'—';
 const pcOf=(a,b)=>b>0?pc(a/b):'—';
 const S=(a,f)=>a.reduce((s,o)=>s+(f(o)||0),0);
 const uq=(a,f)=>[...new Set(a.map(f).filter(x=>x!==''&&x!=null))].sort();
+/* Единое представление периода во всём интерфейсе. Внутри заказов хранится
+   канонический номер бакета (0, 1, …), снаружи он всегда называется P0, P1, … .
+   Если источник уже отдал календарный ключ, не добавляем к нему лишнюю P. */
+function periodLabel(v){
+  if(v===undefined||v===null||v==='')return '—';
+  const s=String(v).trim();
+  if(!s)return '—';
+  if(/^P\d+$/i.test(s))return 'P'+String(parseInt(s.replace(/\D/g,''),10));
+  if(/^-?\d+$/.test(s))return 'P'+String(parseInt(s,10));
+  return s;
+}
+function periodCompare(a,b){
+  const an=/^P?-?\d+$/i.test(String(a)),bn2=/^P?-?\d+$/i.test(String(b));
+  if(an&&bn2)return pnum(a)-pnum(b);
+  return String(a).localeCompare(String(b),'ru',{numeric:true});
+}
 function grp(a,k,ag){const m=new Map();a.forEach(o=>{const key=k(o);if(!m.has(key))m.set(key,[]);m.get(key).push(o)});
   return [...m].map(([key,rows])=>({k:key,n:rows.length,rows,...ag(rows)}))}
 /* ═══════════════ 3.4. ПОРОГИ УЗКИХ МЕСТ (единые для всех блоков) ═══════════════
@@ -1052,13 +1082,8 @@ const LM_TABS=['ov','dm'];
 function lmTotalFor(mode,D){
   const keep=LM_MODE;LM_MODE=mode;
   try{
-    const plan=S(D,lmVal);
-    if(LM_BASE!=='unc'||!LM_B||!LM_B.useUnc||!(LM_B.gapTotal>0))return plan;
-    const dn=num(LM_B.unmDet)||LM_B.gapPlan;   // тот же знаменатель, что в lmTotals
-    if(dn>0)return plan*(LM_B.gapTotal/dn);
-    /* дефицита плана нет вовсе — непокрытый объём оцениваем маржой на тонну портфеля */
-    const sal=S(D,o=>o.sal);
-    return sal>0?LM_B.gapTotal*(S(D,o=>o.mar)/sal):0;
+    if(!LM_B)return S((D||[]).filter(o=>!o.independentOnly),lmVal);
+    return lmTotals(LM_B,D).lm;
   }finally{LM_MODE=keep}
 }
 /* Богатая подсказка метода: формула, бизнес-смысл, когда применять,
@@ -1150,18 +1175,17 @@ function lmSegBuild(){
 
    Непокрытый спрос от неограниченного = неограниченный − отгружено
      = «не принято в план» + «дефицит плана».
-   Это полная цена отказа: часть спроса вообще не попала в план, и в заказах
-   её тонн нет.
+   Это полная цена отказа: часть спроса вообще не попала в план. Если backend
+   отдал построчный independent_demand, такие строки представлены отдельными
+   заказами independentOnly; иначе остаются агрегатным остатком.
 
    Упущенная маржа считается по одной из двух баз (переключатель рядом с методом):
-     «Дефицит плана»    — Σ (unm заказа × ставка метода). Единственная база, где у
-                          каждой тонны есть свой заказ, цена и маржа; работает под
-                          фильтрами.
-     «Непокрытый спрос» — непокрытый объём × ставка. Тонны «не принято в план» своей
-                          цены не имеют, поэтому ставка берётся средневзвешенная по
-                          дефициту плана (₽/т активного метода). Масштаб
-                          k = непокрытый спрос / дефицит плана применяется ко всем
-                          разрезам, поэтому графики и таблицы сходятся с KPI.
+     «Дефицит плана»    — Σ (unm заказа × ставка метода). Каждая тонна относится
+                          к заказу marking_demand; база работает под фильтрами.
+     «Непокрытый спрос» — дефицит плана + спрос вне плана. Первая часть
+                          распределяется по marking_demand, вторая — по строкам
+                          independentOnly. При отсутствии полной детализации остаток
+                          хранится отдельно в unattr; строки плюс остаток сходятся с KPI.
    Если неограниченного спроса нет (нет independent_demand и demand_coverage),
    он нулевой или активны фильтры — база автоматически возвращается к
    «Дефициту плана» (прежнее поведение). */
@@ -1174,8 +1198,9 @@ function lmSegBuild(){
    Три группы — разбиение всех строк: сумма равна общему числу строк.
    В demand_coverage нет идентификатора заказа (подтверждено владельцем),
    поэтому по-заказная стадия строится по marking_demand: ff ≈ sal
-   (покрытый = отгруженный), uf ≈ unm. Заказы вне плана в marking_demand
-   отсутствуют — они видны только агрегатом (водопад по заказам, счётчики). */
+   (покрытый = отгруженный), uf ≈ unm. При построчном independent_demand
+   заказы вне плана добавляются как independentOnly; без него видны только
+   агрегатом (водопад по заказам, счётчики). */
 const ORD_TOL=1e-9;
 const orderStageOf=o=>num(o.sal)<=ORD_TOL?'fullUnc':(num(o.unm)>ORD_TOL?'part':'full');
 const ORDER_STAGES={
@@ -1188,6 +1213,39 @@ const ORDER_STAGES={
 };
 /* Короткая подпись стадии для колонки таблицы */
 const orderStageLabel=o=>o.late?'Отгружено с опозданием':({fullUnc:'100% не покрыто',part:'Частично покрыто',full:'Полностью покрыто'})[orderStageOf(o)];
+/* Отображаемый номер заказа — одна точка для «Общего», RCA и «Данных».
+   У independent_demand физически нет order_id, поэтому для непопавших в план
+   строк используется стабильная метка ID-N, созданная при объединении реестров;
+   отрицательный технический id никогда не показывается пользователю. */
+function orderDisplayId(o){
+  return o&&o.independentOnly?String(o.idLabel||('ID-'+(o.independentSourceId||''))):'№'+String(o&&o.id!=null?o.id:'');
+}
+function orderIdCell(o,link){
+  const id=orderDisplayId(o);
+  if(!o||o.independentOnly||!link)
+    return `<span${o&&o.independentOnly?' title="Строка independent_demand не попала в план"':''}>${esc(id)}</span>`;
+  return `<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа ${esc(id)}" data-goto-order="${o.id}" data-tree-mode="stages">${esc(id)} ↗</span>`;
+}
+/* Охват каждого графика независим. false (по умолчанию) — только «План
+   продаж»; true — все заказы, включая 100% непокрытые. */
+const CHART_ALL={};
+const chartShowsAll=id=>!!CHART_ALL[id];
+const salesPlanOrders=D=>(D||[]).filter(o=>orderStageOf(o)!=='fullUnc');
+const chartOrders=(id,D)=>chartShowsAll(id)?(D||[]):salesPlanOrders(D);
+function chartScopeHtml(id,D){
+  const n=(D||[]).filter(o=>orderStageOf(o)==='fullUnc').length;
+  if(!n)return '';
+  const on=chartShowsAll(id);
+  return `<label class="chart-scope" title="По умолчанию график показывает только заказы Плана продаж. Включите, чтобы добавить 100% непокрытые заказы.">
+    <input type="checkbox" data-chart-all="${esc(id)}" ${on?'checked':''} aria-label="${on?'Показаны все заказы, включая 100% непокрытые':'Показан только План продаж; включить все заказы'}" aria-checked="${on}">
+    <span class="track" aria-hidden="true"></span><span>${on?'Все заказы':'План продаж'}</span></label>`;
+}
+document.addEventListener('change',e=>{
+  const t=e.target&&e.target.closest&&e.target.closest('[data-chart-all]');
+  if(!t)return;
+  CHART_ALL[t.dataset.chartAll]=!!t.checked;
+  if(DS)render();
+});
 /* Подходит ли заказ под стадию водопада. Для «С опозданием»/«В срок»
    по-заказных данных нет (нет order_id в demand_coverage): фильтруем до
    надёжного надмножества — полностью покрытых заказов, — а точные агрегаты
@@ -1204,14 +1262,18 @@ function orderStageMatch(o,st){
 function covBasis(D){
   const agg=(DS&&DS.agg)||{}, cov=(agg.totals||{}).cov||{}, dims=((agg.dims||{}).coverage||[]);
   const demo=!!agg.demo;   // агрегат синтезирован для демо-набора, а не пришёл из ClickHouse
-  /* По ЗАГРУЖЕННЫМ заказам: по ним строятся по-заказные разрезы, ставки и
-     упущенная маржа. Может быть урезанной выборкой — см. ниже. */
-  const demDet=S(D,o=>o.dem), salDet=S(D,o=>o.sal), unmDet=S(D,o=>o.unm);
-  const revDet=S(D,o=>o.rev), costDet=S(D,o=>o.cost), marDet=S(D,o=>o.mar);
+  /* По ЗАГРУЖЕННЫМ заказам плана: independent_demand дополняет RCA строками,
+     которые в marking_demand не попали. Их нельзя второй раз прибавлять к
+     ограниченному спросу, выручке и марже: это входной реестр, а не результат
+     плана. Раньше при активном фильтре такие строки завышали dem/unm и добавляли
+     в фактическую маржу оценочную экономику 100% непокрытого спроса. */
+  const planD=(D||[]).filter(o=>!o.independentOnly);
+  const demDet=S(planD,o=>o.dem), salDet=S(planD,o=>o.sal), unmDet=S(planD,o=>o.unm);
+  const revDet=S(planD,o=>o.rev), costDet=S(planD,o=>o.cost), marDet=S(planD,o=>o.mar);
   /* «Без дефицита» — с допуском: unsatisfied_demand приходит Decimal(18,12),
      и строгое !o.unm считает дефицитом шум в двенадцатом знаке. Тот же допуск
      1e-9 использует агрегат ClickHouse (countIf(unm <= 0.000000001)). */
-  const fullDet=D.filter(o=>!(o.unm>1e-9)).length;
+  const fullDet=planD.filter(o=>!(o.unm>1e-9)).length;
   const fActive=Object.values(F).some(a=>a.length);
   const ff=num(cov.ff), uf=num(cov.uf);
   const aggT=agg.totals||{};
@@ -1284,18 +1346,21 @@ function covBasis(D){
       inOpt:ordDC.rows-ordDC.fullUnc,late:lateFC,
       /* «План продаж» объединяет частично и полностью покрытые заказы. */
       intime:(ordDC.rows-ordDC.fullUnc)-lateFC,
+      /* OTIF — только полностью покрытые и не опоздавшие. Не используем
+         intime: туда по тождеству водопада входят и частично покрытые. */
+      otif:Math.max(0,ordDC.full-lateFC),
       lateAll:ordDC.lateAll,byOrder:fromIndependent};
     ordSrc=fromIndependent?'independent_demand':'demand_coverage';
   }else if(!fActive&&mdOrders>0&&(zMD>0||pMD>0||fMD>0)){
     ord={total:mdOrders,fullUnc:zMD,part:pMD,full:fMD,inOpt:pMD+fMD,
-      late:null,intime:null,lateAll:null,byOrder:false};
+      late:null,intime:null,otif:null,lateAll:null,byOrder:false};
     ordSrc='marking_demand';
   }else{
     const z=D.filter(o=>orderStageOf(o)==='fullUnc').length,
       p=D.filter(o=>orderStageOf(o)==='part').length,
       f=D.filter(o=>orderStageOf(o)==='full').length;
     ord={total:D.length,fullUnc:z,part:p,full:f,inOpt:p+f,
-      late:null,intime:null,lateAll:null,byOrder:false};
+      late:null,intime:null,otif:null,lateAll:null,byOrder:false};
     ordSrc=fActive?'выборка под фильтрами':'загруженные заказы';
   }
   ord.src=ordSrc;
@@ -1304,8 +1369,8 @@ function covBasis(D){
     ['marking_demand']:'marking_demand — заказы плана, агрегат по всей схеме (demand_coverage недоступна)',
     ['выборка под фильтрами']:'загруженная выборка под фильтрами (demand_coverage не режется фильтрами)',
     ['загруженные заказы']:'загруженные заказы (demand_coverage недоступна)'}[ordSrc];
-  return {hasDC,useUnc,fActive,demo,orders:D.length,
-    ordersAll:num(aggT.orders)||D.length,
+  return {hasDC,useUnc,fActive,demo,orders:planD.length,ordersInput:D.length,
+    ordersAll:num(aggT.orders)||planD.length,
     scope:schemaScope?'schema':'detail',partial,
     dem,sal,unm,demDet,salDet,unmDet,
     rev,cost,mar,full,revDet,costDet,marDet,fullDet,finScope,
@@ -1388,39 +1453,75 @@ const LM_BASES={
 const LM_BASE_KEY='inplan_lm_base';
 const lmBaseMode=()=>{try{const v=localStorage.getItem(LM_BASE_KEY);return LM_BASES[v]?v:'plan'}catch(e){return 'plan'}};
 let LM_BASE=lmBaseMode();
-let LM_K=1, LM_B=null, LM_T=null, LM_UNATTR=0;
-/* Значение упущенной маржи заказа под активной базой: масштаб k применяется ко
-   всем разрезам (KPI, графики, таблицы), поэтому всё сходится с итогом. */
-const lmS=o=>lmVal(o)*LM_K;
+let LM_K=1, LM_INDEP_K=0, LM_B=null, LM_T=null, LM_UNATTR=0;
+let LR_PLAN_K=1, LR_INDEP_K=0, LR_UNATTR=0, LR_T=null;
+/* Значения строк под активной базой. Заказы independent_demand, которых нет в
+   плане, имеют отдельный коэффициент: их оценочная экономика распределяет
+   только объём «не принято в план» и никогда не попадает в базу «Дефицит
+   плана». Это устраняет двойной счёт после объединения реестров. */
+const lmS=o=>lmVal(o)*(o&&o.independentOnly?LM_INDEP_K:LM_K);
+const lostRevVal=o=>num(o&&o.unm)*num(o&&o.price);
+const lostRevS=o=>lostRevVal(o)*(o&&o.independentOnly?LR_INDEP_K:LR_PLAN_K);
 /* Обе базы сразу: активная идёт в KPI и графики, вторая — в подпись, чтобы бизнес
    видел вилку, а не только выбранный вариант. */
 function lmTotals(B,D){
-  /* Упущенная маржа считается по-заказно, то есть по ЗАГРУЖЕННОЙ выборке, а
-     объёмы цепочки (дефицит плана, непокрытый спрос) — по всей схеме. Поэтому
-     из заказов берём ставку ₽/т, а не сумму: lm = ставка × объём базы. При
-     полной детализации множитель равен 1 и поведение прежнее. */
-  const lmDet=S(D,lmVal);
-  const unmDet=num(B.unmDet)||B.gapPlan;     // объём дефицита, которому отвечает lmDet
-  const kPlan=unmDet>0?B.gapPlan/unmDet:1;
-  const lmPlan=lmDet*kPlan;
+  const planD=(D||[]).filter(o=>!o.independentOnly),indD=(D||[]).filter(o=>o.independentOnly);
+  /* Ставка строится только по marking_demand. Оценочные строки входного спроса
+     не должны влиять на ставку дефицита плана. */
+  const lmDet=S(planD,lmVal),unmDet=S(planD,o=>o.unm)||num(B.unmDet)||B.gapPlan;
   const uncAvail=!!(B.useUnc&&B.gapTotal>0);
-  let lmUnc=lmPlan,k=kPlan,unattr=0,rate=unmDet>0?lmDet/unmDet:0,rateSrc='ставка метода по заказам';
-  if(uncAvail){
-    if(unmDet>0){rate=lmDet/unmDet;k=B.gapTotal/unmDet;lmUnc=lmDet*k;
-      rateSrc='средневзвешенная ставка дефицита плана'}
-    else{const sal=S(D,o=>o.sal);rate=sal>0?S(D,o=>o.mar)/sal:0;unattr=B.gapTotal*rate;lmUnc=unattr;
-      rateSrc='маржа на тонну отгруженного портфеля (дефицита плана нет)'}
+  let rate=unmDet>0?lmDet/unmDet:0,rateSrc='ставка метода по заказам плана';
+  if(!(rate>0)){
+    const sal=S(planD,o=>o.sal);
+    rate=sal>0?S(planD,o=>o.mar)/sal:0;
+    if(rate>0)rateSrc='маржа на тонну отгруженного портфеля (дефицита плана нет)';
   }
+  /* Итог считается от объёма цепочки, а коэффициенты лишь распределяют его по
+     доступным строкам. При урезанной детализации нераспределённая часть явно
+     остаётся в unattr, а не исчезает из KPI. */
+  const lmPlan=B.gapPlan*rate,kPlan=lmDet>0?lmPlan/lmDet:0;
+  const outside=uncAvail?Math.max(0,B.gapTotal-B.gapPlan):0;
+  const lmOutside=outside*rate,rawInd=S(indD,lmVal);
+  const indepK=rawInd>0?lmOutside/rawInd:0;
+  const unattr=(lmPlan>0&&lmDet<=0?lmPlan:0)+(lmOutside>0&&rawInd<=0?lmOutside:0);
+  const lmUnc=lmPlan+lmOutside;
   const on=LM_BASE==='unc'&&uncAvail;
-  return {lmPlan,lmUnc,uncAvail,rate,rateSrc,
-    k:on?k:kPlan,unattr:on?unattr:0,lm:on?lmUnc:lmPlan,base:on?'unc':'plan'};
+  if(unmDet>0&&lmDet>0)rateSrc='средневзвешенная ставка дефицита плана';
+  /* k оставлен как общий коэффициент базы для внешней диагностики; строки
+     распределяются более точно через planK / indepK. */
+  const k=on&&unmDet>0?B.gapTotal/unmDet:kPlan;
+  return {lmPlan,lmUnc,uncAvail,rate,rateSrc,k,planK:kPlan,
+    indepK:on?indepK:0,outside,unattr:on?unattr:0,
+    lm:on?lmUnc:lmPlan,base:on?'unc':'plan'};
 }
-/* Точка входа блока: считает базу и масштабы, выставляет LM_K/LM_B/LM_UNATTR,
-   после которых lmS(o) и lmRowHtml() дают согласованные значения. */
+/* Упущенная выручка использует тот же охват и ту же базу, что упущенная маржа.
+   Раньше обе вкладки дублировали похожие формулы, а подпись говорила «дефицит
+   плана», хотя число было масштабировано до всего непокрытого спроса. */
+function lostRevenueTotals(B,D,T){
+  const planD=(D||[]).filter(o=>!o.independentOnly),indD=(D||[]).filter(o=>o.independentOnly);
+  const rawPlan=S(planD,lostRevVal),unmDet=S(planD,o=>o.unm)||num(B.unmDet)||B.gapPlan;
+  /* Если в детализации нет дефицита, цену отказа всё равно можно оценить по
+     средневзвешенной цене выполненного (или планового) объёма. */
+  const sal=S(planD,o=>o.sal),dem=S(planD,o=>o.dem);
+  const rate=unmDet>0&&rawPlan>0?rawPlan/unmDet
+    :sal>0?S(planD,o=>num(o.price)*num(o.sal))/sal
+    :dem>0?S(planD,o=>num(o.price)*num(o.dem))/dem:0;
+  const plan=B.gapPlan*rate,unc=B.gapTotal*rate;
+  const planK=rawPlan>0?plan/rawPlan:0,outside=Math.max(0,B.gapTotal-B.gapPlan);
+  const rawInd=S(indD,lostRevVal),outsideValue=outside*rate;
+  const indepK=rawInd>0?outsideValue/rawInd:0;
+  const on=T&&T.base==='unc';
+  const unattrPlan=plan>0&&rawPlan<=0?plan:0,unattrOutside=outsideValue>0&&rawInd<=0?outsideValue:0;
+  return {rate,plan,unc,lost:on?unc:plan,base:on?'unc':'plan',
+    planK,indepK:on?indepK:0,unattr:unattrPlan+(on?unattrOutside:0)};
+}
+/* Точка входа блока: считает базу и масштабы для обеих денежных потерь. После
+   неё KPI, графики и таблицы двух разделов используют одни и те же значения. */
 function lmState(D){
-  const B=covBasis(D),T=lmTotals(B,D);
-  LM_B=B;LM_T=T;LM_K=T.k;LM_UNATTR=T.unattr;
-  return {B,T};
+  const B=covBasis(D),T=lmTotals(B,D),L=lostRevenueTotals(B,D,T);
+  LM_B=B;LM_T=T;LM_K=T.planK;LM_INDEP_K=T.indepK;LM_UNATTR=T.unattr;
+  LR_PLAN_K=L.planK;LR_INDEP_K=L.indepK;LR_UNATTR=L.unattr;LR_T=L;
+  return {B,T,L};
 }
 /* Подпись KPI «Упущенная маржа» — одна строка: база расчёта. Метод подсвечен
    кнопкой в переключателе над карточками, полная расшифровка (метод, ставка,
@@ -1437,7 +1538,7 @@ function lmCardHelp(T,lostRev){
   const alt=T.base==='unc'
     ?`по дефициту плана: ${bn(T.lmPlan)} (${nf(B?B.gapPlan:0)} т)`
     :`по непокрытому спросу: ${bn(T.lmUnc)} (${nf(B?B.gapTotal:0)} т)`;
-  return `Упущенная выручка — ставка ₽/т дефицита по загруженным заказам × объём дефицита цепочки = ${bn(lostRev||0)}.`
+  return `Упущенная выручка — ставка ₽/т по заказам плана × объём базы «${T.base==='unc'?'Непокрытый спрос':'Дефицит плана'}» = ${bn(lostRev||0)}.`
     +`<br>Упущенная маржа — ${T.base==='unc'?'непокрытый спрос (вне плана + дефицит)':'дефицит плана'} × ставка ${nf(T.rate)} ₽/т (${T.rateSrc}).`
     +(T.uncAvail?`<br>Вторая база — ${alt}.`:`<br>Вторая база недоступна: ${esc(B?B.uncWhy:'нет данных')}.`)
     +`<br>Денежная сверка с lostrevenue (demand_coverage) — в «Своде спроса» ниже.`;
@@ -1488,7 +1589,7 @@ function lmRowHtml(){
   const B=LM_B,T=LM_T;
   const note=(B&&T)
     ?(T.base==='unc'
-      ?`Непокрытый спрос ${nf(B.gapTotal)} т = ${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана · масштаб ×${nf(T.k,2)} к дефициту плана`
+      ?`Непокрытый спрос ${nf(B.gapTotal)} т = ${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана · обе части распределены по своим строкам заказов`
       :`Дефицит плана ${nf(B.gapPlan)} т${T.uncAvail?` · по непокрытому спросу (${nf(B.gapTotal)} т) было бы ${bn(T.lmUnc)}`:` · ${B.uncWhy}`}`)
     :'';
   const baseHelp=[
@@ -2185,7 +2286,7 @@ function fillSelects(){
     });
   };
 
-  renderPill('#pop_p','p',uq(o,x=>x.p).sort((a,b)=>a-b),v=>'P'+v);
+  renderPill('#pop_p','p',uq(o,x=>x.p).sort(periodCompare),v=>periodLabel(v));
   renderPill('#pop_ch','ch',['RU','EX'],v=>v==='RU'?'RU · внутренний':'EX · экспорт');
   renderPill('#pop_pi','pi',uq(o,x=>x.pk).sort(prioKeySort),v=>'Приоритет '+v);
   renderPill('#pop_cl','cl',uq(o,x=>x.cl));
@@ -3061,12 +3162,13 @@ const METRIC_HELP={
  'Маржинальность':'<b>Валовая маржа / Валовая выручка</b>, %.',
  'Маржинальность продаж':'<b>Валовая маржа / Валовая выручка</b>, % по заказам вкладки «Спрос и покрытие».',
  'Service Level':'<b>Σ sal / Σ dem</b> — доля удовлетворённого планового спроса в тоннах.',
+ 'OTIF Service Level':'<b>(полностью покрытые − полностью покрытые с опозданием) / все входные заказы</b>.<br>Покрытие и число заказов: <code>independent_demand</code>/<code>demand_coverage</code>; опоздание: срок входного заказа и <code>latedelivperiods</code>.',
  /* Счёт заказов — по demand_coverage (задача владельца 2026-10-05):
     всего строк = все заказы неограниченного спроса; 100% не покрыто —
     fullfilleddemandqty = 0; частично — uf > 0 и ff > 0; полностью — uf = 0
     и ff > 0. Фолбэк без demand_coverage — классификация по marking_demand. */
- 'Заказов без дефицита':'<b>Полностью покрытые заказы</b>: <code>unfullfilleddemandqty = 0</code> и <code>fullfilleddemandqty &gt; 0</code> — ко всем заказам неограниченного спроса (строкам <code>demand_coverage</code>).<br>Без <code>demand_coverage</code> — по <code>marking_demand</code>: заказы с <code>unm = 0</code> к заказам плана.',
- 'Упущенная маржа и выручка':'<b>Упущенная маржа</b> = непокрытый объём × ставка ₽/т выбранного метода; <b>упущенная выручка</b> = дефицит плана × цена отказа ₽/т по загруженным заказам.<br>Метод и база (дефицит плана / непокрытый спрос) — переключатели в шапке вкладки; сверка с <code>lostrevenue</code> — в «Своде спроса».',
+ 'Заказов выполнено':'<b>Полностью покрытые заказы</b>: <code>unfullfilleddemandqty = 0</code> и <code>fullfilleddemandqty &gt; 0</code> — ко всем заказам неограниченного спроса (строкам <code>demand_coverage</code>).<br>Без <code>demand_coverage</code> — по <code>marking_demand</code>: заказы с <code>unm = 0</code> к заказам плана.',
+ 'Упущенная маржа и выручка':'<b>Упущенная маржа</b> = объём выбранной базы × ставка ₽/т выбранного метода; <b>упущенная выручка</b> = тот же объём базы × средняя цена отказа ₽/т по заказам плана.<br>Метод и база (дефицит плана / непокрытый спрос) — общие для обоих разделов; сверка с <code>lostrevenue</code> — в «Своде спроса».',
  'Не покрыто всего':'<b>Дефицит плана + не принятый в план спрос</b> (<code>gapTotal</code>), т.<br>Не принятый в план = неограниченный спрос − ограниченный спрос.',
  'Упущенная маржа':'<b>Σ (непокрытый объём × ставка маржи)</b>, ₽.<br>Ставка — выбранный метод (маржа заказа / маржа на тонну продукта / предельная / смесь / ставка штрафа), объём — выбранная база (дефицит плана или непокрытый спрос от неограниченного спроса). Переключатели — в шапке вкладки, сверка со строкой <code>lostrevenue</code> — в «Своде спроса».',
  'Неограниченный спрос':'<b>Σ demandqty</b>, т — весь входной спрос клиентов до ограничения планом.<br>Источник: <code>independent_demand</code> — из PostgreSQL через backend-прокси (схема <code>public_N</code> ↔ база ClickHouse <code>data_public_N</code>). Если PostgreSQL недоступен — фолбэк: покрытый + непокрытый из <code>demand_coverage</code>; под фильтрами и без агрегата карточка не считается («—»). Число заказов — строки <code>demand_coverage</code> (вся схема).',
@@ -3205,15 +3307,14 @@ function summary(title,blocks){
 let OV_LM_DIM='period';
 function tabOV(){
   const D=fOrders();if(!D.length)return '<div class="empty">Нет данных под текущими фильтрами</div>';
-  const {B,T}=lmState(D);
+  const {B,T,L}=lmState(D);
   /* Итоги берём из covBasis — в том же охвате, что и цепочка спроса: при
      урезанной детализации это агрегаты всей схемы, иначе суммы по выборке.
      Иначе «Общий» и «Спрос и покрытие» показывали бы разный Service Level. */
   const rev=B.rev,cost=B.cost,mar=B.mar,dem=B.dem,sal=B.sal,unm=B.unm;
-  /* Упущенная выручка — тот же принцип «ставка × объём», что у упущенной маржи:
-     цена отказа ₽/т считается по загруженным заказам, объём — по цепочке. */
-  const lrRate=B.unmDet>0?S(D,o=>o.unm*o.price)/B.unmDet:0;
-  const lr= B.gapTotal>0 ? (B.unmDet>0 ? lrRate*B.gapTotal : S(D,o=>o.unm*o.price)) : 0,lm=T.lm;
+  /* Денежные потери рассчитаны общей функцией lmState — те же значения ниже
+     использует раздел «Спрос и покрытие». */
+  const lr=L.lost,lm=T.lm;
   const ops=fOps(),byT=grp(ops,r=>r.type,v=>({c:S(v,r=>r.cost)}));
   const scopeNote=B.partial?` · ${B.scope==='schema'?'агрегат всей схемы':'загруженная выборка'}`:'';
   /* Карточки (задача владельца 2026-10-05): «Упущенная выручка» и «Упущенная
@@ -3226,21 +3327,20 @@ function tabOV(){
    ['Валовая маржа',bn(mar),'маржинальность '+pc(mar/rev),''],
    ['Маржа на тонну',nf(mar/sal)+' ₽/т','взвешенно',''],
    ['Service Level',pc(sal/dem),nf(sal)+' из '+nf(dem)+' т',sal/dem>.9?'pos':sal/dem>.7?'mid':'neg'],
-   ['OTIF Service Level',pc(ord.total?ord.intime/ord.total:sal/dem),ord.total?`${nf(ord.intime)} из ${nf(ord.total)} заказов полностью и вовремя`:'нет данных по срокам',ord.total&&ord.intime/ord.total>.9?'pos':ord.total&&ord.intime/ord.total>.7?'mid':'neg'],
-   ['Заказов без дефицита',ord.full+' из '+ord.total,pc(ord.total?ord.full/ord.total:0)+' портфеля','',
+   ['OTIF Service Level',pc(ord.total&&ord.otif!=null?ord.otif/ord.total:sal/dem),ord.total&&ord.otif!=null?`${nf(ord.otif)} из ${nf(ord.total)} заказов полностью и вовремя`:'нет данных по срокам',ord.total&&ord.otif!=null&&ord.otif/ord.total>.9?'pos':ord.total&&ord.otif!=null&&ord.otif/ord.total>.7?'mid':'neg'],
+   ['Заказов выполнено',ord.full+' из '+ord.total,pc(ord.total?ord.full/ord.total:0)+' портфеля','',
      `Полностью покрытые заказы (unfullfilleddemandqty = 0 и fullfilleddemandqty > 0) ко всем заказам неограниченного спроса. Источник: ${ord.srcLong||ord.src}.`],
    ['Упущенная маржа и выручка',bn(lm),`упущенная выручка ${bn(lr)}<br>${lmKpiSub(T)}`,lm?'neg':'',
      lmCardHelp(T,lr)]];
-  const per=grp(D,o=>o.p,v=>({rev:S(v,o=>o.rev),cost:S(v,o=>o.cost),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
-    .sort((a,b)=>a.k-b.k);
-  const pr=grp(D,o=>o.prod,v=>({rev:S(v,o=>o.rev),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),
+  /* Фактические финансовые графики всегда показывают только «План продаж»:
+     оценочная экономика 100% непокрытых заказов не является выручкой/маржой
+     результата. На графике потерь эти заказы можно добавить локальным
+     переключателем. */
+  const DSales=salesPlanOrders(D);
+  const per=grp(DSales,o=>o.p,v=>({rev:S(v,o=>o.rev),cost:S(v,o=>o.cost),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
+    .sort((a,b)=>periodCompare(a.k,b.k));
+  const pr=grp(DSales,o=>o.prod,v=>({rev:S(v,o=>o.rev),mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),
     price:S(v,o=>o.price*o.sal)/S(v,o=>o.sal),cpt:S(v,o=>o.cost)/S(v,o=>o.sal)}));
-  /* Разрезы упущенной маржи считаются через lmS(), поэтому при базе
-     «Непокрытый спрос» столбцы и ячейки сходятся с KPI (масштаб ×k). */
-  const lmPer=grp(D,o=>o.p,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
-    .sort((a,b)=>a.k-b.k);
-  const lmPrd=grp(D,o=>o.prod,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal)}))
-    .sort((a,b)=>b.lm-a.lm);
   const html=`
   ${B.partial?srcFold('w',
     `детализация ${nf(B.orders)} из ${nf(B.ordersAll)} заказов · итоги по агрегатам всей схемы`,
@@ -3263,6 +3363,7 @@ function tabOV(){
     <div class="card"><h3>Парето заказов по марже</h3><div class="sub">Тёмные столбцы формируют 80% результата</div><canvas id="o6"></canvas></div>
     <div class="card w"><h3>Упущенная маржа по периодам и продуктам</h3>
       <div class="sub" id="o8sub"></div>
+      ${chartScopeHtml('o8',D)}
       <div class="seg" id="o8dim" role="group" aria-label="Разрез упущенной маржи" style="margin:2px 0 10px">
         <button type="button" class="btn" data-lmdim="period">Периоды</button>
         <button type="button" class="btn" data-lmdim="prod">Продукты</button>
@@ -3279,9 +3380,13 @@ function tabOV(){
     const drawO8=()=>{
       $$('#o8dim .btn').forEach(b=>{const on=b.dataset.lmdim===OV_LM_DIM;
         b.classList.toggle('p',on);b.setAttribute('aria-pressed',String(on))});
-      const sub=$('#o8sub'),note=$('#o8note');
-      const scaled=T.k!==1?` Значения приведены к непокрытому спросу неограниченного спроса (×${nf(T.k,2)} к дефициту плана).`:'';
-      const hasDef=D.some(o=>o.unm>0)||T.lm>0;
+      const sub=$('#o8sub'),note=$('#o8note'),scope=chartOrders('o8',D);
+      const lmPer=grp(scope,o=>o.p,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem)}))
+        .sort((a,b)=>periodCompare(a.k,b.k));
+      const lmPrd=grp(scope,o=>o.prod,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal)}))
+        .sort((a,b)=>b.lm-a.lm);
+      const scaled=T.base==='unc'?` База непокрытого спроса распределена между дефицитом плана и входными заказами.`:'';
+      const hasDef=scope.some(o=>o.unm>0)||T.lm>0;
       if(OV_LM_DIM==='prod'){
         if(sub)sub.textContent='Топ-12 продуктов по упущенной марже, млрд ₽. Клик — фильтр по продукту.'+scaled;
         const top=lmPrd.filter(r=>r.lm>0).slice(0,12);
@@ -3291,10 +3396,10 @@ function tabOV(){
         else noData('#o8',hasDef?'Дефицита нет — упущенная маржа нулевая':'Нет данных');
       }else if(OV_LM_DIM==='pp'){
         if(sub)sub.textContent='Тепловая карта «продукт × период», млрд ₽. Клик по ячейке — фильтр по продукту и периоду.'+scaled;
-        const rows=lmPrd.filter(r=>r.lm>0).slice(0,8).map(r=>r.k),cols=lmPer.map(r=>'P'+r.k);
+        const rows=lmPrd.filter(r=>r.lm>0).slice(0,8).map(r=>r.k),periods=lmPer.map(r=>r.k),cols=periods.map(periodLabel);
         if(rows.length&&cols.length)chHeat('#o8',H('#o8',320,0.34),rows,cols,
-          rows.map(rr=>cols.map(cc=>S(D.filter(o=>o.prod===rr&&('P'+o.p)===cc),lmS))),bn,
-          (r,cl)=>{const pk=String(cl).slice(1),pr=String(r);
+          rows.map(rr=>periods.map(pk=>S(scope.filter(o=>o.prod===rr&&String(o.p)===String(pk)),lmS))),bn,
+          (r,cl)=>{const ci=cols.indexOf(String(cl)),pk=String(periods[Math.max(0,ci)]),pr=String(r);
             const i=F.pr.indexOf(pr);i<0?F.pr.push(pr):F.pr.splice(i,1);
             const j=F.p.indexOf(pk);j<0?F.p.push(pk):F.p.splice(j,1);
             render()},
@@ -3302,13 +3407,13 @@ function tabOV(){
         else noData('#o8',hasDef?'Нет дефицитов для разреза «продукт × период»':'Дефицита нет — упущенная маржа нулевая');
       }else{
         if(sub)sub.textContent='Млрд ₽ по периодам спроса. Клик по столбцу — фильтр по периоду.'+scaled;
-        chBars('#o8',H('#o8',280,0.3),lmPer.map(r=>'P'+r.k),[{c:CH.d5,v:lmPer.map(r=>r.lm)}],bn,
+        chBars('#o8',H('#o8',280,0.3),lmPer.map(r=>periodLabel(r.k)),[{c:CH.d5,v:lmPer.map(r=>r.lm)}],bn,
           i=>{const r=lmPer[i];
-            return `<b>Период P${r.k}</b><br>Упущенная маржа: ${bn(r.lm)}<br>Дефицит: ${nf(r.unm)} т<br>Отгружено: ${nf(r.sal)} т из ${nf(r.dem)} т<br>Service Level: ${pc(r.dem?r.sal/r.dem:0)}<br>Ставка потерь: ${nf(r.unm?r.lm/r.unm:0)} ₽/т<br>Доля всех потерь: ${pc(T.lm?r.lm/T.lm:0)}`},
+            return `<b>Период ${periodLabel(r.k)}</b><br>Упущенная маржа: ${bn(r.lm)}<br>Дефицит: ${nf(r.unm)} т<br>Отгружено: ${nf(r.sal)} т из ${nf(r.dem)} т<br>Service Level: ${pc(r.dem?r.sal/r.dem:0)}<br>Ставка потерь: ${nf(r.unm?r.lm/r.unm:0)} ₽/т<br>Доля всех потерь: ${pc(T.lm?r.lm/T.lm:0)}`},
           i=>setF('p',lmPer[i].k),0,1);
       }
       if(note)note.innerHTML=T.base==='unc'
-        ?`База «Непокрытый спрос»: <b>${nf(B.gapTotal)} т</b> = ${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана. Тонны, не принятые в план, не привязаны к заказам, поэтому распределены по разрезам пропорционально дефициту плана (×${nf(T.k,2)}). Ставка — ${nf(T.rate)} ₽/т (${esc(T.rateSrc)}).`
+        ?`База «Непокрытый спрос»: <b>${nf(B.gapTotal)} т</b> = ${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана. Входные строки, которых нет в плане, распределены по их товару и периоду; остаток без детализации оценивается ставкой ${nf(T.rate)} ₽/т (${esc(T.rateSrc)}).`
         :`База «Дефицит плана»: <b>${nf(B.gapPlan)} т</b> по заказам marking_demand, ставка ${nf(T.rate)} ₽/т.`
           +(T.uncAvail?` По непокрытому спросу неограниченного спроса (${nf(B.gapTotal)} т) — <b>${bn(T.lmUnc)}</b>.`
                       :` Неограниченный спрос недоступен (${esc(B.uncWhy)}), поэтому вторая база не показана.`);
@@ -3316,13 +3421,13 @@ function tabOV(){
     $$('#o8dim .btn').forEach(b=>b.onclick=()=>{if(OV_LM_DIM===b.dataset.lmdim)return;OV_LM_DIM=b.dataset.lmdim;drawO8()});
     drawO8();
 
-    chBars('#o1',H('#o1',260,0.45),per.map(p=>'P'+p.k),
+    chBars('#o1',H('#o1',260,0.45),per.map(p=>periodLabel(p.k)),
       [{c:CH.d1,v:per.map(p=>p.rev)},{c:CH.d5,v:per.map(p=>p.cost)},{c:CH.d3,v:per.map(p=>p.mar)}],
       v=>nf(v/1e9,0)+' млрд',
-      i=>`<b>Период P${per[i].k}</b><br>Выручка: ${bn(per[i].rev)}<br>Себестоимость: ${bn(per[i].cost)}<br>Маржа: ${bn(per[i].mar)}<br>Маржинальность: ${pc(per[i].mar/per[i].rev)}`,
+      i=>`<b>Период ${periodLabel(per[i].k)}</b><br>Выручка: ${bn(per[i].rev)}<br>Себестоимость: ${bn(per[i].cost)}<br>Маржа: ${bn(per[i].mar)}<br>Маржинальность: ${pc(per[i].mar/per[i].rev)}`,
       i=>setF('p',per[i].k));
-    chLine('#o2',H('#o2',260,0.45),per.map(p=>'P'+p.k),[{c:CH.d3,v:per.map(p=>p.mar/p.sal),fill:1}],v=>nf(v/1000,0)+'k',
-      i=>`<b>P${per[i].k}</b><br>Маржа на тонну: ${nf(per[i].mar/per[i].sal)} ₽<br>Service Level: ${pc(per[i].sal/per[i].dem)}`,
+    chLine('#o2',H('#o2',260,0.45),per.map(p=>periodLabel(p.k)),[{c:CH.d3,v:per.map(p=>p.mar/p.sal),fill:1}],v=>nf(v/1000,0)+'k',
+      i=>`<b>${periodLabel(per[i].k)}</b><br>Маржа на тонну: ${nf(per[i].mar/per[i].sal)} ₽<br>Service Level: ${pc(per[i].sal/per[i].dem)}`,
       i=>setF('p',per[i].k));
     chDonut('#o3',H('#o3',220,0.55),byT.sort((a,b)=>b.c-a.c).map((t,i)=>({k:t.k,v:t.c,c:PAL[i]})),'Затраты',bn,
       pt=>{const m={production:'pd',movement:'lg',procurement:'pc',stock:'st'};if(m[pt.k])go(m[pt.k])});
@@ -3331,15 +3436,15 @@ function tabOV(){
       q=>setF('pr',q.k));
     chH('#o5',H('#o5',290,0.6),pr.sort((a,b)=>b.mar-a.mar).slice(0,9).map(p=>({k:p.k,v:p.mar,c:PAL[0],
       tip:`<b>${p.k}</b><br>Маржа: ${bn(p.mar)}<br>Маржинальность: ${pc(p.mar/p.rev)}<br>Объём: ${nf(p.sal)} т`})),bn,it=>setF('pr',it.k));
-    chPareto('#o6',H('#o6',290,0.5),D.slice().sort((a,b)=>b.mar-a.mar).map(o=>({k:`#${o.id} ${o.prod}`,v:o.mar})),bn,
+    chPareto('#o6',H('#o6',290,0.5),DSales.slice().sort((a,b)=>b.mar-a.mar).map(o=>({k:`${orderDisplayId(o)} ${o.prod}`,v:o.mar})),bn,
       it=>setF('pr',it.k.split(' ')[1]));
     dtable('#o7',[
-      {k:'id',t:'#',num:1,left:1},
+      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>orderIdCell(o,false)},
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
       {k:'chan',t:'Канал',flt:1},
-      {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
-      {k:'stage',t:'Стадия',left:1,flt:1,title:'Классификация заказа по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
+      {k:'p',t:'Период',num:1,flt:1,f:v=>periodLabel(v)},
+      {k:'stage',t:'Статус покрытия',left:1,flt:1,title:'Классификация заказа по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
         v:o=>orderStageLabel(o),
         f:(v,o)=>{const s=orderStageOf(o);
           const st=s==='fullUnc'?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
@@ -3347,7 +3452,7 @@ function tabOV(){
             :'color:var(--scp-ok);border-color:var(--scp-ok);background:var(--scp-ok-bg)';
           return `<span class="tag" style="${st}">${orderStageLabel(o)}</span>`}},
       {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
-      {k:'sal',t:'Продажи',num:1,f:v=>nf(v,1)},
+      {k:'sal',t:'Отгрузка',num:1,f:v=>nf(v,1)},
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:v=>v?'neg':''},
       {k:'price',t:'Цена ₽/т',num:1,f:v=>nf(v)},
       {k:'cpt',t:'С/с ₽/т',num:1,f:v=>nf(v)},
@@ -3357,12 +3462,12 @@ function tabOV(){
         cls:v=>v>.7?'pos':v>.3?'mid':'neg'}
     ],D,{key:'ov_orders',sort:'mar',dir:'desc',h:340,csv:1,name:'orders'});
   },0);
-  const worst=(D.filter(o=>o.rev>0).slice().sort((a,b)=>a.mar/a.rev-b.mar/b.rev)[0]);
+  const worst=(DSales.filter(o=>o.rev>0).slice().sort((a,b)=>a.mar/a.rev-b.mar/b.rev)[0]);
   const mptTrend=(per.length>1&&per[0].sal>0&&per[per.length-1].sal>0)?(per[per.length-1].mar/per[per.length-1].sal)/(per[0].mar/per[0].sal)-1:0;
   const top3=pr.sort((a,b)=>b.mar-a.mar).slice(0,3);
   const conc=S(top3,p=>p.mar)/mar;
-  const flatDemand=uq(D,o=>o.dem).length===1;
-  const flatPriceN=grp(D,o=>o.prod,v=>({u:uq(v,z=>z.price).length,p:uq(v,z=>z.p).length})).filter(x=>x.p>1&&x.u===1).length;
+  const flatDemand=uq(DSales,o=>o.dem).length===1;
+  const flatPriceN=grp(DSales,o=>o.prod,v=>({u:uq(v,z=>z.price).length,p:uq(v,z=>z.p).length})).filter(x=>x.p>1&&x.u===1).length;
   return html+summary('Резюме: общий блок',[
     {t:'Выводы',i:[
       `Портфель даёт <span class="h">${bn(mar)}</span> валовой маржи при выручке ${bn(rev)} — маржинальность <span class="h">${pc(mar/rev)}</span>.`,
@@ -3379,7 +3484,7 @@ function tabOV(){
         :`Отпускные цены варьируются по периодам — признак ценовой индексации в модели.`,
       worst?`Худшая позиция: <span class="h">#${worst.id} ${worst.prod}</span> — маржинальность ${pc(worst.mar/worst.rev)} при цене ${nf(worst.price)} ₽/т.`:'Нет позиций с ненулевой выручкой — проверка маржинальности невозможна.',
       flatDemand
-        ?`Все заказы имеют одинаковый План спроса (${nf(D[0].dem)} т) — признак синтетического набора; абсолютные значения не следует переносить в отчётность без проверки.`
+        ?`Все заказы имеют одинаковый План спроса (${nf((DSales[0]||D[0]).dem)} т) — признак синтетического набора; абсолютные значения не следует переносить в отчётность без проверки.`
         :`План спроса варьируется по заказам — набор не выглядит синтетическим.`,
       `Высокая концентрация маржи означает уязвимость: потеря одного продукта или клиента бьёт по результату непропорционально.`]},
     {t:'Рекомендации',i:[
@@ -3404,10 +3509,10 @@ let DM_STAGE=null;
      План продаж = В срок + С опозданием (опоздания — среди полностью покрытых).
    Без demand_coverage (marking_demand/выборка) водопад начинается с «Заказов
    в оптимизации» — зеркально водопаду в тоннах. */
-function dmOrderWaterfall(ord){
+function dmOrderWaterfall(ord,includeUncovered=true){
   const dc=ord.src==='demand_coverage'||ord.src==='independent_demand';
   const w=[];
-  if(dc)w.push({k:'Неограниченный спрос',v:ord.total,st:'all',type:'total',c:CH.d1},
+  if(dc&&includeUncovered)w.push({k:'Неограниченный спрос',v:ord.total,st:'all',type:'total',c:CH.d1},
     {k:'Заказов 100% не покрыто',v:-ord.fullUnc,st:'fullUnc',type:'delta'});
   w.push({k:'Заказов в оптимизации',v:ord.inOpt,st:'inOpt',type:'total',c:CH.d2},
     /* План продаж — единый столбец: полностью выполненные + частично
@@ -3425,7 +3530,7 @@ function tabDM(){
   /* База покрытия: неограниченный спрос (independent_demand.demandqty), план и
      непокрытый объём. Неограниченный спрос — агрегат по всей схеме, поэтому
      под фильтрами он отключается (useUnc=false) и все цифры считаются по плану. */
-  const {B,T}=lmState(D);
+  const {B,T,L}=lmState(D);
   const hasDC=B.hasDC,useUnc=B.useUnc;
   /* Счёт заказов по стадиям водопада (demand_coverage → marking_demand →
      выборка) — один источник для карточек, водопада «Заказы» и чипов RCA. */
@@ -3434,7 +3539,8 @@ function tabDM(){
      продаж» здесь и «Валовая маржа» на «Общем» считались по разным множествам
      заказов и отличались на долю непогруженной детализации. */
   const rev=B.rev,mar=B.mar,cost=B.cost,dem=B.dem,sal=B.sal,unm=B.unm;
-  const ex=D.filter(o=>o.chan==='EX'),ru=D.filter(o=>o.chan==='RU');
+  const DSales=salesPlanOrders(D);
+  const ex=DSales.filter(o=>o.chan==='EX'),ru=DSales.filter(o=>o.chan==='RU');
   /* Приоритет — колонка demandtype. Числовые значения упорядочены (1 важнее 2),
      поэтому «наивысший приоритет» — минимальное из присутствующих. Строковые
      метки типа спроса порядка не имеют: ничего не выдумываем, а показываем
@@ -3459,21 +3565,19 @@ function tabDM(){
   /* Упущенная маржа — через lmS(): при базе «Непокрытый спрос» значения заказов
      масштабированы так, что их сумма равна KPI (плюс нераспределённый остаток,
      если дефицита плана нет вовсе). */
-  const lm=S(defOrders,lmS)+T.unattr;
-  /* Упущенная выручка — «ставка × объём», как и упущенная маржа: цена отказа
-     ₽/т берётся по загруженным заказам, объём дефицита — из охвата цепочки. */
-  const lostRev=B.gapTotal>0 ? (B.unmDet>0 ? S(defOrders,o=>o.unm*o.price)/B.unmDet*B.gapTotal : S(D,o=>o.unm*o.price)) : 0;
+  const lm=T.lm;
+  /* Общий расчёт с «Общим»: выбранная база одновременно действует на
+     упущенную маржу и выручку. */
+  const lostRev=L.lost;
   const demUnc=B.demUnc,notPlanned=B.notPlanned,late=B.late,inTime=B.inTime;
   const sl=dem?sal/dem:0;
   const ordW=n=>`${nf(n)} ${plural(n,['заказ','заказа','заказов'])}`;
 
-  const per=grp(D,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)})).sort((a,b)=>a.k-b.k);
   const def=grp(defOrders,o=>o.loc+' · '+o.prod,v=>({v:S(v,o=>o.unm),lm:S(v,lmS),prod:v[0].prod}))
     .sort((a,b)=>b.lm-a.lm).slice(0,8);
-  const prDef=grp(defOrders,o=>o.prod,v=>({unm:S(v,o=>o.unm),lm:S(v,lmS)})).sort((a,b)=>b.unm-a.unm);
-  const cl=grp(D,o=>o.cl,v=>({mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem),unm:S(v,o=>o.unm),rev:S(v,o=>o.rev)}))
+  const cl=grp(DSales,o=>o.cl,v=>({mar:S(v,o=>o.mar),sal:S(v,o=>o.sal),dem:S(v,o=>o.dem),unm:S(v,o=>o.unm),rev:S(v,o=>o.rev)}))
     .sort((a,b)=>b.mar-a.mar);
-  const pr=grp(D,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/Math.max(S(v,o=>o.sal),1),cpt:S(v,o=>o.cost)/Math.max(S(v,o=>o.sal),1),
+  const pr=grp(DSales,o=>o.prod,v=>({price:S(v,o=>o.price*o.sal)/Math.max(S(v,o=>o.sal),1),cpt:S(v,o=>o.cost)/Math.max(S(v,o=>o.sal),1),
     mar:S(v,o=>o.mar),sal:S(v,o=>o.sal)})).sort((a,b)=>b.price-a.price);
   const rcaCache=new Map();
   const rcaFor=o=>{if(!rcaCache.has(o.id))rcaCache.set(o.id,CapacityRCA.analyzeOrderChain(o));return rcaCache.get(o.id)};
@@ -3492,16 +3596,20 @@ function tabDM(){
        строится по marking_demand/выборке и начинается с «Заказов в
        оптимизации» — как и водопад в тоннах.
      st — стадия для фильтрации таблицы RCA по клику на столбец. */
-  const wfT=[];
-  if(useUnc)wfT.push({k:'Неограниченный спрос',v:demUnc,st:'all',type:'total',c:CH.d1},{k:'Заказов 100% не покрыто',v:-notPlanned,st:'fullUnc',type:'delta'});
-  wfT.push({k:'Заказов в оптимизации',v:dem,st:'inOpt',type:'total',c:CH.d2},
-    {k:'План продаж',v:dem,st:'plan',type:'total',c:CH.d3,segments:[
-      {v:sal,c:CH.d3,t:'Выполнено'},
-      {v:unm,c:CH.warn,t:'Дефицит плана'}
-    ]});
-  if(useUnc)wfT.push({k:'Отгружено с опозданием',v:-late,st:'late',type:'delta'},{k:'В срок',v:inTime,st:'intime',type:'total',c:CH.ok});
+  const dmTonsWaterfall=includeUncovered=>{
+    const w=[];
+    if(useUnc&&includeUncovered)w.push({k:'Неограниченный спрос',v:demUnc,st:'all',type:'total',c:CH.d1},
+      {k:'Заказов 100% не покрыто',v:-notPlanned,st:'fullUnc',type:'delta'});
+    w.push({k:'Заказов в оптимизации',v:dem,st:'inOpt',type:'total',c:CH.d2},
+      {k:'План продаж',v:dem,st:'plan',type:'total',c:CH.d3,segments:[
+        {v:sal,c:CH.d3,t:'Выполнено'},
+        {v:unm,c:CH.warn,t:'Дефицит плана'}
+      ]});
+    if(useUnc)w.push({k:'Отгружено с опозданием',v:-late,st:'late',type:'delta'},
+      {k:'В срок',v:inTime,st:'intime',type:'total',c:CH.ok});
+    return w;
+  };
   const ordDCready=ord.src==='demand_coverage'||ord.src==='independent_demand';
-  const wfO=dmOrderWaterfall(ord);
 
   /* Карточки выстроены в цепочку спроса — так, чтобы читались тождества:
        Неограниченный = Ограниченный + Не принято в план
@@ -3575,23 +3683,25 @@ function tabDM(){
   <div class="grid">
     <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
       <div class="sub" id="d0sub">Тонны. В «Плане продаж» жёлтым показан дефицит, синим — выполненная часть. Клик по столбцу — фильтр RCA</div>
+      ${chartScopeHtml('d0',D)}
       <div class="seg" id="d0mode" role="group" aria-label="Единица водопада: тонны или заказы" style="margin:2px 0 10px">
         <button type="button" class="btn" data-wfmode="tons">Тонны</button>
         <button type="button" class="btn" data-wfmode="orders">Заказы</button>
       </div>
       <canvas id="d0" role="img" aria-label="Водопад спроса в выбранной единице измерения"></canvas></div>
     <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду</div>
+      ${chartScopeHtml('d1',D)}
       ${lg('#d1',[[CH.d3,'Отгружено'],[CH.d5,'Дефицит'],[CH.warn,'Service Level']])}<canvas id="d1"></canvas></div>
-    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div><canvas id="d2"></canvas></div>
+    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div>${chartScopeHtml('d2',D)}<canvas id="d2"></canvas></div>
     <div class="card"><h3>Доля каналов в марже</h3><div class="sub">Клик по сегменту — фильтр, по легенде — скрыть сегмент</div><canvas id="d3"></canvas></div>
     <div class="card"><h3>Клиенты: маржа и покрытие спроса</h3><div class="sub">Столбец — маржа, линия — Service Level</div>
       ${lg('#d4',[[CH.d1,'Маржа'],[CH.warn,'Service Level']])}<canvas id="d4"></canvas></div>
     <div class="card"><h3>Цена и себестоимость по продуктам</h3><div class="sub">Синяя точка — цена, вторая — себестоимость. Длина отрезка равна марже</div><canvas id="d5"></canvas></div>
     <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽. Клик — фильтр клиент + период</div><canvas id="d6"></canvas></div>
-    <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту</div><canvas id="d8"></canvas></div>
-    <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита</div><canvas id="d9"></canvas></div>
+    <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту</div>${chartScopeHtml('d8',D)}<canvas id="d8"></canvas></div>
+    <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита</div>${chartScopeHtml('d9',D)}<canvas id="d9"></canvas></div>
     <div class="card w" id="d7card" data-fullscreen><h3>Заказы, упущенная маржа и корневые причины (RCA)</h3>
-      <div class="sub">Все заказы водопада. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей${T.k!==1?`. Упущенная маржа приведена к базе KPI (×${nf(T.k,2)} к дефициту заказа) — сумма строк сходится с карточкой`:''}</div>
+      <div class="sub">Все заказы водопада. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей. Упущенная маржа и выручка рассчитаны в базе KPI; сумма детализированных строк и нераспределённого остатка сходится с карточками</div>
       <div class="stage-chips" id="d7chips" role="group" aria-label="Быстрые фильтры по столбцам водопада"></div>
       <div id="d7note"></div>
       <div id="d7"></div></div>
@@ -3602,12 +3712,13 @@ function tabDM(){
        Переключалка перерисовывает только этот канвас (как разрез упущенной
        маржи в «Общем»), выбор запоминается в localStorage. */
     const wfDraw=()=>{
-      const isOrd=DM_WF_MODE==='orders';
-      const wf=isOrd?wfO:wfT;
+      const isOrd=DM_WF_MODE==='orders',includeUncovered=chartShowsAll('d0');
+      const wf=isOrd?dmOrderWaterfall(ord,includeUncovered):dmTonsWaterfall(includeUncovered);
       const sub=$('#d0sub');
-      if(sub)sub.textContent=isOrd
+      if(sub)sub.textContent=(isOrd
         ?'Заказы. «План продаж»: полностью выполненные + частично выполненные (жёлтый сегмент). Клик — фильтр RCA'
-        :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA';
+        :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA')
+        +(includeUncovered?' Показаны все заказы.':' 100% непокрытые заказы скрыты.');
       chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,
         isOrd?v=>nf(v,0):v=>nf(v/1000,1)+'k т',
         i=>{const b=wf[i],val=Math.abs(b.v);
@@ -3676,16 +3787,25 @@ function tabDM(){
       }else if(DM_STAGE&&stageCount(DM_STAGE)!=null&&stageCount(DM_STAGE)>stageRows.length&&DM_STAGE!=='all'){
         note=`Стадия «${ORDER_STAGES[DM_STAGE].t}» — ${ordW(stageCount(DM_STAGE))} по всей схеме, в таблице — ${ordW(stageRows.length)}: детализация загружена с лимитом.`;
       }
+      const residual=[];
+      if(T.unattr>1e-6)residual.push(`упущенная маржа ${bn(T.unattr)}`);
+      if(L.unattr>1e-6)residual.push(`упущенная выручка ${bn(L.unattr)}`);
+      if(residual.length)note+=(note?' ':'')+`Не распределено по строкам загруженной детализации: <b>${residual.join(', ')}</b>; сумма строк плюс этот остаток равна KPI.`;
       noteHost.innerHTML=note?`<div class="stage-note">${note}</div>`:'';
     }
 
-    chStackLine('#d1',H('#d1',270,0.48),per.map(p=>'P'+p.k),
+    const d1Rows=chartOrders('d1',D);
+    const per=grp(d1Rows,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
+      .sort((a,b)=>periodCompare(a.k,b.k));
+    chStackLine('#d1',H('#d1',270,0.48),per.map(p=>periodLabel(p.k)),
       [{c:CH.d3,v:per.map(p=>p.sal)},{c:CH.d5,v:per.map(p=>p.unm)}],
       {c:CH.warn,v:per.map(p=>p.dem?p.sal/p.dem:0)},v=>nf(v/1000,0)+'k',
-      i=>`<b>P${per[i].k}</b><br>Ограниченный спрос: ${nf(per[i].dem)} т<br>Отгружено: ${nf(per[i].sal)} т<br>Дефицит: ${nf(per[i].unm)} т<br>Service Level: ${pc(per[i].dem?per[i].sal/per[i].dem:0)}`,
+      i=>`<b>${periodLabel(per[i].k)}</b><br>Ограниченный спрос: ${nf(per[i].dem)} т<br>Отгружено: ${nf(per[i].sal)} т<br>Дефицит: ${nf(per[i].unm)} т<br>Service Level: ${pc(per[i].dem?per[i].sal/per[i].dem:0)}`,
       i=>setF('p',per[i].k));
     const noData=(id,msg)=>{const g=cv(id,200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;g.x.fillText(msg,g.w/2,100)}};
-    if(def.length)chH('#d2',H('#d2',270,0.55),def.map(d=>({k:d.k,v:d.lm,c:CH.d5,prod:d.prod,
+    const def2=grp(chartOrders('d2',D).filter(o=>o.unm>1e-9),o=>o.loc+' · '+o.prod,
+      v=>({v:S(v,o=>o.unm),lm:S(v,lmS),prod:v[0].prod})).sort((a,b)=>b.lm-a.lm).slice(0,8);
+    if(def2.length)chH('#d2',H('#d2',270,0.55),def2.map(d=>({k:d.k,v:d.lm,c:CH.d5,prod:d.prod,
       tip:`<b>${d.k}</b><br>Дефицит: ${nf(d.v)} т<br>Упущенная маржа: ${bn(d.lm)}`})),bn,it=>setF('pr',it.prod));
     else noData('#d2','Дефицитов под текущими фильтрами нет');
     chDonut('#d3',H('#d3',230,0.55),[{k:'RU внутренний',v:S(ru,o=>o.mar),c:CH.d1},{k:'EX экспорт',v:S(ex,o=>o.mar),c:CH.d2}],
@@ -3696,23 +3816,24 @@ function tabDM(){
     chDumbbell('#d5',H('#d5',290,0.6),pr.slice(0,9).map(p=>({k:p.k,a:p.price,b:p.cpt,
       tip:`<b>${p.k}</b><br>Цена: ${nf(p.price)} ₽/т<br>Себестоимость: ${nf(p.cpt)} ₽/т<br>Маржа на тонну: ${nf(p.price-p.cpt)} ₽<br>Маржинальность: ${pc(1-p.cpt/Math.max(p.price,1))}`})),
       v=>nf(v/1000,0)+'k ₽',it=>setF('pr',it.k));
-    const rws=uq(D,o=>o.cl),cls=uq(D,o=>o.p).sort((a,b)=>a-b);
-    chHeat('#d6',H('#d6',290,0.55),rws,cls.map(c=>'P'+c),rws.map(r=>cls.map(c=>S(D.filter(o=>o.cl===r&&o.p==c),o=>o.mar))),bn,
-      (r,c)=>{const k=String(r),p=String(c).slice(1);
+    const rws=uq(DSales,o=>o.cl),cls=uq(DSales,o=>o.p).sort(periodCompare),clLabels=cls.map(periodLabel);
+    chHeat('#d6',H('#d6',290,0.55),rws,clLabels,rws.map(r=>cls.map(c=>S(DSales.filter(o=>o.cl===r&&String(o.p)===String(c)),o=>o.mar))),bn,
+      (r,c)=>{const k=String(r),ci=clLabels.indexOf(String(c)),p=String(cls[Math.max(0,ci)]);
         const i=F.cl.indexOf(k);i<0?F.cl.push(k):F.cl.splice(i,1);
         const j=F.p.indexOf(p);j<0?F.p.push(p):F.p.splice(j,1);render()});
-    const hr=prDef.slice(0,7).map(p=>p.k),hc=cls.map(c=>'P'+c);
-    if(hr.length)chHeat('#d8',H('#d8',290,0.5),hr,hc,hr.map(r=>hc.map(c=>S(D.filter(o=>o.prod===r&&('P'+o.p)===c),o=>o.unm))),
+    const d8Rows=chartOrders('d8',D),d8Periods=uq(d8Rows,o=>o.p).sort(periodCompare),d8Labels=d8Periods.map(periodLabel);
+    const prDef=grp(d8Rows.filter(o=>o.unm>1e-9),o=>o.prod,v=>({unm:S(v,o=>o.unm),lm:S(v,lmS)})).sort((a,b)=>b.unm-a.unm);
+    const hr=prDef.slice(0,7).map(p=>p.k);
+    if(hr.length)chHeat('#d8',H('#d8',290,0.5),hr,d8Labels,hr.map(r=>d8Periods.map(p=>S(d8Rows.filter(o=>o.prod===r&&String(o.p)===String(p)),o=>o.unm))),
       v=>nf(v)+' т',r=>setF('pr',r),v=>nf(v/1000,1)+'k');
     else noData('#d8','Нет дефицитов для разреза «продукт × период»');
-    if(defOrders.length)chPareto('#d9',H('#d9',280,0.5),defOrders.slice().sort((a,b)=>b.unm-a.unm).slice(0,40).map(o=>({k:`#${o.id} ${o.prod}`,v:o.unm})),
+    const d9Rows=chartOrders('d9',D).filter(o=>o.unm>1e-9);
+    if(d9Rows.length)chPareto('#d9',H('#d9',280,0.5),d9Rows.slice().sort((a,b)=>b.unm-a.unm).slice(0,40).map(o=>({k:`${orderDisplayId(o)} ${o.prod}`,v:o.unm})),
       v=>nf(v)+' т',it=>setF('pr',it.k.split(' ')[1]));
     else noData('#d9','Дефицитов нет');
 
     dtable('#d7',[
-      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>o.independentOnly
-        ?`<span title="Строка independent_demand не попала в план">${esc(o.idLabel||('ID-'+o.independentSourceId))}</span>`
-        :`<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа №${o.id}" data-goto-order="${o.id}" data-tree-mode="stages">№${v} ↗</span>`},
+      {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>orderIdCell(o,true)},
       {k:'stage',t:'Статус покрытия',left:1,flt:1,
         title:'Классификация по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично покрыто — есть отгрузка и дефицит; полностью покрыто — дефицита нет. Быстрые фильтры — чипы над таблицей',
         v:o=>orderStageLabel(o),
@@ -3725,7 +3846,7 @@ function tabDM(){
       {k:'prod',t:'Продукт',left:1,flt:1},
       {k:'cl',t:'Клиент',left:1,flt:1},
       {k:'chan',t:'Канал',flt:1},
-      {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
+      {k:'p',t:'Период',num:1,flt:1,f:v=>periodLabel(v)},
       {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
       {k:'sal',t:'Отгрузка',num:1,f:v=>nf(v,1)},
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:()=>'neg'},
@@ -3760,12 +3881,12 @@ function tabDM(){
         return `<span class="tag-wrap">`
           +`<span class="tag" data-goto-order="${o.id}" data-tree-mode="stages" style="${st};font-weight:600;cursor:pointer" title="Открыть цепочку заказа №${o.id}: этапы цепи в тоннах">${icon} ${txt} ↗</span>`
           +`<span class="tag gear" data-rca-jump="1" data-mode="log_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" title="Открыть цепочку логистических мощностей заказа №${o.id} с фокусом на лимите">⚙</span></span>`}},
-      {k:'lostRev',t:'Потер. выручка',num:1,v:o=>o.unm*o.price,f:v=>mln(v),cls:()=>'neg'},
+      {k:'lostRev',t:'Упущ. выручка',num:1,v:o=>lostRevS(o),f:v=>mln(v),cls:()=>'neg'},
       {k:'lm',t:'Упущ. маржа',num:1,v:o=>lmS(o),f:v=>mln(v),cls:()=>'neg'}
     ],stageRows,{key:'dm_def',sort:'lm',dir:'desc',h:360,csv:1,name:'deficits'});
   },0);
 
-  const topDef=def[0],hiMar=D.slice().sort((a,b)=>b.mpt-a.mpt)[0];
+  const topDef=def[0],hiMar=(DSales.length?DSales:D).slice().sort((a,b)=>b.mpt-a.mpt)[0];
   return html+summary('Резюме: спрос и покрытие',[
     {t:'Водопад',i:[
       useUnc?`Неограниченный спрос <span class="h">${nf(demUnc)} т</span> (${ordW(ord.total)}) = в план принято ${nf(dem)} т (${pc(demUnc?dem/demUnc:0)}) + не принято ${nf(notPlanned)} т; план продаж ${nf(sal)} т, из них в срок ${nf(inTime)} т.`
@@ -4194,7 +4315,7 @@ function tabPC(){
   const byM=grp(O,r=>r.pr,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),vd:uq(v,x=>x.vd),
     rate:S(v,r=>r.cost)/Math.max(S(v,r=>r.v),1),min:Math.min(...v.map(x=>x.r)),max:Math.max(...v.map(x=>x.r))}))
     .sort((a,b)=>b.c-a.c);
-  const byP=grp(O,r=>r.p,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),rate:S(v,r=>r.cost)/Math.max(S(v,r=>r.v),1)})).sort((a,b)=>a.k-b.k);
+  const byP=grp(O,r=>r.p,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),rate:S(v,r=>r.cost)/Math.max(S(v,r=>r.v),1)})).sort((a,b)=>periodCompare(a.k,b.k));
   const infl=byM.filter(m=>m.max>m.min).map(m=>({...m,gr:m.max/m.min-1})).sort((a,b)=>b.gr-a.gr);
   const top3=byV.slice(0,3),conc=S(top3,v=>v.c)/Math.max(cost,1);
   const multiSrc=byM.filter(m=>m.vd.length>1);
@@ -4222,8 +4343,8 @@ function tabPC(){
     chDumbbell('#c3',H('#c3',260,0.55),infl.slice(0,9).map(m=>({k:m.k,a:m.min,b:m.max,
       tip:`<b>${m.k}</b><br>Минимум: ${nf(m.min)} ₽/т<br>Максимум: ${nf(m.max)} ₽/т<br>Разброс: <b>+${pc(m.gr)}</b><br>Поставщики: ${m.vd.join(', ')}`})),
       v=>nf(v/1000,0)+'k',null);
-    chLine('#c4',H('#c4',260,0.45),byP.map(p=>'P'+p.k),[{c:CH.d4,v:byP.map(p=>p.rate),fill:1}],v=>nf(v/1000,0)+'k',
-      i=>`<b>P${byP[i].k}</b><br>Средняя цена: ${nf(byP[i].rate)} ₽/т<br>Затраты: ${bn(byP[i].c)}<br>Объём: ${nf(byP[i].v,1)} т`,
+    chLine('#c4',H('#c4',260,0.45),byP.map(p=>periodLabel(p.k)),[{c:CH.d4,v:byP.map(p=>p.rate),fill:1}],v=>nf(v/1000,0)+'k',
+      i=>`<b>${periodLabel(byP[i].k)}</b><br>Средняя цена: ${nf(byP[i].rate)} ₽/т<br>Затраты: ${bn(byP[i].c)}<br>Объём: ${nf(byP[i].v,1)} т`,
       i=>setF('p',byP[i].k));
     const rr=byV.slice(0,7).map(v=>v.k),cc=byM.slice(0,8).map(m=>m.k);
     chHeat('#c5',H('#c5',260,0.5),rr,cc,rr.map(r=>cc.map(c=>S(O.filter(x=>x.vd===r&&x.pr===c),x=>x.cost))),bn,(r)=>setF('vd',r));
@@ -4231,7 +4352,7 @@ function tabPC(){
     dtable('#c7',[
       {k:'vd',t:'Поставщик',left:1,flt:1},
       {k:'pr',t:'Материал',left:1,flt:1},
-      {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
+      {k:'p',t:'Период',num:1,flt:1,f:v=>periodLabel(v)},
       {k:'v',t:'Тонн',num:1,f:v=>nf(v,2)},
       {k:'r',t:'Цена ₽/т',num:1,f:v=>nf(v),cls:v=>v>500000?'neg':v>150000?'mid':''},
       {k:'cost',t:'Затраты, млн',num:1,f:v=>nf(v/1e6,2)},
@@ -4267,7 +4388,7 @@ function tabST(){
   const cost=S(O,r=>r.cost),vol=S(O,r=>r.v),totCost=S(fOps(),r=>r.cost);
   const byPl=grp(O,r=>r.pl,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),sku:uq(v,x=>x.pr).length})).sort((a,b)=>b.c-a.c);
   const byPr=grp(O,r=>r.pr,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),steps:v.length})).sort((a,b)=>b.c-a.c);
-  const byP=grp(O,r=>r.p,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),n:v.length})).sort((a,b)=>a.k-b.k);
+  const byP=grp(O,r=>r.p,v=>({c:S(v,r=>r.cost),v:S(v,r=>r.v),n:v.length})).sort((a,b)=>periodCompare(a.k,b.k));
   const chains=grp(O,r=>r.o+'|'+r.pr+'|'+r.pl,v=>({steps:v.length,v:v[0].v,c:S(v,r=>r.cost),o:v[0].o,pr:v[0].pr,pl:v[0].pl}))
     .sort((a,b)=>b.steps-a.steps);
   const K=[['Затраты на хранение',bn(cost),pc(cost/Math.max(totCost,1))+' затрат цепочки',''],
@@ -4290,8 +4411,8 @@ function tabST(){
     chH('#s1',H('#s1',240,0.5),byPl.slice(0,9).map((p,i)=>({k:p.k,v:p.c,c:PAL[i%PAL.length],
       tip:`<b>${p.k}</b><br>Затраты: ${bn(p.c)}<br>Тонно-периодов: ${nf(p.v)}<br>SKU: ${p.sku}`})),bn,it=>setF('pl',it.k));
     chDonut('#s2',H('#s2',240,0.55),byPr.slice(0,6).map((p,i)=>({k:p.k,v:p.v,c:PAL[i]})),'Тонно-периоды',v=>nf(v)+' т·п',null);
-    chBars('#s3',H('#s3',250,0.45),byP.map(p=>'P'+p.k),[{c:CH.d4,v:byP.map(p=>p.c)}],v=>nf(v/1e6,0)+' млн',
-      i=>`<b>P${byP[i].k}</b><br>Затраты: ${bn(byP[i].c)}<br>Операций: ${byP[i].n}<br>Тонно-периодов: ${nf(byP[i].v)}`,
+    chBars('#s3',H('#s3',250,0.45),byP.map(p=>periodLabel(p.k)),[{c:CH.d4,v:byP.map(p=>p.c)}],v=>nf(v/1e6,0)+' млн',
+      i=>`<b>${periodLabel(byP[i].k)}</b><br>Затраты: ${bn(byP[i].c)}<br>Операций: ${byP[i].n}<br>Тонно-периодов: ${nf(byP[i].v)}`,
       i=>setF('p',byP[i].k),0,1);
     chH('#s4',H('#s4',250,0.52),chains.slice(0,9).map(c=>({k:c.pr+' · '+c.pl,v:c.steps,
       c:c.steps>4?CH.err:CH.d2,pl:c.pl,
@@ -4638,7 +4759,7 @@ function tabVS(){
         return VS_HEAT==='a'?a0:VS_HEAT==='b'?b0:(b0-a0);
       }));
       const fmtCell=VS_HEAT==='delta'?(v=>v?nf(v/1e6,1):'0'):(v=>nf(v/1e6,0));
-      chHeat('#v7',H('#v7',300,0.5),heat.rows,heat.cols.map(c0=>'P'+c0),mat,
+      chHeat('#v7',H('#v7',300,0.5),heat.rows,heat.cols.map(c0=>periodLabel(c0)),mat,
         v=>mln(v),p=>setF('pr',p),fmtCell);
       const host=$('#v7');
       if(host&&host.parentElement&&!host.parentElement.querySelector('.rec-note')){
@@ -5050,6 +5171,9 @@ function tabDQ(){
 let RAW_VIEW='orders';
 function tabRAW(){
   const O=fOrders(),Ops=fOps(),isOrd=RAW_VIEW==='orders';
+  /* Те же денежные коэффициенты, что в RCA: таблица «Заказы спроса» не должна
+     зависеть от того, какой раздел пользователь открыл перед ней. */
+  if(O.length)lmState(O);
   /* ── Что не задействовано в плане: маршруты, ресурсы, поставщики ──
      «Всего» берётся из реестра (capacity_view_sp / res_loc_loc), а не из операций:
      только так видно, что часть мощностей и направлений планом не использована —
@@ -5098,25 +5222,30 @@ function tabRAW(){
       '«Всего» — из реестра (capacity_view_sp, res_loc_loc), а не из операций. '+
       'Разбор по категориям и источник каждого реестра — в карточке «Что не задействовано в плане».']
   ];
+  /* Первые столбцы, названия и расчётные значения совпадают с RCA-таблицей
+     «Заказы, упущенная маржа и корневые причины». Дополнительные финансовые
+     поля идут справа и не меняют смысл общей части. */
   const ordCols=[
-    {k:'id',t:'#',num:1,left:1},
-    {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
-    {k:'d',t:'Дата',left:1,flt:1},
-    {k:'loc',t:'Локация спроса',left:1,flt:1},
-    {k:'prod',t:'Продукт',left:1,flt:1},
-    {k:'cl',t:'Клиент',left:1,flt:1},
-    {k:'chan',t:'Канал',flt:1},
-    /* Стадия водопада (2026-10-05): классификация заказа по правилам demand_coverage */
-    {k:'stage',t:'Стадия',left:1,flt:1,title:'Классификация заказа по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
+    {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>orderIdCell(o,false)},
+    {k:'stage',t:'Статус покрытия',left:1,flt:1,title:'Классификация по правилам demand_coverage: 100% не покрыто — отгрузка 0; частично — есть отгрузка и дефицит; полностью — дефицита нет',
       v:o=>orderStageLabel(o),
       f:(v,o)=>{const s=orderStageOf(o);
         const st=s==='fullUnc'?'color:var(--scp-err);border-color:var(--scp-err);background:var(--scp-err-bg)'
           :s==='part'?'color:var(--scp-warn);border-color:var(--scp-warn);background:var(--scp-warn-bg)'
           :'color:var(--scp-ok);border-color:var(--scp-ok);background:var(--scp-ok-bg)';
         return `<span class="tag" style="${st}">${orderStageLabel(o)}</span>`}},
-    {k:'dem',t:'Спрос, т',num:1,f:v=>nf(v)},
-    {k:'sal',t:'Продажи, т',num:1,f:v=>nf(v,1)},
-    {k:'unm',t:'Дефицит, т',num:1,f:v=>nf(v,1),cls:v=>v>0?'neg':''},
+    {k:'loc',t:'Локация',left:1,flt:1},
+    {k:'prod',t:'Продукт',left:1,flt:1},
+    {k:'cl',t:'Клиент',left:1,flt:1},
+    {k:'chan',t:'Канал',flt:1},
+    {k:'p',t:'Период',num:1,flt:1,f:v=>periodLabel(v)},
+    {k:'dem',t:'Спрос',num:1,f:v=>nf(v)},
+    {k:'sal',t:'Отгрузка',num:1,f:v=>nf(v,1)},
+    {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:v=>v>0?'neg':''},
+    {k:'cov',t:'Покрытие',num:1,v:o=>o.dem?o.sal/o.dem:0,f:v=>pc(v),cls:v=>v>.5?'mid':'neg'},
+    {k:'lostRev',t:'Упущ. выручка',num:1,v:o=>lostRevS(o),f:v=>mln(v),cls:()=>'neg'},
+    {k:'lm',t:'Упущ. маржа',num:1,v:o=>lmS(o),f:v=>mln(v),cls:()=>'neg'},
+    {k:'d',t:'Дата источника',left:1,flt:1},
     {k:'price',t:'Цена ₽/т',num:1,f:v=>nf(v)},
     {k:'cpt',t:'С/с ₽/т',num:1,f:v=>nf(v)},
     {k:'mpt',t:'Маржа ₽/т',num:1,f:v=>nf(v)},
@@ -5124,14 +5253,14 @@ function tabRAW(){
     {k:'cost',t:'Себестоимость',num:1,f:v=>mln(v)},
     {k:'mar',t:'Маржа',num:1,f:v=>mln(v)},
     {k:'pk',t:'Приоритет',flt:1,
-      title:'Приоритет заказа — колонка demandtype (marking_demand / demand_coverage)',
+      title:'Приоритет заказа — колонка demandtype (marking_demand / independent_demand)',
       f:(v,r)=>r.prioSrc&&r.prioSrc!=='demandtype'?`${v} (${esc(r.prioSrc)})`:v},
     ...(DS.orders.some(x=>x.mph>0)?[{k:'mph',t:'Маржа ₽/ч',num:1,f:v=>v?nf(v):'—',
-      title:'margin_per_hour — метрика, а не приоритет (раньше её ошибочно читали как приоритет)'}]:[])
+      title:'margin_per_hour — метрика, а не приоритет'}]:[])
   ];
   const opsCols=[
     {k:'o',t:'Заказ',num:1,flt:1,left:1,f:v=>'№'+v},
-    {k:'p',t:'Период',num:1,flt:1,f:v=>'P'+v},
+    {k:'p',t:'Период',num:1,flt:1,f:v=>periodLabel(v)},
     {k:'type',t:'Тип',flt:1,left:1},
     {k:'pr',t:'Продукт операции',left:1,flt:1},
     {k:'pl',t:'Завод',left:1,flt:1},
@@ -6407,7 +6536,7 @@ function tabTREE(){
   const ordPool=orders.slice(0,100);
   if(curOrd&&!ordPool.some(o=>o.id===curOrd.id))ordPool.push(curOrd);
   const ordOptions=ordPool.slice().sort((a,b)=>a.id-b.id).map(o=>
-    `<option value="${o.id}" ${o.id===curOrd.id?'selected':''}>Заказ №${o.id} | ${o.prod} | ${o.cl} | P${o.p} | маржа ${mln(o.mar)}</option>`).join('');
+    `<option value="${o.id}" ${o.id===curOrd.id?'selected':''}>Заказ ${orderDisplayId(o)} | ${o.prod} | ${o.cl} | ${periodLabel(o.p)} | маржа ${mln(o.mar)}</option>`).join('');
   const K=[
     ['Выбранный заказ',`№${curOrd.id} · ${curOrd.prod}`,curOrd.cl,''],
     ['Объём отгрузки',`${nf(curOrd.sal,1)} т`,`Спрос ${nf(curOrd.dem)} т, SL ${pcOf(curOrd.sal,curOrd.dem)}`,''],
@@ -6577,7 +6706,7 @@ function tabTREE(){
         {k:'rsName',t:'Ресурс / Маршрут',left:1,flt:1},
         {k:'resType',t:'Тип ограничения',left:1,flt:1},
         {k:'prodTarget',t:'Маска продукта',left:1,flt:1,f:v=>v||'Все SKU'},
-        {k:'periodKey',t:'Период',left:1,flt:1,f:(v,r)=>r.isGlobal?'Глобальный':(v||'P'+r.p)},
+        {k:'periodKey',t:'Период',left:1,flt:1,f:(v,r)=>r.isGlobal?'Глобальный':(v||periodLabel(r.p))},
         {k:'avail',t:'Лимит (const)',num:1,f:(v,r)=>r.isBlocked?`0 ${r.unit||'т'} (заблокировано)`:`${nf(v)} ${r.unit||'т'}`,cls:v=>v===0?'neg':''},
         {k:'load',t:'План загрузки',num:1,f:(v,r)=>`${nf(v)} ${r.unit||'т'}`},
         {k:'free',t:'Свободный остаток',num:1,f:(v,r)=>r.isBlocked?`0 ${r.unit||'т'}`:`${nf(v)} ${r.unit||'т'}`,cls:v=>v===0?'neg':'pos'},
@@ -6686,7 +6815,7 @@ function tabTREE(){
     }
   },0);
 
-  return html+summary(`Резюме цепочки: заказ №${curOrd.id}`,[
+  return html+summary(`Резюме цепочки: заказ ${orderDisplayId(curOrd)}`,[
     {t:'Анализ сквозного потока и структуры себестоимости',i:[
       `Переключайтесь между режимами <span class="h">«Тонны»</span> и <span class="h">«Себестоимость»</span>, чтобы увидеть, на каких переделах и закупках накапливается основная масса затрат.`,
       `В денежном режиме карточки узлов выводят сумму в млн ₽ и долю в общей себестоимости заказа (${mln(curOrd.cost)} ₽), внизу — сводный мост затрат.`,
@@ -6733,7 +6862,14 @@ function normalizePeriodKey(val){
   }
   const s=String(val).trim();
   if(!s)return '';
-  let m=s.match(/^(\d{4})-(\d{1,2})/);            // ISO: 2026-04 / 2026-04-15
+  /* periodid independent_demand: 4YYYYMMDD (иногда с префиксом P). Его
+     необходимо распознать ДО общих числовых форматов: P420270401 — это апрель
+     2027, а не самостоятельный период P420270401. */
+  let m=s.match(/^P?[1-6](20\d{2})(0[1-9]|1[0-2])([0-3]\d)$/i);
+  if(m)return m[1]+'-'+m[2];
+  m=s.match(/^(20\d{2})(0[1-9]|1[0-2])([0-3]\d)$/); // YYYYMMDD
+  if(m)return m[1]+'-'+m[2];
+  m=s.match(/^(\d{4})-(\d{1,2})/);            // ISO: 2026-04 / 2026-04-15
   if(m)return m[1]+'-'+m[2].padStart(2,'0');
   m=s.match(/^(\d{4})(\d{2})$/);                  // 202604
   if(m)return m[1]+'-'+m[2];
@@ -7569,7 +7705,7 @@ function demoCoverage(ds){
     ordFullUncDet=ds.orders.filter(o=>orderStageOf(o)==='fullUnc').length,
     unpl=Math.round(ds.orders.length*0.12),
     lateOrd=Math.round(ordFull*0.04);
-  const byP=grp(ds.orders,o=>o.d||('P'+o.p),v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
+  const byP=grp(ds.orders,o=>o.d||periodLabel(o.p),v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
     .sort((a,b)=>String(a.k).localeCompare(String(b.k)));
   ds.agg={demo:true,
     totals:{cov:{demUnc,ff:sal,uf:notPlanned+unm,inTime:Math.max(0,sal-late),late,
@@ -7595,5 +7731,8 @@ if(SAVED){
   STAT_PIN=true;
 }
 </script>
+</body>
+</html>
+pt>
 </body>
 </html>
