@@ -179,8 +179,8 @@ test('счёт заказов demand_coverage: разбиение полное, 
   assert.equal(ord.inOpt, 70, 'в оптимизации = всего − 100% не покрытых');
   assert.equal(ord.inOpt, ord.part + ord.full, 'в оптимизации = частично + полностью');
   assert.equal(ord.late, 6, 'с опозданием — среди полностью покрытых (lateFullyCoveredOrders)');
-  assert.equal(ord.intime, 44, 'в срок = полностью покрытые − опоздавшие');
-  assert.equal(ord.late + ord.intime, ord.full, 'План продаж (заказов) = В срок + С опозданием');
+  assert.equal(ord.intime, 64, 'в срок = все заказы плана − опоздавшие');
+  assert.equal(ord.late + ord.intime, ord.inOpt, 'План продаж (заказов) = В срок + С опозданием');
 });
 
 test('водопад по заказам: те же столбцы, шаги сходятся, режим переключается и сохраняется', async (t) => {
@@ -191,14 +191,14 @@ test('водопад по заказам: те же столбцы, шаги с�
   const wf = JSON.parse(ctx.ev('(function(){return JSON.stringify(dmOrderWaterfall(covBasis(fOrders()).ord).map(b=>[b.k,b.v]))})()'));
   assert.deepEqual(wf.map((x) => x[0]), [
     'Неограниченный спрос', 'Заказов 100% не покрыто', 'Заказов в оптимизации',
-    'Дефицит плана', 'План продаж', 'Фактически отгружено с опозданием', 'В срок',
-  ], 'названия столбцов совпадают с водопадом в тоннах');
-  assert.deepEqual(wf.map((x) => x[1]), [100, -30, 70, -20, 50, -6, 44], 'значения — счёт заказов');
-  /* арифметика шагов: после вычитания уровень равен следующему «total» */
-  let lvl = wf[0][1];
-  assert.equal(lvl + wf[1][1], wf[2][1], 'Всего − 100% не покрыто = В оптимизации');
-  assert.equal(wf[2][1] + wf[3][1], wf[4][1], 'В оптимизации − Дефицит = План продаж');
-  assert.equal(wf[4][1] + wf[5][1], wf[6][1], 'План продаж − Опоздания = В срок');
+    'План продаж', 'Отгружено с опозданием', 'В срок',
+  ], 'дефицит объединён с планом продаж');
+  assert.deepEqual(wf.map((x) => x[1]), [100, -30, 70, 70, -6, 64], 'значения — счёт заказов');
+  assert.equal(wf[0][1] + wf[1][1], wf[2][1], 'Всего − 100% не покрыто = В оптимизации');
+  assert.equal(wf[2][1], wf[3][1], 'План продаж включает полностью и частично выполненные заказы');
+  assert.equal(wf[3][1] + wf[4][1], wf[5][1], 'План продаж − Опоздания = В срок');
+  const plan=JSON.parse(ctx.ev('(function(){return JSON.stringify(dmOrderWaterfall(covBasis(fOrders()).ord).find(b=>b.st==="plan"))})()'));
+  assert.deepEqual(plan.segments.map(s=>s.v),[50,20],'столбец разделён на полностью выполненные и дефицит');
 
   /* переключалка на карточке водопада: «Заказы» меняет подпись и сохраняется */
   const seg = ctx.document.getElementById('d0mode');
@@ -238,7 +238,7 @@ test('карточки «Спроса и покрытия»: ряд без уб�
   assert.ok(ctx.kpi('Неограниченный спрос'), 'карточка «Неограниченный спрос» есть');
   assert.ok(ctx.kpi('Не покрыто всего'), 'карточка «Не покрыто всего» осталась в этом разделе');
   for (const gone of ['Не принято в план', 'Ограниченный спрос (план)', 'Дефицит плана',
-    'Фактически отгружено с опозданием', 'Отгружено'])
+    'Отгружено с опозданием', 'Отгружено'])
     assert.equal(ctx.kpi(gone), undefined, `карточки «${gone}» больше нет`);
   const titles = [...ctx.document.querySelectorAll('#main .kpi .t')].map((x) => x.textContent.trim());
   assert.equal(titles[titles.length - 1], 'Упущенная маржа', '«Упущенная маржа» — последняя в ряду');
@@ -255,11 +255,12 @@ test('клик по стадии водопада и чипы фильтруют
 
   /* чипы над таблицей — по названиям столбцов водопада, со счётчиками */
   const chips = [...ctx.document.querySelectorAll('#d7chips .stage-chip')];
-  assert.equal(chips.length, 7, 'семь чипов — по числу столбцов водопада');
+  assert.equal(chips.length, 6, 'шесть чипов — отдельный фильтр дефицита удалён');
   const chipTxt = chips.map((c) => clean(c.textContent)).join(' | ');
   for (const name of ['Неограниченный спрос', 'Заказов 100% не покрыто', 'Заказов в оптимизации',
-    'Дефицит плана', 'План продаж', 'Фактически отгружено с опозданием', 'В срок'])
+    'План продаж', 'Отгружено с опозданием', 'В срок'])
     assert.match(chipTxt, new RegExp(name), `чип «${name}» есть`);
+  assert.doesNotMatch(chipTxt,/Дефицит плана/,'отдельного фильтра дефицита нет');
   assert.match(chipTxt, /Неограниченный спрос 100/, 'в чипе «Неограниченный спрос» — счётчик 100');
 
   /* таблица по умолчанию — все заказы, с колонкой стадии */
@@ -269,21 +270,16 @@ test('клик по стадии водопада и чипы фильтруют
   assert.ok(stages.includes('Полностью покрыто') && stages.includes('Частично покрыто') && stages.includes('100% не покрыто'),
     'колонка «Стадия» классифицирует каждую строку');
 
-  /* чип «Дефицит плана» → только частично покрытые */
-  const chipDef = chips.find((c) => c.dataset.stage === 'deficit');
-  chipDef.click();
-  await settle(300);
-  rows = [...ctx.document.querySelectorAll('#d7 table tbody tr')];
-  assert.equal(rows.length, 1, 'остался один частично покрытый заказ');
-  assert.match(clean(rows[0].textContent), /№102/, 'это заказ №102 (sal=300, unm=300)');
-  assert.match(clean(rows[0].querySelectorAll('td')[1].textContent), /Частично покрыто/, 'стадия подписана');
+  assert.equal(chips.find((c) => c.dataset.stage === 'deficit'),undefined,
+    'фильтр «Дефицит плана» удалён');
 
-  /* клик по столбцу водопада — тот же фильтр: имитируем через состояние стадии */
+  /* единый «План продаж» включает полностью и частично выполненные заказы */
   ctx.ev("DM_STAGE='plan';render();undefined");
   await settle(300);
   rows = [...ctx.document.querySelectorAll('#d7 table tbody tr')];
-  assert.equal(rows.length, 1, 'стадия «План продаж» — только полностью покрытые');
-  assert.match(clean(rows[0].textContent), /№101/, 'это заказ №101 (unm=0)');
+  assert.equal(rows.length, 2, '«План продаж» содержит полностью и частично покрытые заказы');
+  assert.match(rows.map(r=>clean(r.textContent)).join(' '), /№101/);
+  assert.match(rows.map(r=>clean(r.textContent)).join(' '), /№102/);
 
   /* «100% не покрыто»: в таблице — принятые в план с нулевой отгрузкой,
      остальное названо (вне плана / лимит детализации) */
@@ -329,8 +325,8 @@ test('фолбэки счёта заказов: marking_demand без счётч
 
   /* водопад по заказам без demand_coverage — от «Заказов в оптимизации» */
   const wf = JSON.parse(ctx.ev('(function(){return JSON.stringify(dmOrderWaterfall(covBasis(fOrders()).ord).map(b=>b.k))})()'));
-  assert.deepEqual(wf, ['Заказов в оптимизации', 'Дефицит плана', 'План продаж'],
-    'зеркально водопаду в тоннах без independent_demand');
+  assert.deepEqual(wf, ['Заказов в оптимизации', 'План продаж'],
+    'дефицит остаётся жёлтым сегментом единого плана продаж');
 
   /* под фильтрами — загруженная выборка */
   ctx.ev("setF('pr',['P1']);undefined");
@@ -371,4 +367,36 @@ test('стадия заказа считается по правилам demand_
   ])`);
   assert.deepEqual(JSON.parse(st), ['fullUnc', 'part', 'full', 'full'],
     'ff ≈ sal, uf ≈ unm; допуск 1e-9 отсекает шум двенадцатого знака');
+});
+
+
+test('independent_demand дополняет RCA и определяет разрешённое опоздание по сроку заказа', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+
+  const merged = JSON.parse(ctx.ev(`JSON.stringify(CHX.mergeIndependentOrders([
+    {id:201,p:2,loc:'L1',prod:'SKU-1',dt:1,stream:'S1',dem:100,sal:100,unm:0}
+  ],[
+    {sourceId:1,item:'SKU-1',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:100,periodid:'420260101',date:'2026-01-01'},
+    {sourceId:2,item:'SKU-2',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:50,periodid:'420260101',date:'2026-01-01'}
+  ],[
+    {item:'SKU-1',loc:'L1',dt:1,stream:'S1',latePeriods:2}
+  ]))`));
+  assert.equal(merged.length, 2, 'в реестре есть заказ плана и отсутствующий в плане входной заказ');
+  assert.equal(merged[0].lateAllowed, true, 'поздняя отгрузка разрешена справочником');
+  assert.equal(merged[0].late, true, 'P2 позже срока P1 — заказ отгружен с опозданием');
+  assert.equal(merged[1].independentOnly, true, 'недостающая строка создана из independent_demand');
+  assert.equal(merged[1].sal, 0);
+  assert.equal(merged[1].unm, 50);
+  assert.equal(ctx.ev('orderStageLabel('+JSON.stringify(merged[1])+')'), '100% не покрыто');
+
+  await ctx.goTab('dm');
+  const headers=[...ctx.document.querySelectorAll('#d7 th')].map(x=>clean(x.textContent));
+  assert.ok(headers.some(x=>x.includes('Статус покрытия')), 'столбец RCA переименован');
+  const card=ctx.document.getElementById('d7card'),fs=card.querySelector('.card-fs');
+  assert.ok(fs,'у RCA есть кнопка полноэкранного режима');
+  fs.click();await settle(200);
+  assert.ok(ctx.document.getElementById('d7card').classList.contains('full'),'таблица разворачивается');
+  ctx.document.querySelector('#d7card .card-fs').click();await settle(200);
+  assert.ok(!ctx.document.getElementById('d7card').classList.contains('full'),'таблица возвращается');
 });

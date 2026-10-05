@@ -201,6 +201,8 @@ test('POST /api/pg/unc — итог по Σ demandqty и помесячный р
     if (/information_schema\.columns/.test(sql)) return { rows: FULL_COLS.map((c) => ({ c })) };
     if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 1500.5, n: 12 }] };
     if (/GROUP BY k ORDER BY k/.test(sql)) return { rows: [{ k: '2026-09', demUnc: 900 }, { k: '2026-10', demUnc: 600.5 }] };
+    if (/AS "item"/.test(sql)) return { rows: [{ item:'SKU-1', demandqty:'100', periodid:'420260901',
+      dmdstream:'BASE', periodtype:4, demandtype:'1', loc:'L1', date:'2026-09-01' }] };
     return { rows: [] };
   }, async (base, calls) => {
     const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_2', gran: 4 });
@@ -209,6 +211,9 @@ test('POST /api/pg/unc — итог по Σ demandqty и помесячный р
     assert.equal(data.demUnc, 1500.5);
     assert.equal(data.n, 12);
     assert.deepEqual(data.periods, [{ k: '2026-09', demUnc: 900 }, { k: '2026-10', demUnc: 600.5 }]);
+    assert.deepEqual(data.orders, [{ sourceId:1, item:'SKU-1', demandqty:100, periodid:'420260901',
+      dmdstream:'BASE', periodtype:4, demandtype:'1', loc:'L1', date:'2026-09-01' }],
+      'RCA получает построчный independent_demand из того же DISTINCT-источника');
     assert.equal(data.cols.qty, 'demandqty');
     const totalCall = calls.find((c) => /count\(\*\)::bigint/.test(c.sql));
     assert.ok(totalCall, 'итоговый запрос выполнен');

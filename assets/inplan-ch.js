@@ -634,6 +634,10 @@ async function loadVersionAgg(db, gran){
       const totalUnc = num(u.demUnc);
       const qty = u.qtySource||'demandqty';
       const detail = 'PostgreSQL · '+u.schema;
+      /* Полный реестр входных заказов используется после загрузки
+         marking_demand: совпавшие строки обогащают заказы сроком, а
+         отсутствующие добавляются в RCA как 100% не покрытые. */
+      out.independentOrders = Array.isArray(u.orders) ? u.orders : [];
       if(totalUnc>0){
         applyUnc(totalUnc, u.periods, detail, qty);
       }else{
@@ -669,8 +673,17 @@ async function loadVersionAgg(db, gran){
     const gw = granWhere('capacity_view_sp', gran);
     const pk = periodKeyExpr('capacity_view_sp', gran);
     const S_CV = src(db,'capacity_view_sp', gw);
-    const availExpr = `if(${q('calcavailablebucketcapacity')} > 0,
-        ${q('calcavailablebucketcapacity')}, ${q('netavailablecapacity')})`;
+    /* Актуальный доступный фонд: calcavailable — основной, но у складов и
+       погрузки он бывает NULL. Тогда используем avail/net/freecapacity.
+       greatest безопасен для приведённых Float64 и не теряет 21 600 ч
+       погрузки из freecapacity в реальных данных владельца. */
+    const cap0=c=>`toFloat64(ifNull(${q(c)},0))`;
+    const rowLoadExpr=`greatest(${cap0('totalcapausage')},${cap0('inipcapaplannedusage')},
+        ${cap0('pcapaplannedusage')},${cap0('scapaplannedusage')},${cap0('transcapaplannedusage')})`;
+    /* freecapacity — остаток, поэтому полный фонд в fallback = free + load. */
+    const availExpr = `greatest(${cap0('calcavailablebucketcapacity')},
+        ${cap0('availbucketcapacity')}, ${cap0('netavailablecapacity')},
+        ${cap0('freecapacity')} + ${rowLoadExpr})`;
     const cap = await chQuery(`SELECT
         ${q('res')} AS rs, any(${q('loc')}) AS pl,
         any(${q('restypedescr')}) AS resTypeDescr, any(${q('restype')}) AS resType,
@@ -687,14 +700,26 @@ async function loadVersionAgg(db, gran){
         avg(${q('oee')}) AS oee
       FROM ${S_CV} GROUP BY rs, periodKey`);
     out.capacity = cap.map(r=>{
-      const avail = num(r.avail), load = num(r.load);
-      const free = Math.max(0, avail - load);
-      const util = avail > 0 ? Math.min(1, load/avail) : (load > 0 ? 1 : 0);
+      const avail = num(r.avail), code=num(r.resType);
+      const use={ip:num(r.useIp),p:num(r.useP),s:num(r.useS),t:num(r.useT)};
+      /* totalcapausage — основной итог. Компоненты страхуют NULL/неполный итог:
+         для склада важен scapaplannedusage, для погрузки — transcapaplannedusage.
+         Компоненты не суммируем: они могут уже входить в totalcapausage. */
+      const load=Math.max(num(r.load),use.ip,use.p,use.s,use.t);
+      const preferred=code===2?'s':code===4?'t':code===1?'p':'ip';
+      const sourceNames={ip:'inipcapaplannedusage',p:'pcapaplannedusage',
+        s:'scapaplannedusage',t:'transcapaplannedusage'};
+      const loadSource=num(r.load)>use[preferred]?'totalcapausage':sourceNames[preferred];
+      const free=avail-load;                 // отрицательный резерв показывает перегруз
+      const util=avail>0?load/avail:(load>0?1:0); // не обрезаем 100%: перегруз должен быть виден
+      const typeByCode={1:'Производство',2:'Склад',3:'Разгрузка',4:'Погрузка'};
+      const typeRaw=sany(r.resTypeDescr),resType=typeByCode[code]||typeRaw||('Тип '+code);
+      const cat={1:'production',2:'warehouse',3:'unloading',4:'loading'}[code]||'production';
       return {rs:sany(r.rs), pl:sany(r.pl), rsName:sany(r.rs),
-        resType:sany(r.resTypeDescr) || ('Тип '+r.resType), resTypeCode:num(r.resType),
-        grp:sany(r.grp), periodKey:String(r.periodKey||''), cat:'production', unit:'h',
-        norm:num(r.norm), avail, load, free, util,
-        use:{ip:num(r.useIp), p:num(r.useP), s:num(r.useS), t:num(r.useT)},
+        resType, resTypeCode:code,
+        grp:sany(r.grp), periodKey:String(r.periodKey||''), cat, unit:'h',
+        norm:num(r.norm), avail, load, loadSource, free, util,
+        use,
         maint:num(r.maint), oee:num(r.oee),
         isBottleneck: util >= 0.90, isCrit: util >= 0.999};
     });
@@ -908,6 +933,73 @@ CHX.loadOpsForOrder = async function(orderId){
 };
 
 /* ─────────────── 10. ГЛАВНАЯ ТОЧКА ВХОДА ─────────────── */
+/* Сводим вход independent_demand с результатом marking_demand.
+   В independent_demand нет order_id, поэтому бизнес-ключ — товар, локация,
+   тип и поток спроса; при повторах выбирается строка с ближайшим объёмом.
+   Непарные строки — реальные входные заказы, не попавшие в план. */
+function mergeIndependentOrders(markingOrders, inputRows, penalties){
+  if(!Array.isArray(inputRows) || !inputRows.length) return markingOrders;
+  const norm=v=>String(v==null?'':v).trim().toLowerCase();
+  const key=(prod,loc,dt,stream)=>[norm(prod),norm(loc),norm(dt),norm(stream)].join('|');
+  const rank=v=>{
+    let s=String(v==null?'':v).replace(/\D/g,'');
+    if(s.length===9 && /^[1-6]/.test(s))s=s.slice(1); // periodid: 4YYYYMMDD
+    return s ? Number(s.slice(0,8)) : 0;
+  };
+  const dueRanks=[...new Set(inputRows.map(r=>rank(r.periodid||r.date)).filter(Boolean))].sort((a,b)=>a-b);
+  const periodPosition=v=>{
+    const r=rank(v);if(!r)return 0;
+    /* marking_demand.demand_period часто хранит номер бакета P1/P2, тогда
+       как PG periodid хранит 4YYYYMMDD. Сопоставляем номер с позицией даты
+       во временном горизонте; календарные значения сравниваем напрямую. */
+    return r<10000 ? r : (dueRanks.indexOf(r)+1||r);
+  };
+  const pools=new Map();
+  inputRows.forEach((r,i)=>{
+    const x=Object.assign({_i:i,_used:false},r);
+    const k=key(x.item,x.loc,x.demandtype,x.dmdstream);
+    if(!pools.has(k))pools.set(k,[]);
+    pools.get(k).push(x);
+  });
+  const compatible=(a,b)=>!norm(a)||!norm(b)||norm(a)===norm(b);
+  const lateAllowed=o=>(penalties||[]).some(r=>num(r.latePeriods)>0
+    &&norm(r.item)===norm(o.prod)&&norm(r.loc)===norm(o.loc)
+    &&compatible(r.dt,o.dt)&&compatible(r.stream,o.stream));
+  const allInputs=[...pools.values()].flat();
+  const out=markingOrders.map(o=>{
+    let list=(pools.get(key(o.prod,o.loc,o.dt,o.stream))||[]).filter(r=>!r._used);
+    /* В некоторых marking_demand нет demandtype/dmdstream. Не превращаем
+       совпадающий товар той же локации в ложный «не попал в план» из-за
+       отсутствующего необязательного атрибута. */
+    if(!list.length)list=allInputs.filter(r=>!r._used&&norm(r.item)===norm(o.prod)
+      &&norm(r.loc)===norm(o.loc)&&compatible(r.demandtype,o.dt)&&compatible(r.dmdstream,o.stream));
+    if(!list.length)return o;
+    list.sort((a,b)=>Math.abs(num(a.demandqty)-num(o.dem))-Math.abs(num(b.demandqty)-num(o.dem)));
+    const r=list[0];r._used=true;
+    const due=r.periodid||r.date, allowed=lateAllowed(o);
+    const late=allowed&&num(o.sal)>ORD_TOL&&periodPosition(o.p)>0&&periodPosition(due)>0
+      &&periodPosition(o.p)>periodPosition(due);
+    return Object.assign({},o,{independentSourceId:r.sourceId,duePeriod:due,
+      lateAllowed:allowed,late:!!late});
+  });
+  inputRows.forEach((r,i)=>{
+    const pool=pools.get(key(r.item,r.loc,r.demandtype,r.dmdstream))||[];
+    const x=pool.find(v=>v._i===i);
+    if(!x || x._used)return;
+    const qty=num(r.demandqty), due=r.periodid||r.date;
+    out.push({
+      id:-1000000000-i, idLabel:'ID-'+(r.sourceId||i+1), independentOnly:true,
+      independentSourceId:r.sourceId||i+1, p:pnum(due), d:String(r.date||''),
+      loc:String(r.loc||''), prod:String(r.item||''), cl:'—', stream:String(r.dmdstream||''),
+      dt:r.demandtype, dtype:r.demandtype, pr:0, dem:qty, sal:0, unm:qty,
+      price:0,cpt:0,mpt:0,rev:0,cost:0,mar:0,mph:0,duePeriod:due,
+      lateAllowed:lateAllowed({prod:r.item,loc:r.loc,dt:r.demandtype,stream:r.dmdstream}),late:false
+    });
+  });
+  return out;
+}
+CHX.mergeIndependentOrders=mergeIndependentOrders;
+
 CHX.loadAll = async function(onProgress){
   const c = CHX.cfg;
   if(!c.schemas.length) throw new Error('Не выбрано ни одной схемы');
@@ -933,13 +1025,33 @@ CHX.loadAll = async function(onProgress){
   }
 
   step('Детализация основной схемы…');
-  const detail = await loadMainDetail(c.base, c.gran, c.detailOrders);
   const baseAgg = aggs.find(a=>a.db===c.base) || aggs[0];
+  /* Если PG отдал полный реестр входа, загружаем не меньше строк плана:
+     иначе заказ за пользовательским detail-limit ошибочно выглядел бы как
+     «100% не покрыто» только потому, что его не было в локальной выборке. */
+  const detailLimit=Math.max(c.detailOrders||2000,(baseAgg.independentOrders||[]).length);
+  const detail = await loadMainDetail(c.base, c.gran, detailLimit);
 
+  /* Построчный вход PG дополняет детализацию: теперь RCA действительно
+     содержит все заказы неограниченного спроса, включая не попавшие в план. */
+  const penalties=[].concat(baseAgg.penaltyFlat||[],baseAgg.penalty||[]);
+  const mergedOrders=mergeIndependentOrders(detail.orders,baseAgg.independentOrders,penalties);
+  if((baseAgg.independentOrders||[]).length){
+    const fullUnc=mergedOrders.filter(o=>num(o.sal)<=ORD_TOL).length;
+    const part=mergedOrders.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)>ORD_TOL).length;
+    const full=mergedOrders.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+    const late=mergedOrders.filter(o=>o.late&&num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+    const cov=baseAgg.totals.cov||(baseAgg.totals.cov={});
+    Object.assign(cov,{orderRows:mergedOrders.length,fullyUncoveredOrders:fullUnc,
+      partiallyCoveredOrders:part,fullyCoveredOrders:full,
+      lateOrdersAll:mergedOrders.filter(o=>o.late).length,lateFullyCoveredOrders:late});
+    cov.lateFromIndependent=S(mergedOrders.filter(o=>o.late),o=>o.sal);
+    baseAgg.totals.orderSource='independent_demand';
+  }
   /* сборка DS через существующий build() — вкладки продолжают работать */
   const ds = build({
     name: CHX.labelFor(c.base) + ' · ' + CHX.granLabel(c.gran),
-    orders: detail.orders,
+    orders: mergedOrders,
     ops: detail.ops,
     capacity: baseAgg.capacity || []
   });
@@ -951,7 +1063,7 @@ CHX.loadAll = async function(onProgress){
   ds.penalty = baseAgg.penalty || [];
   ds.penaltyFlat = baseAgg.penaltyFlat || [];
   ds.resTypes = baseAgg.resTypes || [];
-  ds.detailLimited = detail.orders.length >= (c.detailOrders||2000);
+  ds.detailLimited = detail.orders.length >= detailLimit;
   ds._demo = false;
 
   CHX.versions = c.schemas.map(db=>{

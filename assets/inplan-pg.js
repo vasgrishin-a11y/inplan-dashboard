@@ -365,6 +365,16 @@ PGX.uncFor = async function(db, gran){
   PGX.state.lastDataError = null;
   return { demUnc:apiNumber(r.demUnc), n:Math.max(0,Math.trunc(apiNumber(r.n))),
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:apiNumber(p.demUnc)})),
+           /* Построчный вход нужен для полного реестра RCA. Старый backend
+              может не прислать orders — тогда загрузчик сохранит прежний
+              агрегатный режим без выдуманных строк. */
+           orders:(r.orders||[]).map((o,i)=>({
+             sourceId:o.sourceId||i+1, item:String(o.item||''),
+             demandqty:apiNumber(o.demandqty), periodid:String(o.periodid||''),
+             dmdstream:String(o.dmdstream||''), periodtype:apiNumber(o.periodtype),
+             demandtype:o.demandtype==null?'':String(o.demandtype),
+             loc:String(o.loc||''), date:String(o.date||'')
+           })),
            schema:r.schema||schema, table:r.table||'independent_demand',
            qtySource:r.qtySource||((r.cols||{}).qty)||'demandqty',
            keyCols:Array.isArray(r.keyCols)?r.keyCols:[], distinct:!!r.distinct,

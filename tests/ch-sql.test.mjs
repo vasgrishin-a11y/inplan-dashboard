@@ -276,6 +276,19 @@ test('деградация: отказ агрегата demand_coverage → фо
   ctx.window.go('dm');
   await settle(300);
   const wf = JSON.parse(ctx.ev('(function(){return JSON.stringify(dmOrderWaterfall(covBasis(fOrders()).ord).map(b=>b.k))})()'));
-  assert.deepEqual(wf, ['Заказов в оптимизации', 'Дефицит плана', 'План продаж'],
-    'без demand_coverage водопад по заказам начинается с «Заказов в оптимизации»');
+  assert.deepEqual(wf, ['Заказов в оптимизации', 'План продаж'],
+    'без demand_coverage водопад начинается с единого «Плана продаж»');
+});
+
+
+test('capacity_view_sp: фонд и загрузка учитывают складские и погрузочные колонки', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'assets/inplan-ch.js'), 'utf8');
+  assert.match(src, /calcavailablebucketcapacity[\s\S]*availbucketcapacity[\s\S]*netavailablecapacity[\s\S]*freecapacity/,
+    'фонд использует freecapacity как fallback для погрузки');
+  assert.match(src, /Math\.max\(num\(r\.load\),use\.ip,use\.p,use\.s,use\.t\)/,
+    'загрузка выбирает максимум total и профильных компонент');
+  assert.match(src, /2:'Склад'[\s\S]*4:'Погрузка'/,
+    'коды видов ресурса преобразуются в читаемые категории');
+  assert.doesNotMatch(src, /Math\.min\(1,\s*load\/avail\)/,
+    'утилизация выше 100% не обрезается');
 });
