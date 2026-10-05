@@ -224,8 +224,8 @@ test('карточки «Общего»: объединённая «Упущен
   assert.equal(ctx.kpi('Упущенная выручка'), undefined, 'отдельной карточки «Упущенная выручка» нет');
   assert.equal(ctx.kpi('Упущенная маржа'), undefined, 'отдельной карточки «Упущенная маржа» нет');
   assert.equal(ctx.kpi('Не покрыто всего'), undefined, 'карточки «Не покрыто всего» в «Общем» нет');
-  /* заказов без дефицита — по новой классификации demand_coverage */
-  assert.equal(clean(ctx.kpi('Заказов без дефицита').querySelector('.v').textContent), '50 из 100',
+  /* «Заказов выполнено» — по новой классификации demand_coverage */
+  assert.equal(clean(ctx.kpi('Заказов выполнено').querySelector('.v').textContent), '50 из 100',
     'полностью покрытые заказы ко всем заказам неограниченного спроса');
 });
 
@@ -399,4 +399,94 @@ test('independent_demand дополняет RCA и определяет разр
   assert.ok(ctx.document.getElementById('d7card').classList.contains('full'),'таблица разворачивается');
   ctx.document.querySelector('#d7card .card-fs').click();await settle(200);
   assert.ok(!ctx.document.getElementById('d7card').classList.contains('full'),'таблица возвращается');
+});
+
+test('графики по умолчанию скрывают 100% непокрытые заказы, локальный переключатель добавляет их', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  await ctx.goTab('dm');
+
+  for (const id of ['d0','d1','d2','d8','d9']) {
+    const sw=ctx.document.querySelector(`[data-chart-all="${id}"]`);
+    assert.ok(sw, `у графика ${id} есть локальный переключатель 100% непокрытого спроса`);
+    assert.equal(sw.checked,false,`${id}: по умолчанию переключатель выключен`);
+    assert.match(sw.closest('label').textContent,/План продаж/,`${id}: выключенное состояние названо «План продаж»`);
+  }
+  const before=JSON.parse(ctx.ev(`JSON.stringify({
+    all:fOrders().length,
+    chart:chartOrders('d1',fOrders()).length,
+    full:chartOrders('d1',fOrders()).filter(o=>orderStageOf(o)==='fullUnc').length
+  })`));
+  assert.equal(before.all,3,'в детализации три заказа');
+  assert.equal(before.chart,2,'на графике по умолчанию только План продаж');
+  assert.equal(before.full,0,'100% непокрытых на графике по умолчанию нет');
+
+  ctx.document.querySelector('[data-chart-all="d1"]').click();
+  await settle(250);
+  const after=JSON.parse(ctx.ev(`JSON.stringify({
+    on:chartShowsAll('d1'),
+    chart:chartOrders('d1',fOrders()).length,
+    full:chartOrders('d1',fOrders()).filter(o=>orderStageOf(o)==='fullUnc').length
+  })`));
+  assert.equal(after.on,true,'переключатель включил полный охват только этого графика');
+  assert.match(ctx.document.querySelector('[data-chart-all="d1"]').closest('label').textContent,/Все заказы/,
+    'включённое состояние названо «Все заказы»');
+  assert.equal(after.chart,3,'показаны все заказы');
+  assert.equal(after.full,1,'100% непокрытый заказ добавлен');
+  assert.equal(ctx.ev("chartShowsAll('d2')"),false,'соседний график не переключился');
+
+  await ctx.goTab('ov');
+  const o8=ctx.document.querySelector('[data-chart-all="o8"]');
+  assert.ok(o8,'у графика упущенной маржи есть тот же локальный переключатель');
+  assert.equal(o8.checked,false,'в «Общем» по умолчанию тоже только План продаж');
+});
+
+test('periodid 4YYYYMMDD приводится к P-бакету Плана продаж', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  const rows=JSON.parse(ctx.ev(`JSON.stringify(CHX.mergeIndependentOrders([
+    {id:301,p:0,loc:'L1',prod:'SKU-1',dt:1,stream:'S1',dem:100,sal:100,unm:0}
+  ],[
+    {sourceId:1,item:'SKU-1',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:100,periodid:'420270401',date:'2027-04-01'},
+    {sourceId:2,item:'SKU-2',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:50,periodid:'420270401',date:'2027-04-01'}
+  ],[]))`));
+  assert.equal(rows[0].p,0,'период заказа плана сохранён как P0');
+  assert.equal(rows[1].p,0,'непокрытый заказ того же календарного периода сопоставлен с P0');
+  assert.equal(ctx.ev(`periodLabel(${JSON.stringify(rows[0].p)})`),'P0');
+  assert.equal(ctx.ev(`periodLabel(${JSON.stringify(rows[1].p)})`),'P0');
+  assert.equal(ctx.ev("normalizePeriodKey('P420270401')"),'2027-04',
+    'технический periodid распознаётся как календарный апрель, а не P420270401');
+});
+
+test('«Заказы спроса» использует номера, названия и расчёты RCA', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  ctx.ev(`(function(){
+    const rows=CHX.mergeIndependentOrders([
+      {id:401,p:0,loc:'L1',prod:'SKU-1',cl:'C1',dt:1,stream:'S1',dem:100,sal:100,unm:0,
+       price:1000,cpt:600,mpt:400,rev:100000,cost:60000,mar:40000}
+    ],[
+      {sourceId:1,item:'SKU-1',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:100,periodid:'420270401',date:'2027-04-01'},
+      {sourceId:2,item:'SKU-2',loc:'L1',demandtype:'1',dmdstream:'S1',demandqty:50,periodid:'420270401',date:'2027-04-01'}
+    ],[]);
+    DS=build({name:'Проверка единого реестра',orders:rows,ops:[],capacity:[]});
+    DS.agg=null;DS.penalty=[];DS.penaltyFlat=[];DS.capacityPlan=[];DS.detailLimited=false;
+    clearF();LM_BASE='plan';
+  })()`);
+
+  await ctx.goTab('dm');
+  const rcaHeaders=[...ctx.document.querySelectorAll('#d7 th')].map(x=>clean(x.textContent).replace(/[▲▼↕▾]/g,'').trim());
+  const rcaIds=[...ctx.document.querySelectorAll('#d7 tbody tr td:first-child')].map(x=>clean(x.textContent).replace(/↗/g,'').trim());
+  assert.ok(rcaIds.includes('ID-2'),'RCA показывает бизнес-метку, не отрицательный технический id');
+
+  await ctx.goTab('raw');
+  const rawHeaders=[...ctx.document.querySelectorAll('#rawTbl th')].map(x=>clean(x.textContent).replace(/[▲▼↕▾]/g,'').trim());
+  const rawIds=[...ctx.document.querySelectorAll('#rawTbl tbody tr td:first-child')].map(x=>clean(x.textContent).trim());
+  assert.ok(rawIds.includes('ID-2'),'«Заказы спроса» показывает тот же ID-2');
+  assert.ok(!rawIds.some(x=>/-100000000/.test(x)),'отрицательные служебные ID скрыты');
+  for(const h of ['# Заказа','Статус покрытия','Локация','Продукт','Клиент','Канал','Период',
+    'Спрос','Отгрузка','Дефицит','Покрытие','Упущ. выручка','Упущ. маржа']) {
+    assert.ok(rcaHeaders.includes(h),`RCA содержит «${h}»`);
+    assert.ok(rawHeaders.includes(h),`«Заказы спроса» содержит «${h}»`);
+  }
 });

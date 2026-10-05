@@ -399,7 +399,7 @@ test('в блоке «Общий» есть график упущенной ма
   assert.match(ctx.document.getElementById('o8sub').textContent, /период/i, 'подпись комбинированного разреза');
 });
 
-test('упущенная маржа одна и та же в блоках «Общий» и «Спрос и покрытие»', async (t) => {
+test('упущенная маржа и выручка одинаковы в блоках «Общий» и «Спрос и покрытие»', async (t) => {
   const ctx = await loadApp({ [LM_BASE_KEY]: 'unc', [LM_MODE_KEY]: 'prod' });
   t.after(ctx.close);
 
@@ -408,12 +408,14 @@ test('упущенная маржа одна и та же в блоках «Об
     await ctx.tick(40);
     /* 2026-10-05: в «Общем» карточка объединена — «Упущенная маржа и выручка» */
     const k = ctx.kpi('Упущенная маржа') || ctx.kpi('Упущенная маржа и выручка');
-    return parseBn(k.querySelector('.v').textContent);
+    const sub=k.querySelector('.s').textContent;
+    return {lm:parseBn(k.querySelector('.v').textContent),lost:(sub.match(/упущенная выручка\s+([^\n]+)/i)||[])[1]||''};
   };
   const ov = await read('ov');
   const dm = await read('dm');
-  assert.ok(ov > 0, 'упущенная маржа ненулевая');
-  assert.ok(close(ov, dm, 0.01), `Общий (${ov}) = Спрос и покрытие (${dm})`);
+  assert.ok(ov.lm > 0, 'упущенная маржа ненулевая');
+  assert.ok(close(ov.lm, dm.lm, 0.01), `Общий (${ov.lm}) = Спрос и покрытие (${dm.lm})`);
+  assert.equal(ov.lost,dm.lost,'упущенная выручка в подписях карточек тоже идентична');
 });
 
 /* Проверки цепочки заказа и режима «Фокус» — в tests/tree-focus.test.mjs:
