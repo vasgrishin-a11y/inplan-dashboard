@@ -49,7 +49,7 @@ const MAX_SCHEMAS = 512;
      • ответил наш, но без нужного эндпоинта  → backend устарел, нужен npm start свежей версии;
      • ответил наш и с эндпоинтом             → настоящая ошибка Postgres. */
 const SERVICE = 'inplan-dashboard';
-const API_LEVEL = 6;
+const API_LEVEL = 7;
 const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/unc'];
 
 class HttpError extends Error {
@@ -396,7 +396,23 @@ function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
       ` FROM (${src}) s`,
     params
   };
-  return { total, periods, rawTotal, raw, qty, keyCols, distinct };
+  /* Построчная детализация нужна RCA: строки independent_demand, которых нет
+     в marking_demand, являются заказами со статусом «100% не покрыто».
+     Запрос читает тот же DISTINCT-источник, поэтому сумма demandqty и набор
+     заказов всегда имеют один охват. */
+  const detailField = (col, alias) => col
+    ? `s.${qi(col)} AS ${qi(alias)}`
+    : `NULL AS ${qi(alias)}`;
+  const details = {
+    sql: `SELECT ${[
+      detailField(cols.item, 'item'), detailField(cols.qty, 'demandqty'),
+      detailField(cols.periodid, 'periodid'), detailField(cols.dmdstream, 'dmdstream'),
+      detailField(cols.ptype, 'periodtype'), detailField(cols.dtype, 'demandtype'),
+      detailField(cols.loc, 'loc'), detailField(cols.date, 'date')
+    ].join(', ')} FROM (${src}) s`,
+    params
+  };
+  return { total, periods, rawTotal, raw, details, qty, keyCols, distinct };
 }
 
 /* node-postgres returns numeric values as strings.  The normal form uses a
@@ -638,10 +654,30 @@ function createApp(deps) {
             });
           } catch (e) { throw friendlyPgError(e, conn); }
         }
+        /* RCA получает все строки входного спроса. Ошибка необязательной
+           детализации не должна скрывать корректный агрегат старому/частично
+           совместимому PostgreSQL-прокси. */
+        let orders = [];
+        try {
+          const det = await db.query(q.details.sql, q.details.params);
+          orders = (det.rows || []).map((r, i) => ({
+            sourceId: i + 1,
+            item: r.item == null ? '' : String(r.item),
+            demandqty: Number.isFinite(pgNumber(r.demandqty)) ? pgNumber(r.demandqty) : 0,
+            periodid: r.periodid == null ? '' : String(r.periodid),
+            dmdstream: r.dmdstream == null ? '' : String(r.dmdstream),
+            periodtype: r.periodtype == null ? null : pgNumber(r.periodtype),
+            demandtype: r.demandtype == null ? '' : String(r.demandtype),
+            loc: r.loc == null ? '' : String(r.loc),
+            date: r.date == null ? '' : String(r.date)
+          }));
+        } catch (e) {
+          /* агрегат и периодный разрез остаются доступны */
+        }
         res.json({
           ok: true, schema, requested: wanted, exact, table: tableName, gran,
           cols, keyCols: q.keyCols, distinct: q.distinct, qtySource: cols.qty,
-          demUnc, n,
+          demUnc, n, orders,
           diagnostics: {
             demandqty: { column: cols.qty, demUnc, sqlDemUnc: Number.isFinite(sqlDemUnc) ? sqlDemUnc : null,
               n, keyCols: q.keyCols, distinct: q.distinct, recovered, raw: rawDiagnostics }
