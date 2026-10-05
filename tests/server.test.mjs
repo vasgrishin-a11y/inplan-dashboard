@@ -235,6 +235,30 @@ test('POST /api/pg/unc — нулевой demandqty возвращает demUnc=
   });
 });
 
+test('POST /api/pg/unc — populated rows recover a false zero from the PG aggregate', async () => {
+  await withServer((sql) => {
+    if (/information_schema\.columns/.test(sql)) return { rows: PROD_COLS.map((c) => ({ c })) };
+    if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 0, n: 210 }] };
+    if (/AS value/.test(sql)) return {
+      rows: [
+        { value: '12,5', k: '2026-04' },
+        { value: '7.5', k: '2026-04' },
+      ]
+    };
+    throw new Error('period aggregate must not be used after row recovery');
+  }, async (base) => {
+    const r = await post(base, '/api/pg/unc', { ...CONN, schema: 'public_4941', gran: 4 });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.demUnc, 20, 'Σ demandqty восстановлена по тем же 210 строкам');
+    assert.equal(data.n, 210, 'число строк остаётся диагностикой дедуплированного источника');
+    assert.equal(data.periods[0].demUnc, 20, 'периодный разрез использует ту же сумму');
+    assert.equal(data.qtySource, 'demandqty');
+    assert.equal(data.diagnostics.demandqty.recovered, true);
+    assert.equal(data.diagnostics.demandqty.raw.numericN, 2);
+  });
+});
+
 test('POST /api/pg/unc — таблица без demandqty в схеме → 400 с объяснением', async () => {
   await withServer((sql) => {
     if (/information_schema\.columns/.test(sql)) return { rows: [{ c: 'x' }, { c: 'y' }] };

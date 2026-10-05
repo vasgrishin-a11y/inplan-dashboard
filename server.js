@@ -374,7 +374,61 @@ function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
         params
       }
     : null;
-  return { total, periods, qty, keyCols, distinct };
+  /*
+     PostgreSQL normally returns SUM(numeric) as a decimal string and the
+     aggregate above is sufficient.  Some installations expose demandqty via
+     a view/custom type, however, where SUM is returned as 0/NaN while the
+     underlying values are present.  Keep a small, row-level recovery query
+     for that case.  It uses exactly the same filtered/DISTINCT source, so it
+     cannot silently change the definition or the deduplication semantics.
+  */
+  const raw = {
+    sql: `SELECT s.${qi(qty)} AS value` +
+      (periodCol ? `, ${bucketKeyExpr('s.' + qi(periodCol), gran)} AS k` : '') +
+      ` FROM (${src}) s`,
+    params
+  };
+  return { total, periods, raw, qty, keyCols, distinct };
+}
+
+/* node-postgres returns numeric values as strings.  The normal form uses a
+   dot decimal separator, but accepting grouped/comma strings here makes the
+   zero-recovery path safe for compatible PG drivers and views as well. */
+function pgNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+  if (value === null || value === undefined) return NaN;
+  let s = String(value).trim().replace(/[\s\u00a0\u202f]/g, '');
+  if (!s) return NaN;
+  const comma = s.lastIndexOf(','), dot = s.lastIndexOf('.');
+  if (comma >= 0 && dot >= 0) {
+    if (comma > dot) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/,/g, '');
+  } else if (comma >= 0) {
+    const parts = s.split(',');
+    /* one/two digits after comma is the decimal form used in RU exports;
+       three digits is normally a thousands separator */
+    s = parts.length === 2 && parts[1].length <= 2
+      ? parts[0] + '.' + parts[1]
+      : s.replace(/,/g, '');
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function sumPgRows(rows) {
+  let total = 0, count = 0;
+  const periods = new Map();
+  for (const row of rows || []) {
+    const value = pgNumber(row && row.value);
+    if (!Number.isFinite(value)) continue;
+    total += value;
+    count++;
+    if (row && row.k !== undefined && row.k !== null) {
+      const key = String(row.k);
+      periods.set(key, (periods.get(key) || 0) + value);
+    }
+  }
+  return { total, count, periods };
 }
 
 /* ── Приложение ── */
@@ -480,14 +534,49 @@ function createApp(deps) {
         try { tot = await db.query(q.total.sql, q.total.params); }
         catch (e) { throw friendlyPgError(e, conn); }
         const row = (tot.rows || [])[0] || {};
-        const demUnc = Number(row.demUnc) || 0;
+        const sqlDemUnc = pgNumber(row.demUnc);
+        let demUnc = Number.isFinite(sqlDemUnc) ? sqlDemUnc : 0;
         const n = Number(row.n) || 0;
+        let recovered = false;
+        let rawDiagnostics = null;
+        let rawPeriods = null;
+
+        /*
+         * Do not turn a populated source into a false zero.  In particular,
+         * SUM over a PG view/custom numeric type may arrive through node-pg as
+         * 0 or NaN even though the selected rows contain demandqty values.
+         * Re-read only this (usually small) DISTINCT result and sum the values
+         * in the backend.  A mathematically zero sum remains zero; this is
+         * not a demand_coverage fallback and does not change the source.
+         */
+        if (n > 0 && (!Number.isFinite(sqlDemUnc) || sqlDemUnc === 0)) {
+          try {
+            const rawResult = await db.query(q.raw.sql, q.raw.params);
+            const raw = sumPgRows(rawResult.rows || []);
+            rawDiagnostics = { n: rawResult.rows ? rawResult.rows.length : 0,
+                               numericN: raw.count, demUnc: raw.total };
+            if (raw.count > 0 && raw.total !== 0) {
+              demUnc = raw.total;
+              recovered = true;
+              rawPeriods = raw.periods;
+            }
+          } catch (e) {
+            /* Keep the primary aggregate result; diagnostics still identify
+               the source and the original SQL error is not an availability
+               failure. */
+            rawDiagnostics = { error: String((e && e.message) || 'не удалось прочитать строки') };
+          }
+        }
 
         let periods = [];
-        if (q.periods) {
+        if (recovered && rawPeriods) {
+          periods = [...rawPeriods.entries()]
+            .map(([k, value]) => ({ k, demUnc: value }))
+            .sort((a, b) => a.k.localeCompare(b.k));
+        } else if (q.periods) {
           try {
             const p = await db.query(q.periods.sql, q.periods.params);
-            periods = (p.rows || []).map(r => ({ k: String(r.k), demUnc: Number(r.demUnc) || 0 }));
+            periods = (p.rows || []).map(r => ({ k: String(r.k), demUnc: pgNumber(r.demUnc) || 0 }));
           } catch (e) { throw friendlyPgError(e, conn); }
         }
         res.json({
@@ -495,7 +584,8 @@ function createApp(deps) {
           cols, keyCols: q.keyCols, distinct: q.distinct, qtySource: cols.qty,
           demUnc, n,
           diagnostics: {
-            demandqty: { column: cols.qty, demUnc, n, keyCols: q.keyCols, distinct: q.distinct }
+            demandqty: { column: cols.qty, demUnc, sqlDemUnc: Number.isFinite(sqlDemUnc) ? sqlDemUnc : null,
+              n, keyCols: q.keyCols, distinct: q.distinct, recovered, raw: rawDiagnostics }
           },
           periods,
           service: SERVICE, api: API_LEVEL
@@ -543,5 +633,5 @@ module.exports = {
   mapColumns, COL_CANDIDATES, uncSql, bucketKeyExpr, independentDemandKeyCols,
   schemaCandidates, matchSchema,
   qi, friendlyPgError, HttpError, PG_DEFAULTS, TABLE_NAME,
-  SERVICE, API_LEVEL, ENDPOINTS
+  pgNumber, sumPgRows, SERVICE, API_LEVEL, ENDPOINTS
 };
