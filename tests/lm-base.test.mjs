@@ -142,24 +142,81 @@ test('непокрытый спрос = неограниченный − отг�
   assert.ok(close(b.dem, b.sal + b.unm, 1e-9), 'Ограниченный = Отгружено + Дефицит плана');
 });
 
-test('упущенная маржа по непокрытому спросу = объём × средневзвешенная ставка дефицита плана', async (t) => {
+test('упущенная маржа по непокрытому спросу считается по стадии заказа: частично покрыто — своя маржа, 100% не покрыто — вариант', async (t) => {
+  /* 2026-10-05 (владелец): база «Непокрытый спрос» больше не масштабирует
+     единую ставку дефицита плана на весь объём. Дефицит делится на две
+     экономически разные группы (orderStageOf): «частично покрыто» (есть своя
+     отгруженная часть — берём её маржу) и «100% не покрыто» (нет ни одной
+     поставленной тонны — заказы плана с нулевой отгрузкой и весь спрос вне
+     плана; оценивается выбранным вариантом LM_UNC_METHODS). См. lmTotals(). */
   const ctx = await loadApp({ [LM_BASE_KEY]: 'unc' });
   t.after(ctx.close);
 
   const r = JSON.parse(ctx.ev(`(function(){
     const D = fOrders(), B = covBasis(D), T = lmTotals(B, D);
-    return JSON.stringify({lmPlan:T.lmPlan, lmUnc:T.lmUnc, lm:T.lm, k:T.k, rate:T.rate,
-      base:T.base, gapPlan:B.gapPlan, gapTotal:B.gapTotal, rateSrc:T.rateSrc});
+    return JSON.stringify({lmPlan:T.lmPlan, lmUnc:T.lmUnc, lm:T.lm, rate:T.rate,
+      base:T.base, gapPlan:B.gapPlan, gapTotal:B.gapTotal, notPlanned:B.notPlanned,
+      rateSrc:T.rateSrc, partTons:T.partTons, fullTons:T.fullTons,
+      ratePart:T.ratePart, rateFull:T.rateFull, uncMethod:T.uncMethod});
   })()`) );
 
   assert.equal(r.base, 'unc', 'база «Непокрытый спрос» активна');
-  assert.ok(r.gapTotal > r.gapPlan, 'непокрытый спрос больше дефицита плана — иначе нечего масштабировать');
-  assert.ok(close(r.k, r.gapTotal / r.gapPlan, 1e-9), 'масштаб k = непокрытый спрос / дефицит плана');
-  assert.ok(close(r.rate, r.lmPlan / r.gapPlan, 1e-9), 'ставка = упущенная маржа плана / дефицит плана, ₽/т');
-  assert.ok(close(r.lmUnc, r.gapTotal * r.rate, 1e-6), 'LM = непокрытый объём × ставка');
+  assert.equal(r.uncMethod, 'cost', 'по умолчанию активен вариант «Ставка минус себестоимость»');
+  assert.ok(r.gapTotal > r.gapPlan, 'непокрытый спрос больше дефицита плана — иначе нечего делить на группы');
+  assert.ok(close(r.partTons + r.fullTons, r.gapTotal, 1e-6),
+    'частично покрыто + 100% не покрыто = непокрытый спрос всего (без потерь и двойного счёта)');
+  assert.ok(r.fullTons >= r.notPlanned - 1e-6, '100%-группа включает как минимум весь спрос вне плана (он всегда 100% не покрыт)');
+  assert.ok(r.partTons <= r.gapPlan + 1e-6, 'частично покрытая группа не может быть больше дефицита плана');
+  assert.ok(close(r.lmUnc, r.partTons * r.ratePart + r.fullTons * r.rateFull, 1e-6),
+    'LM = частично покрыто × своя ставка + 100% не покрыто × ставка варианта');
+  assert.ok(close(r.rate, r.lmUnc / r.gapTotal, 1e-9), 'итоговая (блендированная) ставка = lmUnc / непокрытый спрос всего');
   assert.ok(r.lmUnc > r.lmPlan, 'по непокрытому спросу потери больше, чем только по дефициту плана');
   assert.equal(r.lm, r.lmUnc, 'в KPI идёт значение активной базы');
-  assert.match(r.rateSrc, /дефицит/, 'источник ставки объяснён');
+  assert.match(r.rateSrc, /100% не покрыто/, 'источник ставки объясняет обе группы, а не одну общую');
+});
+
+test('вариант оценки 100%-непокрытого объёма: переключатель в интерфейсе, выбор сохраняется и меняет ставку', async (t) => {
+  const ctx = await loadApp({ [LM_BASE_KEY]: 'unc' });
+  t.after(ctx.close);
+  ctx.ev("go('dm')");
+  await ctx.tick();
+
+  /* «Метод» (5 кнопок) относится только к базе «Дефицит плана» — под базой
+     «Непокрытый спрос» он не показывается, иначе выглядел бы рабочим, хотя
+     ни на что не влияет; вместо него — «Вариант» (2 кнопки). */
+  assert.equal(ctx.document.getElementById('lmSeg'), null, '«Метод» скрыт под базой «Непокрытый спрос»');
+  const seg = ctx.document.getElementById('lmVarSeg');
+  assert.ok(seg, 'переключатель варианта есть');
+  const btns = [...seg.querySelectorAll('button')];
+  assert.deepEqual(btns.map((b) => b.dataset.lmu), ['cost', 'prod'], 'два варианта: ставка минус себестоимость, средняя маржа по продукту');
+  assert.equal(btns.find((b) => b.classList.contains('p')).dataset.lmu, 'cost', 'по умолчанию активен первый вариант (задача владельца)');
+
+  /* подкладываем ставку несостоявшейся поставки для первого же продукта с
+     дефицитом — без справочника demand_cost вариант «cost» тихо вырождается
+     в «prod» (см. lmCostMinusAvgRate), и переключатель было бы нечем проверить */
+  const probe = JSON.parse(ctx.ev(`(function(){
+    const D=fOrders(), o=D.find(x=>orderStageOf(x)==='fullUnc')||D.find(x=>x.unm>0.01);
+    DS.penaltyFlat=[{item:o.prod, loc:o.loc, nonDel:999999, lateRate:0, latePeriods:0}];
+    LM_REF=null;
+    const T=lmTotals(covBasis(D),D);
+    return JSON.stringify({rateFull:T.rateFull, lmUnc:T.lmUnc});
+  })()`));
+
+  const uncBtn = btns.find((b) => b.dataset.lmu === 'prod');
+  uncBtn.click();
+  await ctx.tick(60);
+  assert.equal(ctx.window.localStorage.getItem('inplan_lm_unc_method'), 'prod', 'выбор варианта сохранён');
+
+  const afterSwitch = JSON.parse(ctx.ev(`(function(){
+    const D=fOrders(), T=lmTotals(covBasis(D),D);
+    return JSON.stringify({rateFull:T.rateFull, lmUnc:T.lmUnc, uncMethod:T.uncMethod});
+  })()`));
+  assert.equal(afterSwitch.uncMethod, 'prod', 'активный вариант переключился');
+  assert.notEqual(afterSwitch.rateFull, probe.rateFull,
+    `с подложенной высокой ставкой непоставки варианты обязаны давать разные ставки 100%-группы (cost=${probe.rateFull}, prod=${afterSwitch.rateFull})`);
+  assert.notEqual(afterSwitch.lmUnc, probe.lmUnc, 'и, следовательно, разную упущенную маржу по непокрытому спросу');
+
+  ctx.ev(`DS.penaltyFlat=[]; LM_REF=null;`);
 });
 
 test('нет demand_coverage или активны фильтры — возврат к дефициту плана (прежнее поведение)', async (t) => {
