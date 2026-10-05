@@ -996,6 +996,21 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
       lateAllowed:lateAllowed({prod:r.item,loc:r.loc,dt:r.demandtype,stream:r.dmdstream}),late:false
     });
   });
+  /* Infer economics for demand that never entered the plan. */
+  const median=xs=>{xs=xs.filter(Number.isFinite).sort((a,b)=>a-b);return xs.length?xs[Math.floor(xs.length/2)]:0};
+  const refs=out.filter(o=>!o.independentOnly&&num(o.sal)>ORD_TOL);
+  const gp=median(refs.map(o=>num(o.price)).filter(v=>v>0));
+  const gc=median(refs.map(o=>num(o.cpt)).filter(v=>v>=0));
+  out.filter(o=>o.independentOnly).forEach(o=>{
+    const same=refs.filter(x=>norm(x.prod)===norm(o.prod)&&norm(x.loc)===norm(o.loc));
+    const byProd=same.length?same:refs.filter(x=>norm(x.prod)===norm(o.prod));
+    const src=byProd.length?byProd:refs;
+    o.price=median(src.map(x=>num(x.price)).filter(v=>v>0))||gp;
+    o.cpt=median(src.map(x=>num(x.cpt)).filter(v=>v>=0))||gc;
+    o.mpt=Math.max(0,o.price-o.cpt); o.rev=o.dem*o.price; o.cost=o.dem*o.cpt; o.mar=o.dem*o.mpt;
+  });
+  let next=out.filter(o=>!o.independentOnly).length;
+  out.filter(o=>o.independentOnly).forEach(o=>o.idLabel='ID-'+(++next));
   return out;
 }
 CHX.mergeIndependentOrders=mergeIndependentOrders;

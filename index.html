@@ -3213,7 +3213,7 @@ function tabOV(){
   /* Упущенная выручка — тот же принцип «ставка × объём», что у упущенной маржи:
      цена отказа ₽/т считается по загруженным заказам, объём — по цепочке. */
   const lrRate=B.unmDet>0?S(D,o=>o.unm*o.price)/B.unmDet:0;
-  const lr=lrRate*unm,lm=T.lm;
+  const lr= B.gapTotal>0 ? (B.unmDet>0 ? lrRate*B.gapTotal : S(D,o=>o.unm*o.price)) : 0,lm=T.lm;
   const ops=fOps(),byT=grp(ops,r=>r.type,v=>({c:S(v,r=>r.cost)}));
   const scopeNote=B.partial?` · ${B.scope==='schema'?'агрегат всей схемы':'загруженная выборка'}`:'';
   /* Карточки (задача владельца 2026-10-05): «Упущенная выручка» и «Упущенная
@@ -3226,6 +3226,7 @@ function tabOV(){
    ['Валовая маржа',bn(mar),'маржинальность '+pc(mar/rev),''],
    ['Маржа на тонну',nf(mar/sal)+' ₽/т','взвешенно',''],
    ['Service Level',pc(sal/dem),nf(sal)+' из '+nf(dem)+' т',sal/dem>.9?'pos':sal/dem>.7?'mid':'neg'],
+   ['OTIF Service Level',pc(ord.total?ord.intime/ord.total:sal/dem),ord.total?`${nf(ord.intime)} из ${nf(ord.total)} заказов полностью и вовремя`:'нет данных по срокам',ord.total&&ord.intime/ord.total>.9?'pos':ord.total&&ord.intime/ord.total>.7?'mid':'neg'],
    ['Заказов без дефицита',ord.full+' из '+ord.total,pc(ord.total?ord.full/ord.total:0)+' портфеля','',
      `Полностью покрытые заказы (unfullfilleddemandqty = 0 и fullfilleddemandqty > 0) ко всем заказам неограниченного спроса. Источник: ${ord.srcLong||ord.src}.`],
    ['Упущенная маржа и выручка',bn(lm),`упущенная выручка ${bn(lr)}<br>${lmKpiSub(T)}`,lm?'neg':'',
@@ -3461,7 +3462,7 @@ function tabDM(){
   const lm=S(defOrders,lmS)+T.unattr;
   /* Упущенная выручка — «ставка × объём», как и упущенная маржа: цена отказа
      ₽/т берётся по загруженным заказам, объём дефицита — из охвата цепочки. */
-  const lostRev=(B.unmDet>0?S(defOrders,o=>o.unm*o.price)/B.unmDet:0)*unm;
+  const lostRev=B.gapTotal>0 ? (B.unmDet>0 ? S(defOrders,o=>o.unm*o.price)/B.unmDet*B.gapTotal : S(D,o=>o.unm*o.price)) : 0;
   const demUnc=B.demUnc,notPlanned=B.notPlanned,late=B.late,inTime=B.inTime;
   const sl=dem?sal/dem:0;
   const ordW=n=>`${nf(n)} ${plural(n,['заказ','заказа','заказов'])}`;
@@ -3730,8 +3731,10 @@ function tabDM(){
       {k:'unm',t:'Дефицит',num:1,f:v=>nf(v,1),cls:()=>'neg'},
       {k:'cov',t:'Покрытие',num:1,v:o=>o.dem?o.sal/o.dem:0,f:v=>pc(v),cls:v=>v>.5?'mid':'neg'},
       {k:'rca_prod',t:'Узкое место (пр-во)',left:1,flt:1,v:o=>{const r=rcaFor(o);
+        if(orderStageOf(o)==='fullUnc')return '';
         if(!r.hasData)return 'Базовый режим';return r.prodBottleneck?`${r.prodBottleneck.rsName} (${pc(r.prodBottleneck.util)})`:'В норме'},
        f:(v,o)=>{const r=rcaFor(o);
+        if(orderStageOf(o)==='fullUnc')return `<span class="tag" style="color:var(--scp-text-3);border-color:var(--scp-text-3)"> </span>`;
         if(!r.hasData)return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
         if(!r.prodBottleneck)return `<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`;
         const b=r.prodBottleneck;
@@ -3739,10 +3742,12 @@ function tabDM(){
           +`<span class="tag" data-goto-order="${o.id}" data-tree-mode="stages" style="color:var(--scp-err);border-color:var(--scp-err);font-weight:600;cursor:pointer;background:var(--scp-err-bg)" title="Открыть цепочку заказа №${o.id}: этапы цепи в тоннах">🛑 ${esc(b.rsName)}: ${pc(b.util)} ↗</span>`
           +`<span class="tag gear" data-rca-jump="1" data-mode="prod_res" data-ord="${o.id}" data-rs="${esc(b.rs)}" title="Открыть цепочку производственных мощностей заказа №${o.id} с фокусом на лимите">⚙</span></span>`}},
       {k:'rca_log',t:'Узкое место (логистика/склад)',left:1,flt:1,v:o=>{const r=rcaFor(o);
+        if(orderStageOf(o)==='fullUnc')return '';
         if(!r.hasData)return 'Базовый режим';
         if(r.logBottleneck){const b=r.logBottleneck;return b.isBlocked?`⛔ Блок: ${b.rsName}`:`📦 ${b.rsName} (${pc(b.util)})`}
         return (r.logChain&&r.logChain.length)?'В норме':'Лимиты не заданы'},
        f:(v,o)=>{const r=rcaFor(o);
+        if(orderStageOf(o)==='fullUnc')return `<span class="tag" style="color:var(--scp-text-3);border-color:var(--scp-text-3)"> </span>`;
         if(!r.hasData)return `<span class="tag" style="color:var(--scp-text-3)">—</span>`;
         if(!r.logBottleneck)return (r.logChain&&r.logChain.length)
           ?`<span class="tag" style="color:var(--scp-ok);border-color:var(--scp-ok)">✓ В норме</span>`
