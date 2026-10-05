@@ -1173,7 +1173,7 @@ function lmTipHtml(k){
     +`<div><span class="k">Бизнес-смысл:</span> ${esc(m.b)}</div>`
     +`<div><span class="k">Когда применять:</span> ${esc(m.w)}</div>`
     +`<div><span class="k">Ограничение:</span> ${esc(m.lim)}</div>`
-    +(val!=null?`<div class="lmv">При этом методе сейчас: <b>${bn(val)} ₽</b> — под текущими фильтрами, база «${esc((LM_BASES[LM_BASE]||LM_BASES.plan).t)}»</div>`:'');
+    +(val!=null?`<div class="lmv">При этом методе сейчас: <b>${bn(val)} ₽</b> — под текущими фильтрами, база «${esc('Непокрытый спрос')}»</div>`:'');
 }
 const LMTIP=$('#lmTip');
 /* kind: 'mode' — подсказка метода, 'base' — подсказка базы дефицита (один и тот же
@@ -1224,26 +1224,13 @@ function segWire(sel,attr,entries,current,onPick,tipOf,disableIf){
     b.onkeydown=e=>{if(e.key==='Escape')lmTipHide(b)}; /* Esc закрывает подсказку, фокус остаётся */
   });
 }
-/* UI сегментов метода, варианта и базы упущенной маржи */
+/* UI единого метода оценки непокрытого спроса */
 function lmSegBuild(){
-  /* «Метод» (5 кнопок) относится только к базе «Дефицит плана»; «Вариант»
-     (2 кнопки) — только к базе «Непокрытый спрос». lmRowHtml() рендерит в
-     разметке ровно один из двух контейнеров — второй segWire просто не
-     найдёт свой селектор и тихо выйдет. */
-  segWire('#lmSeg','lm',Object.entries(LM_MODES),LM_MODE,k=>{
-      LM_MODE=k;try{localStorage.setItem(LM_KEY,LM_MODE)}catch(e){}
-    },'mode',null);
+  /* Единственный переключатель — два метода оценки непокрытого спроса.
+     База «Дефицит плана» больше не является отдельным расчётом. */
   segWire('#lmVarSeg','lmu',Object.entries(LM_UNC_METHODS),LM_UNC_METHOD,k=>{
       LM_UNC_METHOD=k;try{localStorage.setItem(LM_UNC_KEY,LM_UNC_METHOD)}catch(e){}
     },'uncvar',null);
-  /* База «Непокрытый спрос» доступна только когда demand_coverage загружен,
-     его объём ненулевой и фильтры сняты (агрегат по всей схеме не режется). */
-  /* Активная кнопка — ДЕЙСТВУЮЩАЯ база: если «Непокрытый спрос» недоступен,
-     расчёт автоматически идёт по дефициту плана, и подсвечивать надо именно её,
-     иначе кнопка выглядела бы включённой, а цифры считались бы по другой базе. */
-  segWire('#lmBaseSeg','lmb',Object.entries(LM_BASES),(LM_T&&LM_T.base)||LM_BASE,k=>{
-      LM_BASE=k;try{localStorage.setItem(LM_BASE_KEY,LM_BASE)}catch(e){}
-    },'base',k=>k==='unc'&&!(LM_B&&LM_B.useUnc&&LM_B.gapTotal>0));
 }
 /* ═══════════ 3.6. БАЗА ДЕФИЦИТА: ПЛАН ИЛИ НЕОГРАНИЧЕННЫЙ СПРОС ═══════════
    В данных два уровня спроса, и смешивать их нельзя:
@@ -1262,10 +1249,8 @@ function lmSegBuild(){
    отдал построчный independent_demand, такие строки представлены отдельными
    заказами independentOnly; иначе остаются агрегатным остатком.
 
-   Упущенная маржа считается по одной из двух баз (переключатель рядом с методом):
-     «Дефицит плана»    — Σ (unm заказа × ставка метода). Каждая тонна относится
-                          к заказу marking_demand; база работает под фильтрами.
-     «Непокрытый спрос» — дефицит плана + спрос вне плана, разбитые НЕ по
+   Упущенная маржа считается только по полной базе «Непокрытый спрос»:
+       «Непокрытый спрос» — дефицит плана + спрос вне плана, разбитые НЕ по
                           членству в плане, а по стадии заказа (см. 3.5.1,
                           3.6.0): «частично покрыто» (есть своя отгруженная
                           часть — берём её маржу) и «100% не покрыто» (нет ни
@@ -1522,25 +1507,7 @@ function covIds(B){
   }
   return ids;
 }
-/* Базы упущенной маржи: те же поля, что у методов (t/d/f/b/w/lim), поэтому
-   подсказка #lmTip обслуживает оба переключателя одним кодом. */
-const LM_BASES={
-  plan:{t:'Дефицит плана',
-    d:'Упущенная маржа по unsatisfied_demand заказов (marking_demand)',
-    f:'Σ по заказам: дефицит заказа, т × ставка выбранного метода, ₽/т',
-    b:'Потери внутри принятого в план спроса: у каждой тонны есть свой заказ, цена и маржа.',
-    w:'Разрезы по заказам, продуктам и периодам без допущений; единственная база, работающая под фильтрами.',
-    lim:'Не видит спрос, который оптимизатор не принял в план, — занижает потери, если неограниченный спрос больше ограниченного.'},
-  unc:{t:'Непокрытый спрос',
-    d:'Упущенная маржа по непокрытому спросу от общего неограниченного спроса: частично покрытые заказы — своя маржа, 100% не покрытые — выбранный вариант оценки',
-    f:'Частично покрыто: дефицит, т × маржа/т этого же заказа. 100% не покрыто: дефицит, т × ставка варианта (переключатель «Вариант»). Объём — (Неограниченный спрос − Отгружено), т = «не принято в план» + дефицит плана',
-    b:'Полная цена отказа: дефицит внутри плана и спрос, который в план вообще не попал, оценены раздельно — по факту заказа там, где он есть, и по выбранному варианту там, где фактов нет.',
-    w:'Основная база для разговора с бизнесом: потери считаются от всего спроса, а не от его урезанной части.',
-    lim:'Доступна только без фильтров (агрегат independent_demand/demand_coverage по всей схеме). Качество оценки 100%-группы зависит от выбранного варианта — см. его ограничение.'}
-};
-const LM_BASE_KEY='inplan_lm_base';
-const lmBaseMode=()=>{try{const v=localStorage.getItem(LM_BASE_KEY);return LM_BASES[v]?v:'plan'}catch(e){return 'plan'}};
-let LM_BASE=lmBaseMode();
+/* Единственная база упущенной маржи — полный непокрытый спрос. */
 let LM_K=1, LM_INDEP_K=0, LM_B=null, LM_T=null, LM_UNATTR=0;
 let LR_PLAN_K=1, LR_INDEP_K=0, LR_UNATTR=0, LR_T=null;
 /* Значения строк под активной базой. Заказы independent_demand, которых нет в
@@ -1554,18 +1521,16 @@ let LR_PLAN_K=1, LR_INDEP_K=0, LR_UNATTR=0, LR_T=null;
    выбранный вариант (LM_UNC_METHODS); коэффициенты kPart/kFull считает
    lmTotals(), чтобы Σ строк + unattr всегда сходилась с KPI. */
 const lmS=o=>{
-  if(LM_T&&LM_T.base==='unc'){
-    const stage=orderStageOf(o);
-    if(stage==='part')return o.unm*lmOwnOrderRate(o)*(LM_T.kPart||0);
-    if(stage==='fullUnc')return o.unm*lmFullUncRate(o,LM_T.uncMethod)*(LM_T.kFull||0);
-    return 0;
-  }
-  return lmVal(o)*(o&&o.independentOnly?LM_INDEP_K:LM_K);
+  /* Все строки относятся к единой базе «Непокрытый спрос». */
+  if(!LM_T)return 0;
+  const stage=orderStageOf(o);
+  if(stage==='part')return o.unm*lmOwnOrderRate(o)*(LM_T.kPart||0);
+  if(stage==='fullUnc')return o.unm*lmFullUncRate(o,LM_T.uncMethod)*(LM_T.kFull||0);
+  return 0;
 };
 const lostRevVal=o=>num(o&&o.unm)*num(o&&o.price);
 const lostRevS=o=>lostRevVal(o)*(o&&o.independentOnly?LR_INDEP_K:LR_PLAN_K);
-/* Обе базы сразу: активная идёт в KPI и графики, вторая — в подпись, чтобы бизнес
-   видел вилку, а не только выбранный вариант. */
+/* Расчёт полной базы; диагностические поля lmPlan/lmUnc сохраняются для сверок. */
 function lmTotals(B,D){
   const planD=(D||[]).filter(o=>!o.independentOnly),indD=(D||[]).filter(o=>o.independentOnly);
   /* Ставка строится только по marking_demand. Оценочные строки входного спроса
@@ -1628,7 +1593,7 @@ function lmTotals(B,D){
   const unattrUnc=(partTonsTrue*ratePart>0&&lmPartSample<=0?partTonsTrue*ratePart:0)
     +(fullTonsTrue*rateFull>0&&lmFullSample<=0?fullTonsTrue*rateFull:0);
 
-  const on=LM_BASE==='unc'&&uncAvail;
+  const on=uncAvail;
   /* k оставлен как общий коэффициент базы для внешней диагностики; строки
      распределяются точнее через planK / kPart / kFull. */
   const k=on&&unmDet>0?B.gapTotal/unmDet:kPlan;
@@ -1639,7 +1604,7 @@ function lmTotals(B,D){
     partTons:partTonsTrue,fullTons:fullTonsTrue,pFullIn,
     outside:Math.max(0,B.gapTotal-B.gapPlan),
     unattr:on?unattrUnc:0,
-    lm:on?lmUnc:lmPlan,base:on?'unc':'plan'};
+    lm:on?lmUnc:0,base:'unc'};
 }
 /* Упущенная выручка использует тот же охват и ту же базу, что упущенная маржа.
    Раньше обе вкладки дублировали похожие формулы, а подпись говорила «дефицит
@@ -1659,7 +1624,7 @@ function lostRevenueTotals(B,D,T){
   const indepK=rawInd>0?outsideValue/rawInd:0;
   const on=T&&T.base==='unc';
   const unattrPlan=plan>0&&rawPlan<=0?plan:0,unattrOutside=outsideValue>0&&rawInd<=0?outsideValue:0;
-  return {rate,plan,unc,lost:on?unc:plan,base:on?'unc':'plan',
+  return {rate,plan,unc,lost:on?unc:0,base:'unc',
     planK,indepK:on?indepK:0,unattr:unattrPlan+(on?unattrOutside:0)};
 }
 /* Точка входа блока: считает базу и масштабы для обеих денежных потерь. После
@@ -1675,8 +1640,7 @@ function lmState(D){
    вторая база) — в подсказке «?» (задача 2026-10-05, п.6: подпись влезает
    целиком, минимум текста). */
 function lmKpiSub(T){
-  const base=T.base==='unc'?'непокрытый спрос':'дефицит плана';
-  return `база: ${base}`;
+  return 'база: непокрытый спрос';
 }
 /* Развёрнутая подсказка «?» карточки упущенной маржи (и выручки):
    формула, ставка, вторая база, куда идти за сверкой. */
@@ -1727,55 +1691,26 @@ function covReconHtml(B,T,mrgp){
   return `<table class="rec"><thead><tr><th>Тождество</th><th>Левая часть</th><th>Правая часть</th><th>Статус</th></tr></thead>
     <tbody>${rows}${money}</tbody></table>`;
 }
-/* Строка выбора метода и базы: рендерится только в блоках, где упущенная маржа
-   считается через lmVal/lmS (Общий, Спрос и покрытие). Одна компактная строка из
-   двух частей — «Метод» и «База» — без рамки и фона: настройка не должна
+/* Строка выбора метода рендерится в блоках «Общий» и «Спрос и покрытие».
+   Единственный переключатель — два метода, без отдельной базы: настройка не должна
    конкурировать с KPI за внимание. Пояснения (в том числе объём непокрытого
    спроса и масштаб) — во всплывающей подсказке на значке «?». */
 function lmRowHtml(){
   const B=LM_B,T=LM_T;
-  const effBase=(B&&T)?T.base:LM_BASE;
   const note=(B&&T)
-    ?(T.base==='unc'
-      ?`Непокрытый спрос ${nf(B.gapTotal)} т = ${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана · частично покрыто ${nf(T.partTons)} т по ${nf(T.ratePart)} ₽/т, 100% не покрыто ${nf(T.fullTons)} т по ${nf(T.rateFull)} ₽/т`
-      :`Дефицит плана ${nf(B.gapPlan)} т${T.uncAvail?` · по непокрытому спросу (${nf(B.gapTotal)} т) было бы ${bn(T.lmUnc)}`:` · ${B.uncWhy}`}`)
+    ?`Непокрытый спрос ${nf(B.gapTotal)} т = ${nf(B.notPlanned)} т вне плана + ${nf(B.gapPlan)} т дефицита плана · частично покрыто ${nf(T.partTons)} т по ${nf(T.ratePart)} ₽/т, 100% не покрыто ${nf(T.fullTons)} т по ${nf(T.rateFull)} ₽/т`
     :'';
-  const baseHelp=[
-    `База расчёта: <b>${esc((LM_BASES[LM_BASE]||LM_BASES.plan).t)}</b>`,
+  const help=[
+    'База расчёта: <b>Непокрытый спрос</b>',
     note?esc(note):'',
-    'Переключатели пересчитывают KPI, графики и таблицы блока. Наведите на метод/вариант или базу — покажем формулу, бизнес-смысл и ограничения.'
+    'Два метода отличаются оценкой 100% не покрытого объёма. Частично покрытые заказы в обоих методах считаются по своей марже.'
   ].filter(Boolean).join('<br>');
-  /* «Метод» (5 кнопок) действует только на базу «Дефицит плана»; «Вариант»
-     (2 кнопки) — только на «Непокрытый спрос». Показываем ровно один из них,
-     чтобы не путать переключателем, который сейчас ни на что не влияет. */
-  const firstHalf=effBase==='unc'
-    ?`<span class="lm-half"><span class="lm-lbl">Вариант</span>
-      <div class="seg" id="lmVarSeg" role="group" aria-label="Вариант оценки 100%-непокрытого объёма"></div>
-      <span class="lm-info" id="lmVarSegInfo" role="img" tabindex="0" data-help="Варианты отличаются тем, как оценивается часть непокрытого спроса, у которой нет вообще никакой поставки (100% не покрыто). Частично покрытые заказы в обоих вариантах считаются по своей марже. Наведите на кнопку варианта — покажем формулу, бизнес-смысл, когда применять и ограничение." aria-label="Как выбирать вариант оценки 100%-непокрытого объёма"></span></span>`
-    :`<span class="lm-half"><span class="lm-lbl">Метод</span>
-      <div class="seg" id="lmSeg" role="group" aria-label="Метод расчёта упущенной маржи"></div>
-      <span class="lm-info" id="lmSegInfo" role="img" tabindex="0" data-help="Методы отличаются ставкой, по которой оценивается непокрытый объём. Активный метод выделен. Наведите на любую кнопку метода — покажем формулу, бизнес-смысл, когда применять и ограничение." aria-label="Как выбирать метод оценки упущенной маржи"></span></span>`;
   return `<div class="lmrow">
     <span class="lm-head">Упущенная маржа</span>
-    ${firstHalf}
-    <span class="lm-div" aria-hidden="true"></span>
-    <span class="lm-half"><span class="lm-lbl">База</span>
-      <div class="seg" id="lmBaseSeg" role="group" aria-label="База расчёта упущенной маржи"></div>
-      <span class="lm-info" id="lmBaseInfo" role="img" tabindex="0" data-help="${esc(baseHelp)}" aria-label="Что входит в базу расчёта"></span></span>
+    <span class="lm-half"><span class="lm-lbl">Метод</span>
+      <div class="seg" id="lmVarSeg" role="group" aria-label="Метод расчёта по непокрытому спросу"></div>
+      <span class="lm-info" id="lmVarSegInfo" role="img" tabindex="0" data-help="${esc(help)}" aria-label="Как выбирать метод расчёта по непокрытому спросу"></span></span>
   </div>`;
-}
-/* Подсказка базы — тот же #lmTip, что и у методов */
-function lmBaseTipHtml(k){
-  const m=LM_BASES[k]||LM_BASES.plan,B=LM_B;
-  let v=null;
-  if(B){const D=fOrders();v=k==='unc'?lmTotals(B,D).lmUnc:lmTotals(B,D).lmPlan}
-  const avail=k!=='unc'||!!(B&&B.useUnc&&B.gapTotal>0);
-  return `<h4>${esc(m.t)}${k===LM_BASE?'<span class="onb">активна</span>':''}</h4>`
-    +`<div><span class="k">Расчёт:</span> ${esc(m.f)}</div>`
-    +`<div><span class="k">Бизнес-смысл:</span> ${esc(m.b)}</div>`
-    +`<div><span class="k">Когда применять:</span> ${esc(m.w)}</div>`
-    +`<div><span class="k">Ограничение:</span> ${esc(m.lim)}</div>`
-    +(v!=null?`<div class="lmv">По этой базе сейчас: <b>${bn(v)} ₽</b>${avail?'':' · база недоступна, действует «Дефицит плана»'}</div>`:'');
 }
 /* Подсказка варианта оценки 100%-группы базы «Непокрытый спрос» — тот же
    #lmTip. Предпросмотр считается подменой LM_UNC_METHOD на время вызова
@@ -3644,10 +3579,10 @@ function tabOV(){
   return html+summary('Резюме: общий блок',[
     {t:'Выводы',i:[
       `Портфель даёт <span class="h">${bn(mar)}</span> валовой маржи при выручке ${bn(rev)} — маржинальность <span class="h">${pc(mar/rev)}</span>.`,
-      `Service Level <span class="h">${pc(sal/dem)}</span> к ограниченному спросу: не отгружено ${nf(unm)} т, это ${bn(lm)} упущенной маржи по базе «${LM_BASES[T.base].t}» — ${lm>mar?`в ${nf(lm/Math.max(mar,1),1)} раза больше`:`${pc(lm/Math.max(mar,1))} от`} текущего результата.`,
+      `Service Level <span class="h">${pc(sal/dem)}</span> к ограниченному спросу: не отгружено ${nf(unm)} т, это ${bn(lm)} упущенной маржи по базе «${'Непокрытый спрос'}» — ${lm>mar?`в ${nf(lm/Math.max(mar,1),1)} раза больше`:`${pc(lm/Math.max(mar,1))} от`} текущего результата.`,
       T.uncAvail
         ?`От неограниченного спроса не покрыто <span class="h">${nf(B.gapTotal)} т</span> (${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана): упущенная маржа по этой базе — <span class="h">${bn(T.lmUnc)}</span>, по дефициту плана — ${bn(T.lmPlan)}. Заказов: ${nf(B.ord.total)} всего, 100% не покрыто ${nf(B.ord.fullUnc)}, частично ${nf(B.ord.part)}, полностью ${nf(B.ord.full)}.`
-        :`Неограниченный спрос недоступен (${B.uncWhy}) — упущенная маржа считается только по дефициту плана и может занижать потери.`,
+        :`Неограниченный спрос недоступен (${B.uncWhy}) — упущенная маржа по непокрытому спросу временно недоступна.`,
       `Концентрация: топ-3 продукта (${top3.map(p=>p.k).join(', ')}) формируют <span class="h">${pc(conc)}</span> всей маржи.`,
       `Маржа на тонну ${mptTrend<0?'снижается':'растёт'} на <span class="h">${pc(Math.abs(mptTrend))}</span> от первого к последнему периоду.`,
       `Структура затрат: ${byT.sort((a,b)=>b.c-a.c).map(t=>t.k+' '+pc(t.c/S(byT,z=>z.c))).join(' | ')}.`]},
@@ -3845,9 +3780,9 @@ function tabDM(){
   const html=`
   ${srcFold(B.partial?'w':(useUnc?'i':'w'),
     (B.partial?`детализация ${nf(B.orders)} из ${nf(B.ordersAll)} заказов · `:'')+(B.demo?'демо-агрегат покрытия · ':'')+(useUnc
-      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · заказов ${nf(ord.total)} (${ordDCready?'demand_coverage':ord.src}) · база «${LM_BASES[T.base].t}»`
+      ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · заказов ${nf(ord.total)} (${ordDCready?'demand_coverage':ord.src}) · база «${'Непокрытый спрос'}»`
       :hasDC?'активны фильтры — расчёт по marking_demand':'нет independent_demand — расчёт по marking_demand'),
-    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; опоздания и счёт заказов — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${LM_BASES[T.base].t}». Счёт заказов: ${ord.srcLong}.`
+    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; опоздания и счёт заказов — <code>demand_coverage</code>; план, отгрузка и дефицит — <code>marking_demand</code>. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${'Непокрытый спрос'}». Счёт заказов: ${ord.srcLong}.`
       :hasDC?`Активны фильтры: неограниченный спрос (<code>independent_demand</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
       :'Таблица <code>independent_demand</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}${
       B.partial?` <b>Детализация ограничена лимитом загрузки:</b> ${nf(B.orders)} заказов из ${nf(B.ordersAll)} по схеме. Цепочка спроса и Service Level посчитаны по агрегатам всей схемы (${nf(B.dem)} т плана), иначе незагруженные заказы попали бы в «не принято в план». Таблицы, разрезы и упущенная маржа ниже строятся по загруженной выборке: её средневзвешенная ставка ₽/т перенесена на полный объём базы.`:''}`)}
@@ -4067,7 +4002,7 @@ function tabDM(){
       ordDCready?`Заказы: всего ${nf(ord.total)} = 100% не покрыто ${nf(ord.fullUnc)} + в оптимизации ${nf(ord.inOpt)} (= частично покрытых ${nf(ord.part)} + полностью ${nf(ord.full)}); с опозданием — ${nf(ord.late)}, в срок — ${nf(ord.intime)}.`
         :`Заказы (по ${ord.src==='marking_demand'?'marking_demand':'загруженной выборке'}): всего ${nf(ord.total)}, частично покрытых ${nf(ord.part)}, полностью ${nf(ord.full)}.`,
       useUnc?`Не покрыто всего <span class="h">${nf(B.gapTotal)} т</span> (${pc(demUnc?B.gapTotal/demUnc:0)} неограниченного спроса) = ${nf(notPlanned)} т вне плана + ${nf(unm)} т дефицита плана.`:'',
-      (unm||B.gapTotal)?`Потери: ${bn(lostRev)} упущенной выручки по дефициту плана и <span class="h">${bn(T.lm)}</span> упущенной маржи по базе «${LM_BASES[T.base].t}» (${pc(mar?T.lm/mar:0)} текущего результата)${T.uncAvail?`; по дефициту плана — ${bn(T.lmPlan)}, по непокрытому спросу — ${bn(T.lmUnc)}`:''}.`:`Дефицита нет — спрос покрыт полностью.`,
+      (unm||B.gapTotal)?`Потери: ${bn(lostRev)} упущенной выручки по дефициту плана и <span class="h">${bn(T.lm)}</span> упущенной маржи по базе «${'Непокрытый спрос'}» (${pc(mar?T.lm/mar:0)} текущего результата)${T.uncAvail?`; по дефициту плана — ${bn(T.lmPlan)}, по непокрытому спросу — ${bn(T.lmUnc)}`:''}.`:`Дефицита нет — спрос покрыт полностью.`,
       def.length?`Топ-позиция по упущенной марже: <span class="h">${topDef.k}</span> — ${nf(topDef.v)} т, ${bn(topDef.lm)}.`:'',
       `Экспорт: ${pc(sal?S(ex,o=>o.sal)/sal:0)} объёма и <span class="h">${pc(mar?S(ex,o=>o.mar)/mar:0)}</span> маржи; самая маржинальная позиция — ${hiMar.prod} (${nf(hiMar.mpt)} ₽/т, ${hiMar.cl}).`].filter(Boolean)},
     {t:'Аномалии',i:[
@@ -4769,7 +4704,7 @@ function tabVS(){
   /* LM в снапшоте заморожен по базе «Дефицит плана» базовым методом, но ставку из
      него можно восстановить: rate = lm/unm, а непокрытый объём (gap) сохраняется
      рядом. Тогда «полная цена отказа» версии = gap × rate — сравнима между
-     версиями без пересчёта истории под активный переключатель базы.
+     версиями без пересчёта истории под активный старый переключатель базы.
      У снапшотов, сохранённых до появления базы, поля gap нет → null. */
   const lmUncOf=v=>(v&&v.gap!=null&&v.unm>0)?v.gap*(v.lm/v.unm):null;
   const lmUA=lmUncOf(A),lmUB=lmUncOf(B),lmUncBoth=lmUA!=null&&lmUB!=null;
@@ -4866,7 +4801,7 @@ function tabVS(){
     <div class="fg"><label>Версия B (сравниваемая)</label><select id="vsB">${opt(0)}</select></div>
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
-  <p class="thin-note">Упущенная маржа в версиях заморожена в момент снапшота базовым методом «Маржа заказа» (дефицит × маржа/т заказа) и по базе «Дефицит плана» — переключатели метода и базы на вкладках «Общий» и «Спрос и покрытие» на историю версий не действуют. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</p>
+  <p class="thin-note">Упущенная маржа в старых версиях заморожена в момент снапшота; текущие методы применяются только к активным данным. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</p>
   ${kpisHtml([['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
        ['Изменение Service Level',pc(d(slOf(A),slOf(B))),'процентных пунктов',slOf(B)>=slOf(A)?'pos':'neg'],
@@ -5084,7 +5019,7 @@ function tabDQ(){
     add(npShare>.5?'w':'i','Спрос вне плана',
       `${nf(notPlannedD)} т (${pc(npShare)} неограниченного спроса) не принято в план${unmSD>0?` — полная цена отказа в ${nf(gapD/unmSD,2)} раза больше, чем по одному дефициту плана`:''}.`,
       npShare>.5?'Больше половины спроса не дошло до плана: проверить ограничения модели (горизонт, мощности, лимиты заявок) — возможно, оптимизатор «не видит» часть спроса, а не отказывается от неё осознанно.'
-              :'Объём вне плана учтён в базе «Непокрытый спрос» (переключатель рядом с методом расчёта LM).');
+              :'Объём вне плана учтён в базе «Непокрытый спрос» (переключатель метода расчёта LM).');
 
     /* ── Счёт заказов по demand_coverage (задача владельца 2026-10-05) ──
        Проверяем: (1) три countIf покрывают все строки; (2) строка
