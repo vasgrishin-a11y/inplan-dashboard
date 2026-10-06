@@ -16,6 +16,10 @@
    5. Фолбэки: без счётчиков demand_coverage — marking_demand; под фильтрами —
       загруженная выборка.
    6. DQ-проверки: разбиение заказов сходится; строка demand_coverage = заказ.
+   7. Охват графиков (задача владельца 2026-10-06): водопад по умолчанию в
+      режиме «Все заказы» и имеет два положения; у остальных графиков с
+      охватом три положения — «План продаж» (умолчание), «Все заказы» и
+      «100% непокрытые» (на графике остаются только такие заказы).
 
    Мок: demand_coverage — 100 строк (30 полностью непокрытых, 20 частично,
    50 полностью; из полностью покрытых 6 с опозданием, всего с признаком
@@ -401,16 +405,43 @@ test('independent_demand дополняет RCA и определяет разр
   assert.ok(!ctx.document.getElementById('d7card').classList.contains('full'),'таблица возвращается');
 });
 
-test('графики по умолчанию скрывают 100% непокрытые заказы, локальный переключатель добавляет их', async (t) => {
+test('охват графиков: водопад по умолчанию «Все заказы», у остальных три режима включая «100% непокрытые»', async (t) => {
   const ctx = await loadCH(true);
   t.after(ctx.close);
   await ctx.goTab('dm');
 
-  for (const id of ['d0','d1','d2','d8','d9']) {
-    const sw=ctx.document.querySelector(`[data-chart-all="${id}"]`);
-    assert.ok(sw, `у графика ${id} есть локальный переключатель 100% непокрытого спроса`);
-    assert.equal(sw.checked,false,`${id}: по умолчанию переключатель выключен`);
-    assert.match(sw.closest('label').textContent,/План продаж/,`${id}: выключенное состояние названо «План продаж»`);
+  /* ── водопад: два положения, по умолчанию «Все заказы» (2026-10-06) ── */
+  const wfBtn=ctx.document.querySelector('[data-chart-scope="d0"]');
+  assert.ok(wfBtn,'у водопада есть переключатель охвата');
+  const wfSeg=wfBtn.closest('.chart-scope');
+  assert.ok(wfSeg,'кнопки охвата водопада собраны в сегмент');
+  assert.equal(wfSeg.querySelectorAll('button').length,2,'у водопада два положения — без «100% непокрытые»');
+  assert.ok(!wfSeg.querySelector('[data-scope="unc"]'),'режим «только 100% непокрытые» к водопаду не добавляется');
+  const wfAll=wfSeg.querySelector('[data-scope="all"]');
+  assert.ok(wfAll.classList.contains('p'),'по умолчанию активен «Все заказы»');
+  assert.equal(wfAll.getAttribute('aria-pressed'),'true','состояние кнопки доступно скринридеру');
+  assert.equal(ctx.ev("chartShowsAll('d0')"),true,'водопад строится от неограниченного спроса без переключений');
+  assert.match(ctx.document.getElementById('d0sub').textContent,/Показаны все заказы/,'подпись карточки подтверждает полный охват');
+
+  ctx.document.querySelector('[data-chart-scope="d0"][data-scope="plan"]').click();
+  await settle(250);
+  assert.equal(ctx.ev("chartShowsAll('d0')"),false,'водопад можно вернуть к «Плану продаж»');
+  assert.match(ctx.document.getElementById('d0sub').textContent,/непокрытые заказы скрыты/,'подпись предупреждает о скрытых заказах');
+  ctx.document.querySelector('[data-chart-scope="d0"][data-scope="all"]').click();
+  await settle(250);
+  assert.equal(ctx.ev("chartShowsAll('d0')"),true,'вернулись к «Все заказы»');
+
+  /* ── остальные графики: три положения, по умолчанию «План продаж» ── */
+  for (const id of ['d1','d2','d8','d9']) {
+    const btn=ctx.document.querySelector(`[data-chart-scope="${id}"]`);
+    assert.ok(btn,`у графика ${id} есть переключатель охвата`);
+    const seg=btn.closest('.chart-scope');
+    assert.equal(seg.querySelectorAll('button').length,3,`${id}: три положения охвата`);
+    assert.ok(seg.querySelector('[data-scope="unc"]'),`${id}: есть режим «100% непокрытые»`);
+    const plan=seg.querySelector('[data-scope="plan"]');
+    assert.ok(plan.classList.contains('p'),`${id}: по умолчанию «План продаж»`);
+    assert.equal(plan.getAttribute('aria-pressed'),'true',`${id}: состояние доступно скринридеру`);
+    assert.match(plan.textContent,/План продаж/,`${id}: первое положение названо «План продаж»`);
   }
   const before=JSON.parse(ctx.ev(`JSON.stringify({
     all:fOrders().length,
@@ -421,7 +452,8 @@ test('графики по умолчанию скрывают 100% непокр�
   assert.equal(before.chart,2,'на графике по умолчанию только План продаж');
   assert.equal(before.full,0,'100% непокрытых на графике по умолчанию нет');
 
-  ctx.document.querySelector('[data-chart-all="d1"]').click();
+  /* «Все заказы» — точечно для одного графика */
+  ctx.document.querySelector('[data-chart-scope="d1"][data-scope="all"]').click();
   await settle(250);
   const after=JSON.parse(ctx.ev(`JSON.stringify({
     on:chartShowsAll('d1'),
@@ -429,16 +461,74 @@ test('графики по умолчанию скрывают 100% непокр�
     full:chartOrders('d1',fOrders()).filter(o=>orderStageOf(o)==='fullUnc').length
   })`));
   assert.equal(after.on,true,'переключатель включил полный охват только этого графика');
-  assert.match(ctx.document.querySelector('[data-chart-all="d1"]').closest('label').textContent,/Все заказы/,
-    'включённое состояние названо «Все заказы»');
   assert.equal(after.chart,3,'показаны все заказы');
   assert.equal(after.full,1,'100% непокрытый заказ добавлен');
   assert.equal(ctx.ev("chartShowsAll('d2')"),false,'соседний график не переключился');
 
+  /* «100% непокрытые» — на графике остаются только такие заказы (2026-10-06) */
+  ctx.document.querySelector('[data-chart-scope="d1"][data-scope="unc"]').click();
+  await settle(250);
+  const unc=JSON.parse(ctx.ev(`(function(){
+    const rows=chartOrders('d1',fOrders());
+    return JSON.stringify({n:rows.length,fullUnc:rows.filter(o=>orderStageOf(o)==='fullUnc').length,
+      ids:rows.map(o=>o.id),mode:scopeOf('d1'),showsAll:chartShowsAll('d1')});
+  })()`));
+  assert.equal(unc.mode,'unc','режим графика записан в состояние охвата');
+  assert.equal(unc.n,1,'в режиме «100% непокрытые» на графике один заказ');
+  assert.equal(unc.fullUnc,1,'и это заказ со 100% непокрытым спросом');
+  assert.deepEqual(unc.ids,[103],'остался только заказ 103 — единственный 100% непокрытый');
+  assert.equal(unc.showsAll,false,'режим «Все заказы» при этом выключен');
+  const uncBtn=ctx.document.querySelector('[data-chart-scope="d1"][data-scope="unc"]');
+  assert.ok(uncBtn&&uncBtn.classList.contains('p'),'кнопка «100% непокрытые» подсвечена после перерисовки');
+  assert.equal(ctx.ev("scopeOf('d2')"),'plan','соседний график остался в «Плане продаж»');
+
+  /* повторный клик по активной кнопке ничего не меняет */
+  ctx.document.querySelector('[data-chart-scope="d1"][data-scope="unc"]').click();
+  await settle(150);
+  assert.equal(ctx.ev("scopeOf('d1')"),'unc','режим не сломался повторным кликом');
+
   await ctx.goTab('ov');
-  const o8=ctx.document.querySelector('[data-chart-all="o8"]');
-  assert.ok(o8,'у графика упущенной маржи есть тот же локальный переключатель');
-  assert.equal(o8.checked,false,'в «Общем» по умолчанию тоже только План продаж');
+  const o8Btn=ctx.document.querySelector('[data-chart-scope="o8"]');
+  assert.ok(o8Btn,'у графика упущенной маржи есть тот же переключатель охвата');
+  const o8=o8Btn.closest('.chart-scope');
+  assert.equal(o8.querySelectorAll('button').length,3,'в «Общем» тоже три положения');
+  assert.ok(o8.querySelector('[data-scope="plan"]').classList.contains('p'),'в «Общем» по умолчанию тоже только План продаж');
+  assert.ok(ctx.document.querySelector('[data-chart-scope="o8"][data-scope="unc"]'),'в «Общем» доступен режим «100% непокрытые»');
+});
+
+/* Демо-набор без ClickHouse: агрегат покрытия синтезирован (demoCoverage), а
+   100% непокрытых строк в детализации нет — контроль охвата водопада обязан
+   оставаться видимым (ступени «Неограниченный спрос» строятся из агрегата),
+   а у остальных графиков — скрытым, потому что переключать нечего. */
+async function loadDemo(){
+  const virtualConsole=new VirtualConsole();virtualConsole.on('jsdomError',()=>{});
+  const dom=new JSDOM(fs.readFileSync(HTML,'utf8'),{
+    url:BASE+'/',runScripts:'dangerously',pretendToBeVisual:true,
+    virtualConsole,resources:{interceptors:[localResources]}});
+  await new Promise((resolve)=>dom.window.addEventListener('load',resolve));
+  await settle(400);
+  const w=dom.window,d=w.document;
+  return {window:w,document:d,
+    ev:code=>w.eval(code),
+    goTab:async id=>{w.go(id);await settle(300)},
+    close(){try{dom.window.close()}catch(e){/* jsdom */}}};
+}
+test('демо-набор: контроль водопада виден и без непокрытых строк в детализации (агрегат есть)', async (t) => {
+  const ctx=await loadDemo();
+  t.after(ctx.close);
+  await ctx.goTab('dm');
+
+  assert.equal(ctx.ev('(function(){return chartOrders("d1",fOrders()).filter(o=>orderStageOf(o)==="fullUnc").length})()'),0,
+    'фикстура: в демо-детализации нет ни одного 100% непокрытого заказа');
+  const btn=ctx.document.querySelector('[data-chart-scope="d0"]');
+  assert.ok(btn,'контроль охвата водопада виден: агрегат покрытия есть, хоть непокрытых строк в детализации нет');
+  const seg=btn.closest('.chart-scope');
+  assert.equal(seg.querySelectorAll('button').length,2,'два положения — без «100% непокрытые»');
+  assert.equal(ctx.ev("scopeOf('d0')"),'all','умолчание водопада — «Все заказы»');
+  assert.match(ctx.document.getElementById('d0sub').textContent,/Показаны все заказы/,
+    'цепочка строится от неограниченного спроса');
+  assert.equal(ctx.document.querySelector('[data-chart-scope="d1"]'),null,
+    'у остальных графиков контроля нет: непокрытых заказов нет — переключать нечего');
 });
 
 test('periodid 4YYYYMMDD приводится к P-бакету Плана продаж', async (t) => {

@@ -8,7 +8,10 @@
       = «не принято в план» + «дефицит плана»; ставка — средневзвешенная ₽/т
       дефицита плана под активным методом. Если demand_coverage нет/нулевой или
       активны фильтры — автоматический возврат к прежнему варианту (дефицит плана).
-   2. Обе базы видны одновременно: активная — в значении KPI, вторая — в подписи.
+   2. Обе базы видны одновременно (задача 2026-10-06): активная — в значении
+      KPI, вторая — в подсказке «?» карточки. Переключателя базы НЕТ — выбор
+      отменён владельцем; база автоматическая: «Непокрытый спрос», когда
+      неограниченный спрос доступен, иначе возврат к дефициту плана.
    3. Тождества спроса сходятся и показаны числами:
         Неограниченный = Ограниченный + Не принято в план
         Ограниченный   = Отгружено + Дефицит плана
@@ -363,46 +366,34 @@ test('свод спроса: все тождества сходятся и по�
   assert.ok(close(unc, ship + gap, 0.005), 'Неограниченный = Отгружено + Не покрыто всего (карточки)');
 });
 
-test('обе базы упущенной маржи видны одновременно, переключатель работает и сохраняется', async (t) => {
+test('обе базы упущенной маржи видны одновременно: активная — в KPI, вторая — в подсказке «?»', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
   ctx.ev("go('dm')");
   await ctx.tick();
 
-  const seg = ctx.document.getElementById('lmBaseSeg');
-  assert.ok(seg, 'переключатель базы есть');
-  const btns = [...seg.querySelectorAll('button')];
-  assert.equal(btns.length, 2, 'две базы: дефицит плана и непокрытый спрос');
-  assert.equal(btns.filter((b) => b.disabled).length, 0, 'на демо-наборе обе базы доступны');
-
+  /* 2026-10-06: выбор базы отменён владельцем — переключателя нет, база
+     автоматическая. На демо-наборе без фильтров активна «Непокрытый спрос»;
+     значение по второй базе видно в подсказке «?» карточки. */
+  assert.equal(ctx.document.getElementById('lmBaseSeg'), null, 'переключателя базы нет (выбор отменён владельцем 2026-10-06)');
+  assert.equal(ctx.document.getElementById('lmSeg'), null, 'переключателя пяти методов тоже нет');
   const lmCard = () => ctx.kpi('Упущенная маржа');
   const lmHelp = () => (lmCard().querySelector('.kpi-q') || {}).getAttribute('data-help') || '';
-  const planVal = parseBn(lmCard().querySelector('.v').textContent);
-  assert.match(lmCard().querySelector('.s').innerHTML, /база: дефицит плана/, 'по умолчанию база — дефицит плана');
-  /* 2026-10-05 (п.6): подпись карточки сокращена до двух строк; значение второй
-     базы видно в подсказке «?» (метод/база/альтернатива) */
-  assert.match(lmHelp(), /по непокрытому спросу/, 'в подсказке «?» видно значение второй базы');
-
-  const uncBtn = btns.find((b) => b.dataset.lmb === 'unc');
-  uncBtn.click();
-  await ctx.tick(60);
-
-  assert.equal(ctx.window.localStorage.getItem(LM_BASE_KEY), 'unc', 'выбор базы сохранён');
   const uncVal = parseBn(lmCard().querySelector('.v').textContent);
-  assert.match(lmCard().querySelector('.s').innerHTML, /база: непокрытый спрос/, 'база переключилась');
-  assert.match(lmHelp(), /по дефициту плана/, 'вторая база осталась видна в подсказке');
-  assert.ok(uncVal > planVal, `по непокрытому спросу потери больше: ${uncVal} > ${planVal}`);
+  assert.match(lmCard().querySelector('.s').innerHTML, /база: непокрытый спрос/,
+    'активная база — непокрытый спрос (автоматически, без переключателя)');
+  assert.match(lmHelp(), /по дефициту плана/, 'вторая база видна в подсказке «?»');
 
   const expected = JSON.parse(ctx.ev(`(function(){
     const D=fOrders(), B=covBasis(D), T=lmTotals(B,D);
     return JSON.stringify({lmUnc:T.lmUnc, lmPlan:T.lmPlan});
   })()`));
   assert.ok(close(uncVal, expected.lmUnc, 0.01), 'значение KPI = расчёт по непокрытому спросу');
-  assert.ok(close(planVal, expected.lmPlan, 0.01), 'значение по второй базе = расчёт по дефициту плана');
+  assert.ok(expected.lmUnc > expected.lmPlan, `по непокрытому спросу потери больше: ${expected.lmUnc} > ${expected.lmPlan}`);
 });
 
-test('под фильтрами база «Непокрытый спрос» отключается с объяснением причины', async (t) => {
-  const ctx = await loadApp({ [LM_BASE_KEY]: 'unc' });
+test('под фильтрами расчёт автоматически возвращается к дефициту плана с объяснением причины', async (t) => {
+  const ctx = await loadApp();
   t.after(ctx.close);
   ctx.ev("go('dm')");
   await ctx.tick();
@@ -410,11 +401,21 @@ test('под фильтрами база «Непокрытый спрос» о�
   ctx.ev("setF('p','0')");
   await ctx.tick(60);
 
-  const uncBtn = [...ctx.document.querySelectorAll('#lmBaseSeg button')].find((b) => b.dataset.lmb === 'unc');
-  assert.ok(uncBtn.disabled, 'кнопка «Непокрытый спрос» недоступна под фильтрами');
-  assert.match(uncBtn.getAttribute('title') || '', /фильтр/i, 'причина показана в подсказке кнопки');
-  const active = [...ctx.document.querySelectorAll('#lmBaseSeg button')].find((b) => b.classList.contains('p'));
-  assert.equal(active.dataset.lmb, 'plan', 'активна база «Дефицит плана»');
+  /* 2026-10-06: без переключателя — автоматический возврат, а не тихий ноль */
+  const lmCard = () => ctx.kpi('Упущенная маржа');
+  assert.match(lmCard().querySelector('.s').innerHTML, /база: дефицит плана/,
+    'под фильтрами активна база «Дефицит плана» — автоматически');
+  const help = (lmCard().querySelector('.kpi-q') || {}).getAttribute('data-help') || '';
+  assert.match(help, /Вторая база недоступна/, 'подсказка «?» объясняет, почему непокрытый спрос недоступен');
+  assert.match(help, /фильтр/i, 'причина названа: активны фильтры');
+  assert.ok(ctx.document.getElementById('lmVarSeg'), 'строка «Метод» остаётся на месте');
+  const expected = JSON.parse(ctx.ev(`(function(){
+    const D=fOrders(), T=lmTotals(covBasis(D), D);
+    return JSON.stringify({lm:T.lm, lmPlan:T.lmPlan});
+  })()`));
+  assert.equal(expected.lm, expected.lmPlan, 'расчёт вернулся к дефициту плана');
+  assert.ok(close(parseBn(lmCard().querySelector('.v').textContent), expected.lm, 0.01),
+    'значение KPI = дефицит плана, а не тихий ноль');
 });
 
 /* ─────────────────────── 3. График в блоке «Общий» ─────────────────────── */
