@@ -285,20 +285,14 @@ main{padding:20px 32px 72px;flex:1}
 .card.w{grid-column:1/-1}
 .card h3{margin:0;font:600 15px/20px 'Open Sans',sans-serif;color:var(--scp-text)}
 .card .sub{font-size:12px;line-height:16px;color:var(--scp-text-3);margin:3px 0 10px}
-/* Локальный переключатель охвата графика. По умолчанию каждый график строится
-   только по заказам «Плана продаж»; флажок точечно добавляет 100% непокрытые
-   заказы, не меняя KPI, таблицы и соседние графики. */
-.chart-scope{display:inline-flex;align-items:center;gap:7px;margin:-3px 0 8px;
-  font:400 11.5px/16px 'Open Sans',sans-serif;color:var(--scp-text-3);cursor:pointer;
-  user-select:none}
-.chart-scope input{position:absolute;opacity:0;pointer-events:none}
-.chart-scope .track{position:relative;width:28px;height:16px;flex:0 0 28px;border-radius:9999px;
-  background:var(--scp-n-300);transition:background .15s ease}
-.chart-scope .track::after{content:'';position:absolute;left:2px;top:2px;width:12px;height:12px;
-  border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .15s ease}
-.chart-scope input:checked+.track{background:var(--scp-accent)}
-.chart-scope input:checked+.track::after{transform:translateX(12px)}
-.chart-scope input:focus-visible+.track{outline:2px solid var(--scp-accent);outline-offset:2px}
+/* Локальный переключатель охвата графика (задача владельца 2026-10-06) —
+   компактный сегмент кнопок у графика: «План продаж» (умолчание всех
+   графиков, кроме водопада), «Все заказы» (умолчание водопада) и «100%
+   непокрытые» (только заказы с нулевой отгрузкой; у водопада такого
+   положения нет). Действует точечно: KPI, таблицы и соседние графики
+   не меняются. */
+.seg.chart-scope{margin:2px 10px 8px 0}
+.seg.chart-scope .btn{padding:3px 9px;font-size:11.5px}
 canvas{width:100%;display:block;cursor:pointer}
 .lg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--scp-text-2);
   padding:2px 0 8px;justify-content:center}
@@ -1299,24 +1293,57 @@ function orderIdCell(o,link){
     return `<span${o&&o.independentOnly?' title="Строка independent_demand не попала в план"':''}>${esc(id)}</span>`;
   return `<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа ${esc(id)}" data-goto-order="${o.id}" data-tree-mode="stages">${esc(id)} ↗</span>`;
 }
-/* Охват каждого графика независим. false (по умолчанию) — только «План
-   продаж»; true — все заказы, включая 100% непокрытые. */
-const CHART_ALL={};
-const chartShowsAll=id=>!!CHART_ALL[id];
+/* Охват каждого графика независим (задача владельца 2026-10-06). Три режима:
+     'plan' — только заказы «Плана продаж» (умолчание всех графиков, кроме
+              водопада);
+     'all'  — все заказы неограниченного спроса, включая 100% непокрытые
+              (умолчание водопада d0: цепочка «от неограниченного к отгрузке
+              в срок» должна читаться целиком сразу, без переключений);
+     'unc'  — только заказы 100% непокрытые (fullfilleddemandqty = 0): режим
+              добавлен 2026-10-06 на графиках, где раньше был флажок «Все
+              заказы», КРОМЕ водопада — из водопада нельзя выкинуть
+              промежуточные ступени, поэтому у него два положения.
+   Выбор точечный: KPI, таблицы и соседние графики не меняются. Состояние
+   живёт в памяти страницы — перерисовки (фильтры, вкладки) его сохраняют,
+   перезагрузка возвращает умолчание. */
+const CHART_SCOPE={};
+const CHART_SCOPE_DEFAULT=id=>id==='d0'?'all':'plan';
+const scopeOf=id=>CHART_SCOPE[id]||CHART_SCOPE_DEFAULT(id);
+const chartShowsAll=id=>scopeOf(id)==='all';
 const salesPlanOrders=D=>(D||[]).filter(o=>orderStageOf(o)!=='fullUnc');
-const chartOrders=(id,D)=>chartShowsAll(id)?(D||[]):salesPlanOrders(D);
-function chartScopeHtml(id,D){
+const chartOrders=(id,D)=>{
+  const s=scopeOf(id);
+  return s==='all'?(D||[]):s==='unc'?(D||[]).filter(o=>orderStageOf(o)==='fullUnc'):salesPlanOrders(D);
+};
+/* Сообщение «нет данных» с учётом охвата: в режиме «100% непокрытые» пустой
+   график чаще всего значит, что таких заказов под фильтрами просто нет. */
+const chartEmptyMsg=(id,rows,otherwise)=>scopeOf(id)==='unc'&&!(rows||[]).length
+  ?'Нет 100% непокрытых заказов под текущими фильтрами':otherwise;
+function chartScopeHtml(id,D,force){
   const n=(D||[]).filter(o=>orderStageOf(o)==='fullUnc').length;
-  if(!n)return '';
-  const on=chartShowsAll(id);
-  return `<label class="chart-scope" title="По умолчанию график показывает только заказы Плана продаж. Включите, чтобы добавить 100% непокрытые заказы.">
-    <input type="checkbox" data-chart-all="${esc(id)}" ${on?'checked':''} aria-label="${on?'Показаны все заказы, включая 100% непокрытые':'Показан только План продаж; включить все заказы'}" aria-checked="${on}">
-    <span class="track" aria-hidden="true"></span><span>${on?'Все заказы':'План продаж'}</span></label>`;
+  const s=scopeOf(id);
+  /* Контроль не выводится, когда 100% непокрытых заказов под фильтрами нет и
+     режим не «unc» — переключать нечего. В режиме «unc» оставляем, чтобы был
+     способ вернуться к «Плану продаж». Водопаду достаточно агрегата
+     (force=useUnc||ordDCready): ступени «Неограниченный спрос» строятся и
+     тогда, когда непокрытых строк в загруженной детализации нет. */
+  if(!n&&s!=='unc'&&!force)return '';
+  const items=(id==='d0'
+    ?[['plan','План продаж','Только заказы, принятые оптимизатором в план (частично и полностью покрытые). Водопад начинается с «Заказов в оптимизации»'],
+       ['all','Все заказы','Все заказы неограниченного спроса, включая 100% непокрытые. Водопад начинается с «Неограниченного спроса»']]
+    :[['plan','План продаж','Только заказы, принятые оптимизатором в план: частично и полностью покрытые (режим по умолчанию)'],
+       ['all','Все заказы','Все заказы неограниченного спроса, включая 100% непокрытые'],
+       ['unc','100% непокрытые',`Только заказы со 100% непокрытым спросом (отгрузка 0) — ${nf(n)} ${plural(n,['заказ','заказа','заказов'])} под текущими фильтрами. Заказы «Плана продаж» на графике не показываются`]])
+    .map(([k,t,tip])=>`<button type="button" class="btn${s===k?' p':''}" data-chart-scope="${esc(id)}" data-scope="${k}"`
+      +` aria-pressed="${String(s===k)}" title="${esc(tip)}">${esc(t)}</button>`).join('');
+  return `<div class="seg chart-scope" role="group" aria-label="Охват графика: План продаж, все заказы или только 100% непокрытые">${items}</div>`;
 }
-document.addEventListener('change',e=>{
-  const t=e.target&&e.target.closest&&e.target.closest('[data-chart-all]');
-  if(!t)return;
-  CHART_ALL[t.dataset.chartAll]=!!t.checked;
+document.addEventListener('click',e=>{
+  const b=e.target&&e.target.closest&&e.target.closest('[data-chart-scope][data-scope]');
+  if(!b)return;
+  const id=b.dataset.chartScope;
+  if(b.dataset.scope===scopeOf(id))return;
+  CHART_SCOPE[id]=b.dataset.scope;
   if(DS)render();
 });
 /* Подходит ли заказ под стадию водопада. Для «С опозданием»/«В срок»
@@ -3493,7 +3520,8 @@ function tabOV(){
         .sort((a,b)=>periodCompare(a.k,b.k));
       const lmPrd=grp(scope,o=>o.prod,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal)}))
         .sort((a,b)=>b.lm-a.lm);
-      const scaled=T.base==='unc'?` База непокрытого спроса распределена между дефицитом плана и входными заказами.`:'';
+      const scaled=T.base==='unc'?` База непокрытого спроса распределена между дефицитом плана и входными заказами.`:''
+        +(scopeOf('o8')==='unc'?' Режим охвата — только заказы 100% непокрытые.':'');
       const hasDef=scope.some(o=>o.unm>0)||T.lm>0;
       if(OV_LM_DIM==='prod'){
         if(sub)sub.textContent='Топ-12 продуктов по упущенной марже, млрд ₽. Клик — фильтр по продукту.'+scaled;
@@ -3501,7 +3529,7 @@ function tabOV(){
         if(top.length)chH('#o8',H('#o8',300,0.32),top.map((r,i)=>({k:r.k,v:r.lm,c:PAL[i%PAL.length],
           tip:`<b>${esc(r.k)}</b><br>Упущенная маржа: ${bn(r.lm)}<br>Дефицит: ${nf(r.unm)} т<br>Ставка: ${nf(r.unm?r.lm/r.unm:0)} ₽/т<br>Доля потерь: ${pc(T.lm?r.lm/T.lm:0)}`})),
           bn,it=>setF('pr',it.k));
-        else noData('#o8',hasDef?'Дефицита нет — упущенная маржа нулевая':'Нет данных');
+        else noData('#o8',chartEmptyMsg('o8',scope,hasDef?'Дефицита нет — упущенная маржа нулевая':'Нет данных'));
       }else if(OV_LM_DIM==='pp'){
         if(sub)sub.textContent='Тепловая карта «продукт × период», млрд ₽. Клик по ячейке — фильтр по продукту и периоду.'+scaled;
         const rows=lmPrd.filter(r=>r.lm>0).slice(0,8).map(r=>r.k),periods=lmPer.map(r=>r.k),cols=periods.map(periodLabel);
@@ -3512,13 +3540,14 @@ function tabOV(){
             const j=F.p.indexOf(pk);j<0?F.p.push(pk):F.p.splice(j,1);
             render()},
           v=>nf(v/1e9,1));
-        else noData('#o8',hasDef?'Нет дефицитов для разреза «продукт × период»':'Дефицита нет — упущенная маржа нулевая');
+        else noData('#o8',chartEmptyMsg('o8',scope,hasDef?'Нет дефицитов для разреза «продукт × период»':'Дефицита нет — упущенная маржа нулевая'));
       }else{
         if(sub)sub.textContent='Млрд ₽ по периодам спроса. Клик по столбцу — фильтр по периоду.'+scaled;
-        chBars('#o8',H('#o8',280,0.3),lmPer.map(r=>periodLabel(r.k)),[{c:CH.d5,v:lmPer.map(r=>r.lm)}],bn,
+        if(lmPer.length)chBars('#o8',H('#o8',280,0.3),lmPer.map(r=>periodLabel(r.k)),[{c:CH.d5,v:lmPer.map(r=>r.lm)}],bn,
           i=>{const r=lmPer[i];
             return `<b>Период ${periodLabel(r.k)}</b><br>Упущенная маржа: ${bn(r.lm)}<br>Дефицит: ${nf(r.unm)} т<br>Отгружено: ${nf(r.sal)} т из ${nf(r.dem)} т<br>Service Level: ${pc(r.dem?r.sal/r.dem:0)}<br>Ставка потерь: ${nf(r.unm?r.lm/r.unm:0)} ₽/т<br>Доля всех потерь: ${pc(T.lm?r.lm/T.lm:0)}`},
           i=>setF('p',lmPer[i].k),0,1);
+        else noData('#o8',chartEmptyMsg('o8',scope,'Нет данных'));
       }
       if(note)note.innerHTML=T.base==='unc'
         ?`База «Непокрытый спрос»: <b>${nf(B.gapTotal)} т</b> = ${nf(B.notPlanned)} т не принято в план + ${nf(B.gapPlan)} т дефицита плана. Входные строки, которых нет в плане, распределены по их товару и периоду; остаток без детализации оценивается ставкой ${nf(T.rate)} ₽/т (${esc(T.rateSrc)}).`
@@ -3791,7 +3820,7 @@ function tabDM(){
   <div class="grid">
     <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
       <div class="sub" id="d0sub">Тонны. В «Плане продаж» жёлтым показан дефицит, синим — выполненная часть. Клик по столбцу — фильтр RCA</div>
-      ${chartScopeHtml('d0',D)}
+      ${chartScopeHtml('d0',D,useUnc||ordDCready)}
       <div class="seg" id="d0mode" role="group" aria-label="Единица водопада: тонны или заказы" style="margin:2px 0 10px">
         <button type="button" class="btn" data-wfmode="tons">Тонны</button>
         <button type="button" class="btn" data-wfmode="orders">Заказы</button>
@@ -3823,10 +3852,16 @@ function tabDM(){
       const isOrd=DM_WF_MODE==='orders',includeUncovered=chartShowsAll('d0');
       const wf=isOrd?dmOrderWaterfall(ord,includeUncovered):dmTonsWaterfall(includeUncovered);
       const sub=$('#d0sub');
+      /* По умолчанию водопад в режиме «Все заказы» (задача 2026-10-06);
+         наличие ступеней «Неограниченный спрос» зависит от данных: в заказах —
+         от счётчиков demand_coverage, в тоннах — от доступности independent_demand. */
+      const uncAvail=isOrd?ordDCready:useUnc;
       if(sub)sub.textContent=(isOrd
         ?'Заказы. «План продаж»: полностью выполненные + частично выполненные (жёлтый сегмент). Клик — фильтр RCA'
         :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA')
-        +(includeUncovered?' Показаны все заказы.':' 100% непокрытые заказы скрыты.');
+        +(includeUncovered
+          ?(uncAvail?' Показаны все заказы.':' Неограниченный спрос недоступен — водопад от ограниченного спроса.')
+          :' 100% непокрытые заказы скрыты.');
       chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,
         isOrd?v=>nf(v,0):v=>nf(v/1000,1)+'k т',
         i=>{const b=wf[i],val=Math.abs(b.v);
@@ -3902,20 +3937,23 @@ function tabDM(){
       noteHost.innerHTML=note?`<div class="stage-note">${note}</div>`:'';
     }
 
+    const noData=(id,msg)=>{const g=cv(id,200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';
+      g.x.font='13px '+FNT;g.x.fillText(msg,g.w/2,100)}};
     const d1Rows=chartOrders('d1',D);
     const per=grp(d1Rows,o=>o.p,v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
       .sort((a,b)=>periodCompare(a.k,b.k));
-    chStackLine('#d1',H('#d1',270,0.48),per.map(p=>periodLabel(p.k)),
+    if(per.length)chStackLine('#d1',H('#d1',270,0.48),per.map(p=>periodLabel(p.k)),
       [{c:CH.d3,v:per.map(p=>p.sal)},{c:CH.d5,v:per.map(p=>p.unm)}],
       {c:CH.warn,v:per.map(p=>p.dem?p.sal/p.dem:0)},v=>nf(v/1000,0)+'k',
       i=>`<b>${periodLabel(per[i].k)}</b><br>Ограниченный спрос: ${nf(per[i].dem)} т<br>Отгружено: ${nf(per[i].sal)} т<br>Дефицит: ${nf(per[i].unm)} т<br>Service Level: ${pc(per[i].dem?per[i].sal/per[i].dem:0)}`,
       i=>setF('p',per[i].k));
-    const noData=(id,msg)=>{const g=cv(id,200);if(g){g.x.fillStyle=CH.axis;g.x.textAlign='center';g.x.font='13px '+FNT;g.x.fillText(msg,g.w/2,100)}};
-    const def2=grp(chartOrders('d2',D).filter(o=>o.unm>1e-9),o=>o.loc+' · '+o.prod,
+    else noData('#d1',chartEmptyMsg('d1',d1Rows,'Нет заказов Плана продаж под текущими фильтрами'));
+    const d2Rows=chartOrders('d2',D);
+    const def2=grp(d2Rows.filter(o=>o.unm>1e-9),o=>o.loc+' · '+o.prod,
       v=>({v:S(v,o=>o.unm),lm:S(v,lmS),prod:v[0].prod})).sort((a,b)=>b.lm-a.lm).slice(0,8);
     if(def2.length)chH('#d2',H('#d2',270,0.55),def2.map(d=>({k:d.k,v:d.lm,c:CH.d5,prod:d.prod,
       tip:`<b>${d.k}</b><br>Дефицит: ${nf(d.v)} т<br>Упущенная маржа: ${bn(d.lm)}`})),bn,it=>setF('pr',it.prod));
-    else noData('#d2','Дефицитов под текущими фильтрами нет');
+    else noData('#d2',chartEmptyMsg('d2',d2Rows,'Дефицитов под текущими фильтрами нет'));
     chDonut('#d3',H('#d3',230,0.55),[{k:'RU внутренний',v:S(ru,o=>o.mar),c:CH.d1},{k:'EX экспорт',v:S(ex,o=>o.mar),c:CH.d2}],
       'Маржа',bn,pt=>setF('ch',pt.k.startsWith('RU')?'RU':'EX'));
     chStackLine('#d4',H('#d4',250,0.45),cl.map(c=>c.k),[{c:CH.d1,v:cl.map(c=>c.mar)}],{c:CH.warn,v:cl.map(c=>c.dem?c.sal/c.dem:0)},
@@ -3934,11 +3972,11 @@ function tabDM(){
     const hr=prDef.slice(0,7).map(p=>p.k);
     if(hr.length)chHeat('#d8',H('#d8',290,0.5),hr,d8Labels,hr.map(r=>d8Periods.map(p=>S(d8Rows.filter(o=>o.prod===r&&String(o.p)===String(p)),o=>o.unm))),
       v=>nf(v)+' т',r=>setF('pr',r),v=>nf(v/1000,1)+'k');
-    else noData('#d8','Нет дефицитов для разреза «продукт × период»');
+    else noData('#d8',chartEmptyMsg('d8',d8Rows,'Нет дефицитов для разреза «продукт × период»'));
     const d9Rows=chartOrders('d9',D).filter(o=>o.unm>1e-9);
     if(d9Rows.length)chPareto('#d9',H('#d9',280,0.5),d9Rows.slice().sort((a,b)=>b.unm-a.unm).slice(0,40).map(o=>({k:`${orderDisplayId(o)} ${o.prod}`,v:o.unm})),
       v=>nf(v)+' т',it=>setF('pr',it.k.split(' ')[1]));
-    else noData('#d9','Дефицитов нет');
+    else noData('#d9',chartEmptyMsg('d9',chartOrders('d9',D),'Дефицитов нет'));
 
     dtable('#d7',[
       {k:'id',t:'# Заказа',num:1,left:1,f:(v,o)=>orderIdCell(o,true)},
