@@ -183,13 +183,15 @@ test('альтернатива обновляется вместе с подпи
   assert.match(matrix, /продукт × период|продукт/i, 'альтернатива комбинированного разреза');
 });
 
-test('переключатели метода, базы и разреза — подписанные группы кнопок', async (t) => {
+test('переключатели метода и разреза — подписанные группы кнопок', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
 
   ctx.ev("go('ov')");
   await ctx.tick(150);
-  for (const id of ['lmSeg', 'lmBaseSeg', 'o8dim']) {
+  /* 2026-10-06: выбор базы отменён владельцем — из строки упущенной маржи
+     остался один переключатель #lmVarSeg (два варианта оценки) */
+  for (const id of ['lmVarSeg', 'o8dim']) {
     const seg = ctx.document.getElementById(id);
     assert.ok(seg, `переключатель #${id} есть на вкладке «Общий»`);
     assert.equal(seg.getAttribute('role'), 'group', `#${id} — группа`);
@@ -200,6 +202,8 @@ test('переключатели метода, базы и разреза — п
     assert.equal(pressed.length, 1, `в #${id} ровно один активный вариант, и он помечен aria-pressed`);
     btns.forEach((b) => assert.ok(b.textContent.trim(), `кнопки в #${id} подписаны текстом`));
   }
+  assert.equal(ctx.document.getElementById('lmBaseSeg'), null, 'переключателя базы нет — выбор базы отменён (2026-10-06)');
+  assert.equal(ctx.document.getElementById('lmSeg'), null, 'переключателя пяти методов нет');
 });
 
 test('канвас цепочки заказа помечен, а её данные продублированы реестром', async (t) => {

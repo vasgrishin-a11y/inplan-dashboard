@@ -11,8 +11,9 @@
       соответствующим видом, переключатель вида меняет содержимое.
    3. В шапке ВСЕГДА видно, какая версия активна (имя датасета/схемы), а не только
       до загрузки файла.
-   4. Переключатели «метод / база» упущенной маржи — одна компактная строка с
-      двумя частями и значками «?», без пояснительных подписей в теле строки.
+   4. Переключатель упущенной маржи — одна компактная строка (только метод
+      оценки непокрытого спроса) со значком «?», без пояснительных подписей
+      в теле строки. Выбор базы отменён владельцем 2026-10-06.
    5. График «Упущенная маржа по периодам и продуктам» стоит непосредственно
       перед таблицей «Заказы спроса», а не первым в разделе.
    6. KPI-карточки одной структуры: заголовок (до 2 строк), значение (одна
@@ -189,41 +190,37 @@ test('в шапке всегда видно, какая версия актив�
 
 /* ─────────────────── 3. Компактная строка метода и базы ─────────────────── */
 
-test('переключатели упущенной маржи — одна компактная строка с двумя частями', async (t) => {
+test('переключатели упущенной маржи — одна компактная строка (только метод оценки)', async (t) => {
   const ctx = await loadApp();
   t.after(ctx.close);
   await ctx.go('ov', 140);
 
+  /* 2026-10-06: выбор базы отменён владельцем — в строке осталась одна часть:
+     «Метод» оценки непокрытого спроса (два варианта) со значком «?» */
   const rows = [...ctx.document.querySelectorAll('#main .lmrow')];
   assert.equal(rows.length, 1, 'строка ровно одна (было две с рамкой и фоном)');
   const row = rows[0];
   assert.ok(row.querySelector('.lm-head'), 'у строки есть общий заголовок «Упущенная маржа»');
-  assert.equal(row.querySelectorAll('.lm-half').length, 2, 'строка разделена на две части');
-  assert.ok(row.querySelector('.lm-div'), 'части разделены вертикальной чертой');
-  assert.ok(row.querySelector('#lmSeg'), 'первая часть — метод');
-  assert.ok(row.querySelector('#lmBaseSeg'), 'вторая часть — база');
+  assert.equal(row.querySelectorAll('.lm-half').length, 1, 'часть одна: выбор базы отменён (задача владельца 2026-10-06)');
+  assert.equal(row.querySelector('.lm-div'), null, 'вертикального разделителя нет — делить нечего');
   assert.equal(ctx.document.querySelectorAll('#main .lmrow-note').length, 0,
     'длинных пояснительных подписей в строке нет');
 
-  /* Пояснения живут в значках «?» */
-  for (const id of ['#lmSegInfo', '#lmBaseInfo']) {
-    const q = row.querySelector(id);
-    assert.ok(q, `есть значок «?» ${id}`);
-    assert.ok((q.getAttribute('data-help') || '').length > 20, 'подсказка значка содержательна');
-    assert.equal(q.getAttribute('title'), null, 'нативного title нет — не дублирует кастомную подсказку');
-  }
+  /* Пояснение живёт в значке «?» */
+  const q = row.querySelector('#lmVarSegInfo');
+  assert.ok(q, 'есть значок «?» у переключателя метода');
+  assert.ok((q.getAttribute('data-help') || '').length > 20, 'подсказка значка содержательна');
+  assert.equal(q.getAttribute('title'), null, 'нативного title нет — не дублирует кастомную подсказку');
 
-  /* База переключается и пересчитывает показатели */
-  const before = ctx.ev("fOrders().length");
-  const unc = row.querySelector('#lmBaseSeg [data-lmb="unc"]');
-  assert.ok(unc, 'вторая база доступна без фильтров');
-  unc.click();
+  /* Переключатель варианта не меняет выборку, выбор сохраняется */
+  const before = ctx.ev('fOrders().length');
+  const btn = row.querySelector('#lmVarSeg [data-lmu="prod"]');
+  assert.ok(btn, 'второй вариант доступен');
+  btn.click();
   await ctx.tick(140);
-  assert.equal(ctx.document.querySelector('#lmBaseSeg .btn.p').dataset.lmb, 'unc',
-    'выбранная база подсвечена');
-  assert.equal(ctx.ev("localStorage.getItem('inplan_lm_base')") || ctx.ev("localStorage.getItem(LM_BASE_KEY)"),
-    'unc', 'выбор базы сохраняется');
-  assert.equal(ctx.ev("fOrders().length"), before, 'переключение базы не меняет выборку');
+  assert.equal(ctx.window.localStorage.getItem('inplan_lm_unc_method'), 'prod',
+    'выбор варианта сохраняется');
+  assert.equal(ctx.ev('fOrders().length'), before, 'переключение варианта не меняет выборку');
 });
 
 /* ─────────────────── 4. Порядок карточек в «Общем» ─────────────────── */
