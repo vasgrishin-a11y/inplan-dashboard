@@ -496,6 +496,41 @@ test('охват графиков: водопад по умолчанию «Вс
   assert.ok(ctx.document.querySelector('[data-chart-scope="o8"][data-scope="unc"]'),'в «Общем» доступен режим «100% непокрытые»');
 });
 
+/* Демо-набор без ClickHouse: агрегат покрытия синтезирован (demoCoverage), а
+   100% непокрытых строк в детализации нет — контроль охвата водопада обязан
+   оставаться видимым (ступени «Неограниченный спрос» строятся из агрегата),
+   а у остальных графиков — скрытым, потому что переключать нечего. */
+async function loadDemo(){
+  const virtualConsole=new VirtualConsole();virtualConsole.on('jsdomError',()=>{});
+  const dom=new JSDOM(fs.readFileSync(HTML,'utf8'),{
+    url:BASE+'/',runScripts:'dangerously',pretendToBeVisual:true,
+    virtualConsole,resources:{interceptors:[localResources]}});
+  await new Promise((resolve)=>dom.window.addEventListener('load',resolve));
+  await settle(400);
+  const w=dom.window,d=w.document;
+  return {window:w,document:d,
+    ev:code=>w.eval(code),
+    goTab:async id=>{w.go(id);await settle(300)},
+    close(){try{dom.window.close()}catch(e){/* jsdom */}}};
+}
+test('демо-набор: контроль водопада виден и без непокрытых строк в детализации (агрегат есть)', async (t) => {
+  const ctx=await loadDemo();
+  t.after(ctx.close);
+  await ctx.goTab('dm');
+
+  assert.equal(ctx.ev('(function(){return chartOrders("d1",fOrders()).filter(o=>orderStageOf(o)==="fullUnc").length})()'),0,
+    'фикстура: в демо-детализации нет ни одного 100% непокрытого заказа');
+  const btn=ctx.document.querySelector('[data-chart-scope="d0"]');
+  assert.ok(btn,'контроль охвата водопада виден: агрегат покрытия есть, хоть непокрытых строк в детализации нет');
+  const seg=btn.closest('.chart-scope');
+  assert.equal(seg.querySelectorAll('button').length,2,'два положения — без «100% непокрытые»');
+  assert.equal(ctx.ev("scopeOf('d0')"),'all','умолчание водопада — «Все заказы»');
+  assert.match(ctx.document.getElementById('d0sub').textContent,/Показаны все заказы/,
+    'цепочка строится от неограниченного спроса');
+  assert.equal(ctx.document.querySelector('[data-chart-scope="d1"]'),null,
+    'у остальных графиков контроля нет: непокрытых заказов нет — переключать нечего');
+});
+
 test('periodid 4YYYYMMDD приводится к P-бакету Плана продаж', async (t) => {
   const ctx = await loadCH(true);
   t.after(ctx.close);
