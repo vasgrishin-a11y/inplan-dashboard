@@ -401,17 +401,38 @@ test('independent_demand дополняет RCA и определяет разр
   assert.ok(!ctx.document.getElementById('d7card').classList.contains('full'),'таблица возвращается');
 });
 
-test('графики по умолчанию скрывают 100% непокрытые заказы, локальный переключатель добавляет их', async (t) => {
+/* Охват графика (задача владельца 2026-10-06):
+   • Водопад спроса d0 по умолчанию стоит в «Все заказы»;
+   • у остальных графиков с охватом (o8, d1, d2, d8, d9) умолчание —
+     «План продаж», и добавлен третий режим «Только 100% не покрыто»;
+   • водопаду третий режим не предлагается. */
+const scopeBtns = (ctx,id) => [...ctx.document.querySelectorAll(`[data-chart-scope="${id}"]`)];
+const scopeBtn  = (ctx,id,m) => ctx.document.querySelector(`[data-chart-scope="${id}"][data-scope="${m}"]`);
+
+test('охват графиков: водопад по умолчанию «Все заказы», у остальных есть режим «Только 100% не покрыто»', async (t) => {
   const ctx = await loadCH(true);
   t.after(ctx.close);
   await ctx.goTab('dm');
 
   for (const id of ['d0','d1','d2','d8','d9']) {
-    const sw=ctx.document.querySelector(`[data-chart-all="${id}"]`);
-    assert.ok(sw, `у графика ${id} есть локальный переключатель 100% непокрытого спроса`);
-    assert.equal(sw.checked,false,`${id}: по умолчанию переключатель выключен`);
-    assert.match(sw.closest('label').textContent,/План продаж/,`${id}: выключенное состояние названо «План продаж»`);
+    const btns=scopeBtns(ctx,id);
+    assert.ok(btns.length, `у графика ${id} есть локальный переключатель охвата`);
+    assert.deepEqual(btns.map(b=>b.dataset.scope),
+      id==='d0'?['plan','all']:['plan','all','unc'],
+      `${id}: набор режимов охвата`);
   }
+  assert.equal(ctx.ev("chartScopeOf('d0')"),'all','водопад по умолчанию показывает все заказы');
+  assert.equal(scopeBtn(ctx,'d0','all').getAttribute('aria-pressed'),'true','кнопка «Все заказы» водопада нажата');
+  assert.match(scopeBtn(ctx,'d0','all').textContent,/Все заказы/);
+  assert.equal(ctx.document.getElementById('d0sub').textContent.includes('Показаны все заказы'),true,
+    'подпись водопада объявляет полный охват');
+
+  for (const id of ['d1','d2','d8','d9']) {
+    assert.equal(ctx.ev(`chartScopeOf('${id}')`),'plan',`${id}: по умолчанию только План продаж`);
+    assert.equal(scopeBtn(ctx,id,'plan').getAttribute('aria-pressed'),'true',`${id}: нажата кнопка «План продаж»`);
+    assert.match(scopeBtn(ctx,id,'unc').textContent,/100% не покрыто/,`${id}: третий режим назван по статусу`);
+  }
+
   const before=JSON.parse(ctx.ev(`JSON.stringify({
     all:fOrders().length,
     chart:chartOrders('d1',fOrders()).length,
@@ -421,24 +442,44 @@ test('графики по умолчанию скрывают 100% непокр�
   assert.equal(before.chart,2,'на графике по умолчанию только План продаж');
   assert.equal(before.full,0,'100% непокрытых на графике по умолчанию нет');
 
-  ctx.document.querySelector('[data-chart-all="d1"]').click();
+  scopeBtn(ctx,'d1','all').click();
   await settle(250);
   const after=JSON.parse(ctx.ev(`JSON.stringify({
-    on:chartShowsAll('d1'),
+    mode:chartScopeOf('d1'),
     chart:chartOrders('d1',fOrders()).length,
     full:chartOrders('d1',fOrders()).filter(o=>orderStageOf(o)==='fullUnc').length
   })`));
-  assert.equal(after.on,true,'переключатель включил полный охват только этого графика');
-  assert.match(ctx.document.querySelector('[data-chart-all="d1"]').closest('label').textContent,/Все заказы/,
-    'включённое состояние названо «Все заказы»');
+  assert.equal(after.mode,'all','переключатель включил полный охват только этого графика');
   assert.equal(after.chart,3,'показаны все заказы');
   assert.equal(after.full,1,'100% непокрытый заказ добавлен');
-  assert.equal(ctx.ev("chartShowsAll('d2')"),false,'соседний график не переключился');
+  assert.equal(ctx.ev("chartScopeOf('d2')"),'plan','соседний график не переключился');
+
+  /* Третий режим: на графике остаются ТОЛЬКО 100% непокрытые заказы. */
+  scopeBtn(ctx,'d1','unc').click();
+  await settle(250);
+  const only=JSON.parse(ctx.ev(`JSON.stringify({
+    mode:chartScopeOf('d1'),
+    chart:chartOrders('d1',fOrders()).length,
+    full:chartOrders('d1',fOrders()).filter(o=>orderStageOf(o)==='fullUnc').length,
+    sal:chartOrders('d1',fOrders()).reduce((a,o)=>a+(+o.sal||0),0)
+  })`));
+  assert.equal(only.mode,'unc','включён режим «Только 100% не покрыто»');
+  assert.equal(only.chart,1,'на графике остался только 100% непокрытый заказ');
+  assert.equal(only.full,1,'и это именно он');
+  assert.equal(only.sal,0,'у 100% непокрытых заказов нулевая отгрузка');
+  assert.equal(scopeBtn(ctx,'d1','unc').getAttribute('aria-pressed'),'true','кнопка режима подсвечена');
+  assert.equal(ctx.ev("chartScopeOf('d2')"),'plan','соседний график по-прежнему в Плане продаж');
 
   await ctx.goTab('ov');
-  const o8=ctx.document.querySelector('[data-chart-all="o8"]');
-  assert.ok(o8,'у графика упущенной маржи есть тот же локальный переключатель');
-  assert.equal(o8.checked,false,'в «Общем» по умолчанию тоже только План продаж');
+  const o8=scopeBtns(ctx,'o8');
+  assert.deepEqual(o8.map(b=>b.dataset.scope),['plan','all','unc'],
+    'у графика упущенной маржи те же три режима охвата');
+  assert.equal(ctx.ev("chartScopeOf('o8')"),'plan','в «Общем» по умолчанию тоже только План продаж');
+  scopeBtn(ctx,'o8','unc').click();
+  await settle(250);
+  assert.equal(ctx.ev("chartScopeOf('o8')"),'unc','«Общий» тоже умеет показывать только 100% непокрытые');
+  assert.equal(ctx.ev("chartOrders('o8',fOrders()).every(o=>orderStageOf(o)==='fullUnc')"),true,
+    'в расчёт графика попали только 100% непокрытые заказы');
 });
 
 test('periodid 4YYYYMMDD приводится к P-бакету Плана продаж', async (t) => {

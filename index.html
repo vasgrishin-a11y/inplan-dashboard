@@ -285,20 +285,24 @@ main{padding:20px 32px 72px;flex:1}
 .card.w{grid-column:1/-1}
 .card h3{margin:0;font:600 15px/20px 'Open Sans',sans-serif;color:var(--scp-text)}
 .card .sub{font-size:12px;line-height:16px;color:var(--scp-text-3);margin:3px 0 10px}
-/* Локальный переключатель охвата графика. По умолчанию каждый график строится
-   только по заказам «Плана продаж»; флажок точечно добавляет 100% непокрытые
-   заказы, не меняя KPI, таблицы и соседние графики. */
-.chart-scope{display:inline-flex;align-items:center;gap:7px;margin:-3px 0 8px;
-  font:400 11.5px/16px 'Open Sans',sans-serif;color:var(--scp-text-3);cursor:pointer;
-  user-select:none}
-.chart-scope input{position:absolute;opacity:0;pointer-events:none}
-.chart-scope .track{position:relative;width:28px;height:16px;flex:0 0 28px;border-radius:9999px;
-  background:var(--scp-n-300);transition:background .15s ease}
-.chart-scope .track::after{content:'';position:absolute;left:2px;top:2px;width:12px;height:12px;
-  border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .15s ease}
-.chart-scope input:checked+.track{background:var(--scp-accent)}
-.chart-scope input:checked+.track::after{transform:translateX(12px)}
-.chart-scope input:focus-visible+.track{outline:2px solid var(--scp-accent);outline-offset:2px}
+/* Локальный переключатель охвата графика (сегментированная группа кнопок):
+   «План продаж» — полностью и частично покрытые заказы; «Все заказы» —
+   плюс 100% непокрытые; «Только 100% не покрыто» — исключительно заказы с
+   нулевой отгрузкой. Переключатель меняет только свой график и не трогает
+   KPI, таблицы, фильтры и соседние графики. Водопад спроса по умолчанию
+   стоит в «Все заказы»: без 100% непокрытых у цепочки «неограниченный →
+   отгрузка в срок» пропадает первый столбец. */
+.chart-scope-wrap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;
+  margin:-3px 10px 8px 0;vertical-align:middle;max-width:100%}
+.chart-scope-lbl{font:600 10.5px/14px 'Open Sans',sans-serif;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--scp-text-3)}
+.seg.chart-scope{vertical-align:middle;max-width:100%;flex-wrap:wrap}
+.seg.chart-scope .btn{padding:3px 9px;font-size:11.5px;line-height:16px;white-space:nowrap;
+  color:var(--scp-text-3)}
+.seg.chart-scope .btn.p{color:#fff}
+.seg.chart-scope .btn .n{margin-left:4px;font-variant-numeric:tabular-nums;opacity:.62}
+.seg.chart-scope .btn.p .n{opacity:.85}
+.seg.chart-scope .btn:focus-visible{outline:2px solid var(--scp-accent);outline-offset:1px}
 canvas{width:100%;display:block;cursor:pointer}
 .lg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--scp-text-2);
   padding:2px 0 8px;justify-content:center}
@@ -1299,24 +1303,71 @@ function orderIdCell(o,link){
     return `<span${o&&o.independentOnly?' title="Строка independent_demand не попала в план"':''}>${esc(id)}</span>`;
   return `<span style="color:var(--scp-link);font-weight:700;cursor:pointer;text-decoration:underline" title="Перейти к цепочке заказа ${esc(id)}" data-goto-order="${o.id}" data-tree-mode="stages">${esc(id)} ↗</span>`;
 }
-/* Охват каждого графика независим. false (по умолчанию) — только «План
-   продаж»; true — все заказы, включая 100% непокрытые. */
-const CHART_ALL={};
-const chartShowsAll=id=>!!CHART_ALL[id];
+/* ═══ ОХВАТ ГРАФИКА: План продаж / Все заказы / Только 100% не покрыто ═══
+   Охват каждого графика независим и живёт только в памяти вкладки:
+     'plan' — заказы Плана продаж (полностью и частично покрытые);
+     'all'  — все заказы, включая 100% непокрытые;
+     'unc'  — ТОЛЬКО заказы со статусом «100% не покрыто» (нулевая отгрузка):
+              на графике остаются эти заказы и вся их визуализация.
+   Умолчания по графикам задаёт CHART_SCOPE_DEF. Водопад спроса d0 по
+   умолчанию показывает «Все заказы» (задача владельца 2026-10-06): первый
+   столбец цепочки — неограниченный спрос, и без 100% непокрытых заказов
+   водопад начинался бы уже с «Заказов в оптимизации». Остальные графики
+   по умолчанию остаются в охвате Плана продаж, потому что финансовый факт
+   (выручка, себестоимость, маржа) 100% непокрытых заказов — оценка, а не
+   результат плана.
+   Режим 'unc' у водопада не предлагается: стадии «отгружено»/«в срок» для
+   полностью непокрытых заказов пусты по построению. */
+const CHART_SCOPE_DEF={d0:'all'};
+const CHART_SCOPE_MODES={
+  plan:{t:'План продаж',h:'Только заказы Плана продаж: полностью и частично покрытые'},
+  all:{t:'Все заказы',h:'Все заказы неограниченного спроса, включая 100% непокрытые'},
+  unc:{t:'Только 100% не покрыто',h:'Только заказы с нулевой отгрузкой: на графике остаются лишь они'}
+};
+/* Водопад переключается между «План продаж» и «Все заказы» — без 'unc'. */
+const CHART_SCOPE_OPTS={d0:['plan','all']};
+const CHART_SCOPE={};
+const chartScopeOf=id=>CHART_SCOPE[id]||CHART_SCOPE_DEF[id]||'plan';
+const chartShowsAll=id=>chartScopeOf(id)==='all';
 const salesPlanOrders=D=>(D||[]).filter(o=>orderStageOf(o)!=='fullUnc');
-const chartOrders=(id,D)=>chartShowsAll(id)?(D||[]):salesPlanOrders(D);
-function chartScopeHtml(id,D){
-  const n=(D||[]).filter(o=>orderStageOf(o)==='fullUnc').length;
-  if(!n)return '';
-  const on=chartShowsAll(id);
-  return `<label class="chart-scope" title="По умолчанию график показывает только заказы Плана продаж. Включите, чтобы добавить 100% непокрытые заказы.">
-    <input type="checkbox" data-chart-all="${esc(id)}" ${on?'checked':''} aria-label="${on?'Показаны все заказы, включая 100% непокрытые':'Показан только План продаж; включить все заказы'}" aria-checked="${on}">
-    <span class="track" aria-hidden="true"></span><span>${on?'Все заказы':'План продаж'}</span></label>`;
+const fullUncOrders=D=>(D||[]).filter(o=>orderStageOf(o)==='fullUnc');
+function chartOrders(id,D){
+  const rows=D||[],m=chartScopeOf(id);
+  if(m==='all')return rows;
+  /* 100% непокрытых под текущими фильтрами может не остаться — переключателя
+     тогда тоже нет, поэтому не оставляем график пустым. */
+  if(m==='unc'){const u=fullUncOrders(rows);if(u.length)return u}
+  return salesPlanOrders(rows);
 }
-document.addEventListener('change',e=>{
-  const t=e.target&&e.target.closest&&e.target.closest('[data-chart-all]');
+/* Короткая приписка к подписи графика — чтобы охват читался и без взгляда
+   на переключатель. Если 100% непокрытых заказов нет, переключателя тоже нет
+   и приписка не нужна. */
+function chartScopeNote(id,D){
+  if(D!==undefined&&!fullUncOrders(D).length)return '';
+  const m=chartScopeOf(id);
+  return m==='all'?' Показаны все заказы, включая 100% непокрытые.'
+    :m==='unc'?' Показаны только 100% непокрытые заказы.'
+    :' 100% непокрытые заказы скрыты.';
+}
+function chartScopeHtml(id,D){
+  const n=fullUncOrders(D).length;
+  if(!n)return '';
+  const cur=chartScopeOf(id),opts=CHART_SCOPE_OPTS[id]||['plan','all','unc'];
+  const btns=opts.map(m=>{
+    const on=m===cur,M=CHART_SCOPE_MODES[m];
+    return `<button type="button" class="btn${on?' p':''}" data-chart-scope="${esc(id)}" data-scope="${m}"`
+      +` aria-pressed="${on}" title="${esc(M.h)}">${esc(M.t)}`
+      +(m==='unc'?` <span class="n">${nf(n)}</span>`:'')+`</button>`;
+  }).join('');
+  return `<span class="chart-scope-wrap"><span class="chart-scope-lbl" aria-hidden="true">Охват</span>`
+    +`<span class="seg chart-scope" role="group" aria-label="Охват графика: какие заказы попадают в расчёт">${btns}</span></span>`;
+}
+document.addEventListener('click',e=>{
+  const t=e.target&&e.target.closest&&e.target.closest('[data-chart-scope]');
   if(!t)return;
-  CHART_ALL[t.dataset.chartAll]=!!t.checked;
+  const id=t.dataset.chartScope,m=t.dataset.scope;
+  if(!CHART_SCOPE_MODES[m]||chartScopeOf(id)===m)return;
+  CHART_SCOPE[id]=m;
   if(DS)render();
 });
 /* Подходит ли заказ под стадию водопада. Для «С опозданием»/«В срок»
@@ -3493,7 +3544,8 @@ function tabOV(){
         .sort((a,b)=>periodCompare(a.k,b.k));
       const lmPrd=grp(scope,o=>o.prod,v=>({lm:S(v,lmS),unm:S(v,o=>o.unm),sal:S(v,o=>o.sal)}))
         .sort((a,b)=>b.lm-a.lm);
-      const scaled=T.base==='unc'?` База непокрытого спроса распределена между дефицитом плана и входными заказами.`:'';
+      const scaled=(T.base==='unc'?` База непокрытого спроса распределена между дефицитом плана и входными заказами.`:'')
+        +chartScopeNote('o8',D);
       const hasDef=scope.some(o=>o.unm>0)||T.lm>0;
       if(OV_LM_DIM==='prod'){
         if(sub)sub.textContent='Топ-12 продуктов по упущенной марже, млрд ₽. Клик — фильтр по продукту.'+scaled;
@@ -3797,17 +3849,17 @@ function tabDM(){
         <button type="button" class="btn" data-wfmode="orders">Заказы</button>
       </div>
       <canvas id="d0" role="img" aria-label="Водопад спроса в выбранной единице измерения"></canvas></div>
-    <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду</div>
+    <div class="card"><h3>Покрытие спроса по периодам</h3><div class="sub">Тыс. т и линия Service Level. Клик — фильтр по периоду.${esc(chartScopeNote('d1',D))}</div>
       ${chartScopeHtml('d1',D)}
       ${lg('#d1',[[CH.d3,'Отгружено'],[CH.d5,'Дефицит'],[CH.warn,'Service Level']])}<canvas id="d1"></canvas></div>
-    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту</div>${chartScopeHtml('d2',D)}<canvas id="d2"></canvas></div>
+    <div class="card"><h3>Топ дефицитов: локация и продукт</h3><div class="sub">Ранжировано по упущенной марже. Клик — фильтр по продукту.${esc(chartScopeNote('d2',D))}</div>${chartScopeHtml('d2',D)}<canvas id="d2"></canvas></div>
     <div class="card"><h3>Доля каналов в марже</h3><div class="sub">Клик по сегменту — фильтр, по легенде — скрыть сегмент</div><canvas id="d3"></canvas></div>
     <div class="card"><h3>Клиенты: маржа и покрытие спроса</h3><div class="sub">Столбец — маржа, линия — Service Level</div>
       ${lg('#d4',[[CH.d1,'Маржа'],[CH.warn,'Service Level']])}<canvas id="d4"></canvas></div>
     <div class="card"><h3>Цена и себестоимость по продуктам</h3><div class="sub">Синяя точка — цена, вторая — себестоимость. Длина отрезка равна марже</div><canvas id="d5"></canvas></div>
     <div class="card"><h3>Маржа по клиентам и периодам</h3><div class="sub">Тепловая карта, млн ₽. Клик — фильтр клиент + период</div><canvas id="d6"></canvas></div>
-    <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту</div>${chartScopeHtml('d8',D)}<canvas id="d8"></canvas></div>
-    <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита</div>${chartScopeHtml('d9',D)}<canvas id="d9"></canvas></div>
+    <div class="card"><h3>Дефицит по продуктам и периодам</h3><div class="sub">Тепловая карта, тыс. т. Клик — фильтр по продукту.${esc(chartScopeNote('d8',D))}</div>${chartScopeHtml('d8',D)}<canvas id="d8"></canvas></div>
+    <div class="card"><h3>Парето заказов по дефициту</h3><div class="sub">Тёмные столбцы формируют 80% дефицита.${esc(chartScopeNote('d9',D))}</div>${chartScopeHtml('d9',D)}<canvas id="d9"></canvas></div>
     <div class="card w" id="d7card" data-fullscreen><h3>Заказы, упущенная маржа и корневые причины (RCA)</h3>
       <div class="sub">Все заказы водопада. Номер заказа открывает цепочку, бейдж узкого места — цепочку мощностей. Упущенная маржа и выручка рассчитаны в базе KPI; сумма детализированных строк и нераспределённого остатка сходится с карточками</div>
       <div class="stage-chips" id="d7chips" role="group" aria-label="Быстрые фильтры по столбцам водопада"></div>
@@ -3824,9 +3876,9 @@ function tabDM(){
       const wf=isOrd?dmOrderWaterfall(ord,includeUncovered):dmTonsWaterfall(includeUncovered);
       const sub=$('#d0sub');
       if(sub)sub.textContent=(isOrd
-        ?'Заказы. «План продаж»: полностью выполненные + частично выполненные (жёлтый сегмент). Клик — фильтр RCA'
-        :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA')
-        +(includeUncovered?' Показаны все заказы.':' 100% непокрытые заказы скрыты.');
+        ?'Заказы. «План продаж»: полностью выполненные + частично выполненные (жёлтый сегмент). Клик — фильтр RCA.'
+        :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA.')
+        +chartScopeNote('d0',D);
       chWaterfall('#d0',H('#d0',280,0.28,240,380),wf,
         isOrd?v=>nf(v,0):v=>nf(v/1000,1)+'k т',
         i=>{const b=wf[i],val=Math.abs(b.v);
