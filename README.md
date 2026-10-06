@@ -6,9 +6,17 @@
 Источники данных:
 
 1. **ClickHouse** — результаты прогонов планировщика: базы `data_public_N`
-   (версии планов), таблицы `marking_demand`, `demand_coverage`, `capacity_view_sp`,
-   `rescapacity`, `demand_cost`. Подключение — напрямую из браузера по HTTP
-   (кнопка «⚡ ClickHouse» в шапке).
+   (версии планов), таблицы `marking_demand`, `demand_coverage`, `margin_sales`,
+   `capacity_view_sp`, `rescapacity`, `demand_cost`. Подключение — напрямую из
+   браузера по HTTP (кнопка «⚡ ClickHouse» в шапке).
+
+   **Итоговые финансы** (пересчёт 2026-10-06): «Валовая выручка» = `Σ revenue`
+   и «Валовая маржа» = `Σ total_margin` считаются по таблице **`margin_sales`**
+   (дедупликация `is_deleted = 0` + последняя версия строки по `sys_id`) — эти
+   значения показываются в карточках верхнего ряда разделов и в сравнении
+   версий. Таблицы и графики остаются на детализации заказов `marking_demand`.
+   Если `margin_sales` недоступна или пуста — честный фолбэк на итоги
+   `marking_demand` (источник виден в подписи карточки и теге матрицы версий).
 2. **PostgreSQL** — входной (неограниченный) спрос: таблица `independent_demand`
    (колонка `demandqty`) в схемах `public_N` базы **`pgs_app_data_db`**. Браузер
    не умеет открывать TCP к Postgres, поэтому запросы обслуживает backend-прокси

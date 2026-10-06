@@ -133,6 +133,9 @@ function route(sql) {
     return DBS[db].grans.map(([t, n]) => ({ t, n }));
   }
   if (/count\(\) AS orders/.test(sql)) return [ORDERS_TOT];
+  /* итоговые финансы margin_sales (пересчёт 2026-10-06): здесь таблица пуста —
+     загрузчик обязан тихо остаться на итогах marking_demand */
+  if (/`margin_sales`/.test(sql)) return [];
   if (/`operation_type` AS t/.test(sql)) return BY_OP;
   if (/`o_p` AS k/.test(sql)) return DIM_P;
   if (/`o_prod` AS k/.test(sql)) return DIM_PR;

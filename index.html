@@ -1404,10 +1404,16 @@ function covBasis(D){
   const schemaScope=!fActive&&demAll>0;
   const dem=schemaScope?demAll:demDet, sal=schemaScope?salAll:salDet, unm=schemaScope?unmAll:unmDet;
   /* Финансы схемы приходят тем же агрегатом. Без них (Excel, демо) остаются
-     суммы по загруженным заказам. */
+     суммы по загруженным заказам. Пересчёт 2026-10-06: при наличии таблицы
+     margin_sales загрузчик уже положил в aggT.rev/aggT.mar её итоги
+     (Σ revenue / Σ total_margin) и пометил это aggT.finSrc='margin_sales' —
+     карточки и сравнение версий получают пересчитанные значения, таблицы и
+     графики по заказам marking_demand не меняются. */
   const revAll=num(aggT.rev), costAll=num(aggT.cost), marAll=num(aggT.mar);
   const finScope=schemaScope&&(revAll>0||costAll>0);
   const rev=finScope?revAll:revDet, cost=finScope?costAll:costDet, mar=finScope?marAll:marDet;
+  /* фактический источник rev/mar карточек: margin_sales | marking_demand */
+  const finSrc=finScope?(aggT.finSrc||'marking_demand'):'detail';
   const full=schemaScope&&num(aggT.orders)>0?num(aggT.full):fullDet;
   const partial=!!((DS&&DS.detailLimited)||(demAll>0&&demDet<demAll*0.995));
   const hasDC=!!(dims.length||hasExplicitUnc||demUnc>0);
@@ -1476,7 +1482,7 @@ function covBasis(D){
     ordersAll:num(aggT.orders)||planD.length,
     scope:schemaScope?'schema':'detail',partial,
     dem,sal,unm,demDet,salDet,unmDet,
-    rev,cost,mar,full,revDet,costDet,marDet,fullDet,finScope,
+    rev,cost,mar,full,revDet,costDet,marDet,fullDet,finScope,finSrc,
     demUnc,ff,uf,late,
     /* счёт заказов по стадиям водопада + фактический источник */
     ord,ordSrc,
@@ -3304,12 +3310,12 @@ function srcFold(sev,brief,body){
    наведением на карточку или фокусом на значке «?». */
 const METRIC_HELP={
  /* ── Деньги и покрытие (Общий, Спрос, Дерево) ── */
- 'Валовая выручка':'<b>Σ (отгружено, т × цена, ₽/т)</b> по заказам выборки.<br>Источник: <code>demand_coverage</code> (sal, price), при отсутствии — <code>marking_demand</code>.',
+ 'Валовая выручка':'<b>Σ revenue</b> из таблицы <code>margin_sales</code> (агрегат всей схемы, пересчёт 2026-10-06).<br>Без margin_sales — фолбэк: суммы по заказам <code>marking_demand</code>.',
  'Себестоимость':'<b>Σ cost</b> по заказам выборки: производство + логистика + закупки + хранение.<br>Источник: <code>demand_cost</code> / <code>demand_cost_ti</code>.',
- 'Валовая маржа':'<b>Σ mar</b> = выручка − себестоимость заказа.<br>Источник: поле <code>mar</code> (<code>demand_coverage</code>).',
+ 'Валовая маржа':'<b>Σ total_margin</b> из таблицы <code>margin_sales</code> (агрегат всей схемы, пересчёт 2026-10-06).<br>Без margin_sales — фолбэк: Σ <code>total_margin</code> по заказам <code>marking_demand</code>.',
  'Маржа на тонну':'<b>Σ mar / Σ sal</b>, ₽/т — взвешенно по объёму отгрузки, а не среднее по заказам.',
  'Маржинальность':'<b>Валовая маржа / Валовая выручка</b>, %.',
- 'Маржинальность продаж':'<b>Валовая маржа / Валовая выручка</b>, % по заказам вкладки «Спрос и покрытие».',
+ 'Маржинальность продаж':'<b>Валовая маржа / Валовая выручка</b>, %. При наличии <code>margin_sales</code> обе величины — её итоги (Σ total_margin / Σ revenue); иначе — суммы по заказам вкладки «Спрос и покрытие».',
  'Service Level':'<b>Σ sal / Σ dem</b> — доля удовлетворённого планового спроса в тоннах.',
  'OTIF Service Level':'<b>(полностью покрытые − полностью покрытые с опозданием) / все входные заказы</b>.<br>Покрытие и число заказов: <code>independent_demand</code>/<code>demand_coverage</code>; опоздание: срок входного заказа и <code>latedelivperiods</code>.',
  /* Счёт заказов — по demand_coverage (задача владельца 2026-10-05):
@@ -3471,9 +3477,16 @@ function tabOV(){
      «Не покрыто всего» удалена (осталась в «Спросе и покрытии»), «Заказов без
      дефицита» считается по classification demand_coverage (см. covBasis.ord). */
   const ord=B.ord;
-  const K=[['Валовая выручка',bn(rev),'план продаж × цена'+scopeNote,''],
+  /* Пересчёт 2026-10-06: при наличии margin_sales карточки выручки и маржи
+     показывают её итоги (Σ revenue / Σ total_margin, через covBasis);
+     подпись и «?» называют источник, графики ниже остаются на marking_demand. */
+  const finMS=B.finSrc==='margin_sales';
+  const msHelp=which=>`Пересчёт по таблице <code>margin_sales</code>: ${which}, агрегат по всей схеме. Графики и таблицы ниже остаются на детализации заказов <code>marking_demand</code>, поэтому их суммы могут отличаться от карточки.`;
+  const K=[['Валовая выручка',bn(rev),(finMS?'Σ revenue · margin_sales':'план продаж × цена')+scopeNote,'',
+     finMS?msHelp('<b>Σ revenue</b>'):''],
    ['Себестоимость',bn(cost),pc(cost/rev)+' от выручки',''],
-   ['Валовая маржа',bn(mar),'маржинальность '+pc(mar/rev),''],
+   ['Валовая маржа',bn(mar),'маржинальность '+pc(mar/rev)+(finMS?' · margin_sales':''),'',
+     finMS?msHelp('<b>Σ total_margin</b>'):''],
    ['Маржа на тонну',nf(mar/sal)+' ₽/т','взвешенно',''],
    ['Service Level',pc(sal/dem),nf(sal)+' из '+nf(dem)+' т',sal/dem>.9?'pos':sal/dem>.7?'mid':'neg'],
    ['OTIF Service Level',pc(ord.total&&ord.otif!=null?ord.otif/ord.total:sal/dem),ord.total&&ord.otif!=null?`${nf(ord.otif)} из ${nf(ord.total)} заказов полностью и вовремя`:'нет данных по срокам',ord.total&&ord.otif!=null&&ord.otif/ord.total>.9?'pos':ord.total&&ord.otif!=null&&ord.otif/ord.total>.7?'mid':'neg'],
@@ -3799,7 +3812,8 @@ function tabDM(){
        всей схемы (marking_demand), иначе — суммы по загруженным заказам.
        Подпись называет охват, чтобы рубли не читались неверно. */
     ['Маржинальность продаж',pc(rev?mar/rev:0),
-      `выручка ${bn(rev)} · маржа ${bn(mar)}`+(B.partial&&B.finScope?' · схема':''),'pos'],
+      `выручка ${bn(rev)} · маржа ${bn(mar)}`+(B.finSrc==='margin_sales'?' · margin_sales':'')+(B.partial&&B.finScope?' · схема':''),'pos',
+      B.finSrc==='margin_sales'?'Пересчёт по таблице <code>margin_sales</code>: выручка = Σ revenue, маржа = Σ total_margin, агрегат по всей схеме. Разрезы и таблицы ниже — по заказам <code>marking_demand</code>.':''],
     ['Упущенная маржа',bn(lm),`упущенная выручка ${bn(lostRev)}<br>${lmKpiSub(T)}`,lm?'neg':'',
       lmCardHelp(T,lostRev)]
   ];
@@ -4650,9 +4664,13 @@ function snap(ds){
     orders:useAgg&&num(aggT.orders)>0?num(aggT.orders):o.length,
     ordersDet:o.length,scope:useAgg?'schema':'detail',
     byProd,pp:{rows:ppRows,cols:ppCols,m:ppM},
+    /* Пересчёт 2026-10-06: при наличии margin_sales в aggT.rev/aggT.mar уже
+       лежат Σ revenue / Σ total_margin из неё (finSrc фиксирует источник) —
+       сравнение версий получает пересчитанные выручку и маржу. */
     rev:useFin?num(aggT.rev):S(o,x=>x.rev),
     cost:useFin?num(aggT.cost):S(o,x=>x.cost),
     mar:useFin?num(aggT.mar):S(o,x=>x.mar),
+    finSrc:useFin?(aggT.finSrc||'marking_demand'):'detail',
     dem:useAgg?num(aggT.dem):S(o,x=>x.dem),sal,unm,
     lm:unmDet>0?lmDet/unmDet*unm:lmDet,
     full:useAgg&&num(aggT.orders)>0?num(aggT.full):o.filter(x=>!(x.unm>1e-9)).length,
@@ -4853,7 +4871,7 @@ function tabVS(){
     <div class="fg"><label>Версия B (сравниваемая)</label><select id="vsB">${opt(0)}</select></div>
     <button class="btn d" id="vsClr">Удалить историю версий</button>
   </div>
-  <p class="thin-note">Упущенная маржа в старых версиях заморожена в момент снапшота базовым методом «маржа заказа» по базе «Дефицит плана»; текущие методы и базы применяются только к активным данным. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.</p>
+  <p class="thin-note">Упущенная маржа в старых версиях заморожена в момент снапшота базовым методом «маржа заказа» по базе «Дефицит плана»; текущие методы и базы применяются только к активным данным. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.${(A.finSrc==='margin_sales'||B.finSrc==='margin_sales')?` Валовая выручка и валовая маржа ${A.finSrc==='margin_sales'&&B.finSrc==='margin_sales'?'обеих версий':'версии '+(A.finSrc==='margin_sales'?'A':'B')} пересчитаны по таблице <code>margin_sales</code> (Σ revenue / Σ total_margin); у версий без неё — фолбэк marking_demand.`:''}</p>
   ${kpisHtml([['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
        ['Изменение Service Level',pc(d(slOf(A),slOf(B))),'процентных пунктов',slOf(B)>=slOf(A)?'pos':'neg'],
