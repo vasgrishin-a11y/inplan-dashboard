@@ -144,6 +144,10 @@ function route(sql) {
   if (/GROUP BY k ORDER BY k/.test(sql)) return empty ? [] : COV_P;
   if (/calcavailablebucketcapacity/.test(sql)) return empty ? [] : CAP;
   if (/netavailbucketcapacity/.test(sql)) return empty ? [] : CAP_PLAN;
+  /* 8.9 приоритетная выручка (цены спроса, 2026-10-07): объём demand_coverage
+     по ключу+периоду и цены demand_cost/demand_cost_ti. В этих тестах
+     справочник цен не размечен — пустой ответ, метод честно не применяется. */
+  if (/AS cpn/.test(sql)) return [];
   if (/`quota`/.test(sql)) return TI;
   if (/nondelcostrate/.test(sql)) return empty ? [] : PEN;
   if (/unfullfilleddemandqty/.test(sql) && /GROUP BY item/.test(sql)) return empty ? [] : UF;
