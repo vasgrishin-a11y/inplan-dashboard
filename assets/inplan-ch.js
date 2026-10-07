@@ -100,6 +100,16 @@ const TABLES = CHX.TABLES = {
     dedupBy:['sys_id'], periodCol:'date', ptypeCol:'periodtype',
     label:'Входной спрос и покрытие'
   },
+  /* Итоговые финансы прогона (задача владельца 2026-10-06): «Валовая выручка»
+     = Σ revenue и «Валовая маржа» = Σ total_margin берутся отсюда — для
+     карточек верхнего ряда и сравнения версий. Детализация по заказам
+     (таблицы, графики) остаётся на marking_demand. Колонки periodtype в
+     таблице нет — фильтр гранулярности не применяется. */
+  margin_sales:{
+    role:'finance', mode:'agg',
+    dedupBy:['sys_id'], periodCol:'date', ptypeCol:'',
+    label:'Итоговая маржа и выручка продаж'
+  },
   capacity_view_sp:{
     role:'capacity_fact', mode:'agg',
     dedupBy:['sys_id'], periodCol:'date', ptypeCol:'periodtype',
@@ -481,6 +491,40 @@ async function loadVersionAgg(db, gran){
       countIf(toFloat64(o_sal) > 0.000000001 AND toFloat64(o_unm) <= 0.000000001) AS fullCoveredOrders
     FROM ${ordSub}`);
   Object.assign(out.totals, tot[0]||{});
+
+  /* 8.1.1 итоговые финансы из margin_sales (задача владельца 2026-10-06):
+     «Валовая выручка» = Σ revenue, «Валовая маржа» = Σ total_margin по всей
+     таблице margin_sales — эти значения ПЕРЕКРЫВАЮТ rev/mar из marking_demand
+     и питают карточки верхнего ряда и сравнение версий (covBasis, snap,
+     vsFlat читают totals.rev/mar). Таблицы и графики остаются на детализации
+     marking_demand, поэтому прежние итоги сохраняем в revMd/marMd, а источник
+     фиксируем в finSrc. Дедупликация — стандартный src(): is_deleted = 0 +
+     последняя версия строки по sys_id. toFloat64 — Decimal-поля, как в 8.1.
+     Пустая/нулевая margin_sales — тихий фолбэк на marking_demand (finSrc не
+     ставится); ошибка запроса (нет таблицы, нет прав) — заметка загрузки. */
+  try{
+    const S_MS = src(db,'margin_sales');
+    const ms = await chQuery(`SELECT
+        sum(toFloat64(${q('revenue')}))      AS msRev,
+        sum(toFloat64(${q('total_margin')})) AS msMar,
+        sum(toFloat64(abs(${q('cost_of_demand')}))) AS msCost,
+        count() AS msRows
+      FROM ${S_MS}`);
+    const m0 = ms[0]||{};
+    const msRev = num(m0.msRev), msMar = num(m0.msMar), msRows = num(m0.msRows);
+    if(msRows>0 && (msRev!==0 || msMar!==0)){
+      out.totals.revMd = num(out.totals.rev);   // прежние итоги marking_demand —
+      out.totals.marMd = num(out.totals.mar);   // для сверки в «Данных и качестве»
+      out.totals.rev = msRev;
+      out.totals.mar = msMar;
+      out.totals.msCost = num(m0.msCost);       // Σ |cost_of_demand| — внутреннее тождество DQ
+      out.totals.msRows = msRows;
+      out.totals.finSrc = 'margin_sales';
+      CHX.loaded.margin_sales = true;
+    }
+  }catch(e){
+    out.notes.push('margin_sales: '+e.message+' — выручка и маржа посчитаны по marking_demand');
+  }
 
   /* 8.2 затраты по блокам операций.
      toFloat64: cost_rate_of_operation и order_operation_volume — Decimal(18,12),
@@ -1566,6 +1610,9 @@ function vsFlat(v){
   const demPlan = num(t.dem);          // ограниченный спрос ПЛАНА (marking_demand)
   return {
     _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk, uncSrc, uncDetail,
+    /* откуда взяты rev/mar: margin_sales (пересчёт 2026-10-06) или фолбэк
+       marking_demand — тег источника в матрице показывает фактическую таблицу */
+    finSrc: t.finSrc||'marking_demand',
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
     demUnc, demLim: covOk?ff:demPlan, sal, unm: covOk?uf:num(t.unm),
     /* Service Level остаётся «отгружено / принято в план» по marking_demand:
@@ -1733,6 +1780,14 @@ CHX.tabVS = function(){
           const srcs=uq(rows.map(r=>srcName(r.uncSrc||'')).filter(Boolean),x=>x);
           if(srcs.length) rec._src=srcs.join(' + ');
         }
+        /* финансы — фактический источник: margin_sales (пересчёт 2026-10-06)
+           или фолбэк marking_demand; при смешении версий тег называет обе */
+        if(k==='rev'||k==='mar'||k==='mrg'){
+          const srcs=uq(rows.map(r=>r.finSrc||'marking_demand'),x=>x);
+          rec._src=srcs.join(' / ');
+        }
+        if(k==='mpt'&&rows.some(r=>r.finSrc==='margin_sales'))
+          rec._src='margin_sales × marking_demand';
         rows.forEach(r=>{
           rec['v_'+r.id] = r[k];
           rec['d_'+r.id] = (r[k]==null||base[k]==null)?null:r[k] - base[k];
