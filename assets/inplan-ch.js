@@ -224,6 +224,40 @@ function granWhere(tbl, gran){
 }
 CHX.sql = {src, periodKeyExpr, granWhere, q, qs};
 
+/* ─────────────── 4.1. ПЕРИОД ДЛЯ ЦЕН СПРОСА (задача владельца 2026-10-07) ───────────────
+   Канонизация периода из сырых значений demand_coverage / demand_cost /
+   demand_cost_ti: date ('2026-09-01', DateTime), календарный periodid
+   4YYYYMMDD / YYYYMMDD (как в independent_demand) или технический бакет
+   ('P1', '3'). Возвращает {k, ms}: k — канонический ключ ('d:YYYY-MM-DD' для
+   дат, 'r:техзначение' для бакетов), ms — Date.UTC периода (NaN у бакетов).
+   Один период в разных кодировках ('420260901' и '2026-09-01') даёт один
+   ключ — сшивка таблиц с разными колонками периода не ломается. Мусор
+   ('0000-00-00', '\N', пусто) — не период: {k:'', ms:NaN}. */
+function covPeriodCanon(raw){
+  if(raw==null) return {k:'', ms:NaN};
+  if(raw instanceof Date)
+    return {k:'d:'+raw.toISOString().slice(0,10), ms:raw.getTime()};
+  let s = String(raw).trim();
+  if(s==='' || s==='\\N' || s.toLowerCase()==='null') return {k:'', ms:NaN};
+  if(/^P/i.test(s)) s = s.slice(1);
+  if(/^\d{9}$/.test(s) && /^[1-6]/.test(s)) s = s.slice(1);   // periodid 4YYYYMMDD
+  const ymd = m => {
+    const y=+m[1], mo=+m[2], d=+m[3];
+    if(y>1900 && mo>=1 && mo<=12 && d>=1 && d<=31)
+      return {k:'d:'+m[1]+'-'+m[2]+'-'+m[3], ms:Date.UTC(y,mo-1,d)};
+    return {k:'', ms:NaN};
+  };
+  if(/^\d{8}$/.test(s)){
+    const r = ymd([s, s.slice(0,4), s.slice(4,6), s.slice(6,8)]);
+    if(r.k) return r;
+    return {k:'', ms:NaN};
+  }
+  const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m2) return ymd(m2);
+  return {k:'r:'+s.toLowerCase(), ms:NaN};
+}
+CHX.covPeriodCanon = covPeriodCanon;
+
 /* ─────────────── 5. ОБНАРУЖЕНИЕ СХЕМ И ГРАНУЛЯРНОСТЕЙ ─────────────── */
 CHX.connect = async function(){
   CHX.state.busy = true; CHX.state.lastError = null;
@@ -896,6 +930,229 @@ async function loadVersionAgg(db, gran){
       out.totals.penaltyNonDel = pen;
       out.totals.penaltyLate   = penLate;
     }catch(e){ out.notes.push('penalty calc: '+e.message) }
+  }
+
+  /* 8.9 ПРИОРИТЕТНАЯ ВЫРУЧКА: выполненный спрос × цена спроса (2026-10-07).
+     Методика владельца: выручка = Σ fullfilleddemandqty (demand_coverage) ×
+     цена из справочника demand_cost / demand_cost_ti; сшивка по
+     item + loc + dmdstream + demandtype + период. Нет цены в периоде строки —
+     берём цену ближайшего периода (в любую сторону, при равном удалении —
+     более ранний). demand_cost (по периодам) приоритетнее demand_cost_ti
+     (без периодов); строки demand_cost без распознаваемого периода работают
+     как безпериодная цена. Колонка цены — nondelcostrate (решение владельца),
+     при её отсутствии/нулевых значениях — первый подходящий кандидат
+     (наборы колонок различаются между версиями планов → смотрим
+     system.columns). Колонка периода — periodid, если есть, иначе штатные
+     date/datefr; обе тянутся одновременно и канонизируются covPeriodCanon,
+     поэтому periodid ↔ date разных таблиц сопоставимы.
+
+     Метод приоритетен над margin_sales: при успехе totals.rev = Σ qty×цена,
+     источник — totals.revSrc, прежние итоги сохраняются для сверок DQ
+     (revMd — marking_demand, revMs — margin_sales). Маржа и себестоимость
+     НЕ пересчитываются. Любая ошибка или пусто → тихий возврат к прежней
+     цепочке margin_sales → marking_demand; заметка — только когда цены есть,
+     а сопоставить не удалось (или все нулевые), и про объём без цены. */
+  if(coverageAvailable){
+    try{
+      /* фактические колонки таблиц (паттерн loadMainDetail). Нет прав на
+         system.columns → знаем только гарантированную nondelcostrate и
+         штатные колонки периода из реестра TABLES. */
+      const cpCols = {};
+      try{
+        const cl = await chQuery(`SELECT table AS t, name FROM system.columns
+          WHERE database = ${qs(db)}
+            AND lower(table) IN ('demand_coverage','demand_cost','demand_cost_ti')`);
+        cl.forEach(r=>{
+          const t = String(r.t||'').toLowerCase();
+          if(t) (cpCols[t] = cpCols[t] || new Set()).add(String(r.name).toLowerCase());
+        });
+      }catch(e){ /* колонки неизвестны — работаем по реестру */ }
+      const cpKnow = Object.keys(cpCols).length > 0;
+      const cpTabCols = t => cpKnow ? (cpCols[t] || new Set()) : null;  // null = нет информации
+      const cpCol = (t, want, dflt) => {
+        const s = cpTabCols(t);
+        if(!s) return dflt;                      // нет информации — колонка реестра
+        return want.some(c => s.has(c)) ? want.find(c => s.has(c)) : '';
+      };
+      /* кандидаты цены: nondelcostrate приоритетен (владелец 2026-10-07),
+         далее — другие правдоподобные имена колонки цены */
+      const CP_PRICE_COLS = ['nondelcostrate','price','demandprice','demandcost','demand_cost','cost','unitcost','value'];
+      const dcCand = cpKnow ? CP_PRICE_COLS.filter(c=>cpTabCols('demand_cost').has(c)) : ['nondelcostrate'];
+      const tiCand = cpKnow ? CP_PRICE_COLS.filter(c=>cpTabCols('demand_cost_ti').has(c)) : ['nondelcostrate'];
+      /* колонки периода: periodid приоритетнее штатной date/datefr; тянутся обе */
+      const covPid = cpCol('demand_coverage', ['periodid'], '');
+      const covPd  = cpCol('demand_coverage', ['date'], TABLES.demand_coverage.periodCol);
+      const dcPid  = cpCol('demand_cost', ['periodid'], '');
+      const dcPd   = cpCol('demand_cost', ['datefr'], TABLES.demand_cost.periodCol);
+
+      /* объём выполненного спроса, сгруппированный по ключу + период */
+      const S_DCc = src(db,'demand_coverage', granWhere('demand_coverage', gran));
+      const vol = await chQuery(`SELECT
+          ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
+          toString(${covPid ? q(covPid) : "''"}) AS vpid,
+          toString(${covPd ? q(covPd) : "''"}) AS vdate,
+          sum(toFloat64(${q('fullfilleddemandqty')})) AS ff,
+          count() AS cpn
+        FROM ${S_DCc}
+        WHERE toFloat64(${q('fullfilleddemandqty')}) > 0.000000001
+        GROUP BY item, loc, stream, dt, vpid, vdate
+        LIMIT 200001`);
+      if(vol.length > 200000)
+        throw new Error('в demand_coverage больше 200000 групп товар×локация×поток×тип×период');
+
+      /* цены demand_cost — по периодам. Без фильтра periodtype: ближайший
+         период ищем по всему справочнику; дедупликация src() стандартная.
+         Строки справочника без распознаваемого периода — безпериодная цена. */
+      let dcRows = [];
+      if(dcCand.length && (dcPid || dcPd)){
+        try{
+          const exprs = dcCand.map((c,i)=>`avg(toFloat64(${q(c)})) AS pc${i}`).join(', ');
+          dcRows = await chQuery(`SELECT
+              ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
+              toString(${dcPid ? q(dcPid) : "''"}) AS vpid,
+              toString(${dcPd ? q(dcPd) : "''"}) AS vdate,
+              count() AS cpn${exprs ? ', ' + exprs : ''}
+            FROM ${src(db,'demand_cost')}
+            GROUP BY item, loc, stream, dt, vpid, vdate
+            LIMIT 200001`);
+          if(dcRows.length > 200000) dcRows = [];
+        }catch(e){ dcRows = [] }
+      }
+      /* цены demand_cost_ti — без периодов */
+      let tiRows = [];
+      if(tiCand.length){
+        try{
+          const exprs = tiCand.map((c,i)=>`avg(toFloat64(${q(c)})) AS pc${i}`).join(', ');
+          tiRows = await chQuery(`SELECT
+              ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
+              count() AS cpn${exprs ? ', ' + exprs : ''}
+            FROM ${src(db,'demand_cost_ti')}
+            GROUP BY item, loc, stream, dt
+            LIMIT 200001`);
+          if(tiRows.length > 200000) tiRows = [];
+        }catch(e){ tiRows = [] }
+      }
+
+      /* колонка цены: первая кандидатная колонка с хоть одним ненулевым
+         значением (nondelcostrate может существовать, но быть пустой) */
+      const cpPickIdx = (rows, cand) => {
+        for(let i=0; i<cand.length; i++)
+          if(rows.some(r => Math.abs(num(r['pc'+i])) > 1e-9)) return i;
+        return -1;
+      };
+      const dcIdxCol = cpPickIdx(dcRows, dcCand);
+      const tiIdxCol = cpPickIdx(tiRows, tiCand);
+
+      /* нормализация ключа строки: пробелы/регистр, demandtype-числа к числу
+         ('1' и 1 — один ключ), прочие значения — как строки */
+      const nk  = v => String(v==null?'':v).trim().toLowerCase();
+      const dtk = v => {
+        const s = String(v==null?'':v).trim();
+        return /^-?\d+(\.\d+)?$/.test(s) ? 'n'+Number(s) : 's'+s.toLowerCase();
+      };
+      const rkey = r => nk(r.item)+'|'+nk(r.loc)+'|'+nk(r.stream)+'|'+dtk(r.dt);
+      const mean = a => a.length ? a.reduce((s,v)=>s+v,0)/a.length : 0;
+
+      /* индекс периодных цен: ключ строки → {exact: ключ периода → [цены],
+         list: [{msList, price}], flat: [цены без периода]} */
+      const buildIdx = (rows, colIdx) => {
+        const idx = new Map();
+        rows.forEach(r=>{
+          const price = num(r['pc'+colIdx]);
+          if(!Number.isFinite(price)) return;
+          const k = rkey(r);
+          let e = idx.get(k);
+          if(!e){ e = {exact:new Map(), list:[], flat:[]}; idx.set(k,e) }
+          const c1 = covPeriodCanon(r.vpid), c2 = covPeriodCanon(r.vdate);
+          [c1,c2].forEach(c=>{
+            if(c.k){
+              if(!e.exact.has(c.k)) e.exact.set(c.k,[]);
+              e.exact.get(c.k).push(price);
+            }
+          });
+          const msList = [c1.ms,c2.ms].filter(Number.isFinite);
+          if(msList.length) e.list.push({msList, price});
+          if(!c1.k && !c2.k) e.flat.push(price);
+        });
+        return idx;
+      };
+      const dcIdx = dcIdxCol >= 0 ? buildIdx(dcRows, dcIdxCol) : new Map();
+      const tiIdx = new Map();
+      if(tiIdxCol >= 0)
+        tiRows.forEach(r=>{
+          const price = num(r['pc'+tiIdxCol]);
+          if(!Number.isFinite(price)) return;
+          const k = rkey(r);
+          if(!tiIdx.has(k)) tiIdx.set(k,[]);
+          tiIdx.get(k).push(price);
+        });
+
+      /* сшивка: точный период → ближайший (|Δдата|, при равном удалении более
+         ранний) → безпериодная цена demand_cost → цена demand_cost_ti */
+      let rev=0, ffTotal=0, ffMatched=0, ffExact=0, ffNearest=0, ffFlatDc=0, ffFlatTi=0, ffNoPrice=0, ffZero=0;
+      vol.forEach(r=>{
+        const ff = num(r.ff);
+        if(!(ff>0)) return;
+        ffTotal += ff;
+        const k = rkey(r);
+        const e = dcIdx.get(k);
+        const c1 = covPeriodCanon(r.vpid), c2 = covPeriodCanon(r.vdate);
+        const keySet = new Set([c1.k,c2.k].filter(Boolean));
+        const msList = [c1.ms,c2.ms].filter(Number.isFinite);
+        let price = null, bucket = '';
+        if(e){
+          const ex = [];
+          keySet.forEach(kk => (e.exact.get(kk)||[]).forEach(p => ex.push(p)));
+          if(ex.length){ price = mean(ex); bucket = 'exact' }
+          else if(msList.length && e.list.length){
+            let bd=Infinity, bms=Infinity, bp=[];
+            e.list.forEach(p => p.msList.forEach(ms => msList.forEach(cm=>{
+              const d = Math.abs(ms-cm);
+              if(d<bd || (d===bd && ms<bms)){ bd=d; bms=ms; bp=[p.price] }
+              else if(d===bd && ms===bms) bp.push(p.price);
+            })));
+            price = mean(bp); bucket = 'nearest';
+          }
+          if(price==null && e.flat.length){ price = mean(e.flat); bucket = 'flatdc' }
+        }
+        if(price==null){
+          const fp = tiIdx.get(k);
+          if(fp && fp.length){ price = mean(fp); bucket = 'flatti' }
+        }
+        if(price==null){ ffNoPrice += ff; return }
+        rev += ff*price; ffMatched += ff;
+        if(bucket==='exact') ffExact += ff;
+        else if(bucket==='nearest') ffNearest += ff;
+        else if(bucket==='flatdc') ffFlatDc += ff;
+        else ffFlatTi += ff;
+        if(Math.abs(price) <= 1e-9) ffZero += ff;
+      });
+
+      const pricesExist = (dcIdxCol>=0 && dcRows.length>0) || (tiIdxCol>=0 && tiRows.length>0);
+      if(rev>0 && ffMatched>0){
+        const usesDc = (ffExact+ffNearest+ffFlatDc) > 0, usesTi = ffFlatTi > 0;
+        const label = usesDc && usesTi ? 'demand_coverage × demand_cost + demand_cost_ti'
+          : usesTi ? 'demand_coverage × demand_cost_ti' : 'demand_coverage × demand_cost';
+        const prevRev = num(out.totals.rev);
+        /* прежние итоги — для сверок DQ: revMd всегда итог marking_demand,
+           revMs — итог margin_sales, если она была источником до подмены */
+        if(out.totals.finSrc==='margin_sales') out.totals.revMs = prevRev;
+        else out.totals.revMd = prevRev;
+        out.totals.rev = rev;
+        out.totals.revSrc = label;
+        out.totals.covPrice = {rev, ffTotal, ffMatched, ffExact, ffNearest, ffFlatDc, ffFlatTi,
+          ffNoPrice, ffZero, colDc:dcIdxCol>=0?dcCand[dcIdxCol]:'', colTi:tiIdxCol>=0?tiCand[tiIdxCol]:'',
+          priceRows:dcRows.length, flatRows:tiRows.length, covRows:vol.length};
+        if(ffNoPrice>0)
+          out.notes.push('цены спроса: у '+nf(ffNoPrice)+' т выполненного спроса нет цены в demand_cost/demand_cost_ti (ключ товар×локация×поток×тип не встретился) — объём учтён с нулевой ценой');
+      }else if(pricesExist && ffMatched===0){
+        out.notes.push('цены спроса: справочник demand_cost/demand_cost_ti загружен, но ни одна строка demand_coverage не сопоставилась по item+loc+dmdstream+demandtype — выручка посчитана по прежней цепочке (margin_sales, фолбэк marking_demand)');
+      }else if(pricesExist && rev===0 && ffMatched>0){
+        out.notes.push('цены спроса: все сопоставленные цены нулевые — выручка посчитана по прежней цепочке (margin_sales, фолбэк marking_demand)');
+      }
+    }catch(e){
+      out.notes.push('цены спроса: '+e.message+' — выручка посчитана по прежней цепочке (margin_sales, фолбэк marking_demand)');
+    }
   }
   return out;
 }
@@ -1709,8 +1966,11 @@ function vsFlat(v){
   return {
     _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk, uncSrc, uncDetail,
     /* откуда взяты rev/mar: margin_sales (пересчёт 2026-10-06) или фолбэк
-       marking_demand — тег источника в матрице показывает фактическую таблицу */
+       marking_demand — тег источника в матрице показывает фактическую таблицу.
+       revSrc — источник ВЫРУЧКИ: цены спроса demand_coverage × demand_cost
+       приоритетнее (2026-10-07); маржа остаётся на своей цепочке (finSrc). */
     finSrc: t.finSrc||'marking_demand',
+    revSrc: t.revSrc||t.finSrc||'marking_demand',
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
     demUnc, demLim: covOk?ff:demPlan, sal, unm: covOk?uf:num(t.unm),
     /* Service Level остаётся «отгружено / принято в план» по marking_demand:
@@ -1887,9 +2147,21 @@ CHX.tabVS = function(){
           if(srcs.length) rec._src=srcs.join(' + ');
         }
         /* финансы — фактический источник: margin_sales (пересчёт 2026-10-06)
-           или фолбэк marking_demand; при смешении версий тег называет обе */
-        if(k==='rev'||k==='mar'||k==='mrg'){
+           или фолбэк marking_demand; при смешении версий тег называет обе.
+           Выручка может идти из цен спроса (revSrc: demand_coverage ×
+           demand_cost, 2026-10-07), а маржа — из margin_sales: теги строк
+           называют источники раздельно, маржинальность — обе таблицы. */
+        if(k==='rev'){
+          const srcs=uq(rows.map(r=>r.revSrc||r.finSrc||'marking_demand'),x=>x);
+          rec._src=srcs.join(' / ');
+        }else if(k==='mar'){
           const srcs=uq(rows.map(r=>r.finSrc||'marking_demand'),x=>x);
+          rec._src=srcs.join(' / ');
+        }else if(k==='mrg'){
+          const srcs=uq(rows.map(r=>{
+            const rs=r.revSrc||r.finSrc||'marking_demand', ms=r.finSrc||'marking_demand';
+            return rs===ms ? ms : (ms+' / '+rs);
+          }),x=>x);
           rec._src=srcs.join(' / ');
         }
         if(k==='mpt'&&rows.some(r=>r.finSrc==='margin_sales'))
