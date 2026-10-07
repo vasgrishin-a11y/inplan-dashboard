@@ -7736,8 +7736,10 @@ document.addEventListener('click',e=>{
    один значок ⚠ (его нет, когда всё хорошо), а разбор проблемы и кнопка
    «Открыть подключение» живут в его всплывающей панели. */
 let LOAD_WARNINGS=[];
-/* Заметка загрузчика: «data_public_4899 → independent_demand недоступна (PG: …) — …»
-   → {db, title, cause, effect}. Одинаковые причины схлопываются по версиям. */
+/* Заметка загрузчика: «Версия осеннего плана → independent_demand недоступна (PG: …) — …»
+   (имя версии — из справочника сценариев, без него — техническое имя схемы
+   вида data_public_4899) → {db, title, cause, effect}. Одинаковые причины
+   схлопываются по версиям. */
 function parseWarnNote(note){
   const s=String(note||'').trim();
   const i=s.indexOf(' → ');

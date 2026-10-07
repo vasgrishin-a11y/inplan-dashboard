@@ -1462,7 +1462,10 @@ CHX.loadAll = async function(onProgress){
   if(typeof window.onCHDataset === 'function') window.onCHDataset(ds, CHX.versions);
   // Сохраняем уже выбранные схемы и основную схему вместе с данными.
   CHX.session.touch();
-  const notes = aggs.flatMap(a=>a.notes.map(n=>a.db+' → '+n));
+  /* Заметки подписываются именем версии из справочника сценариев (если он
+     доступен — заметки собираются после ожидания scenarioNamesTask); версии
+     без записи в сценариях остаются с техническим именем схемы. */
+  const notes = aggs.flatMap(a=>a.notes.map(n=>CHX.labelFor(a.db)+' → '+n));
   return {ds, versions:CHX.versions, notes};
 };
 
@@ -1669,7 +1672,7 @@ function drawModal(){
     <select id="chmGran">${st.granOptions.map(o=>
       `<option value="${o.t}" ${c.gran===o.t?'selected':''}>${esc(CHX.granLabel(o.t))} (periodtype ${o.t}${o.n?', '+nf(o.n)+' строк':''})</option>`).join('')}
     </select>
-    <span class="chm-hint">набор периодов основной схемы ${c.base?esc(c.base):'—'}</span></div>
+    <span class="chm-hint">набор периодов основной версии: ${c.base?esc(CHX.labelFor(c.base)):'—'}</span></div>
   <div class="chm-row"><label>Детализация</label>
     <input id="chmDet" type="number" min="100" step="100" value="${c.detailOrders}">
     <span class="chm-hint">заказов основной схемы грузим построчно; остальное — агрегатами, детали по клику</span></div>
@@ -2329,9 +2332,12 @@ CHX.tabVS = function(){
        смешивания месяцев с неделями не происходит.`,
       `Дедупликация: <code>is_deleted = 0</code> + последняя версия строки по <code>update_date_time</code>.`,
       CHX.unmatchedSchemas().length
-        ? `<span class="h">${CHX.unmatchedSchemas().join(', ')}</span> не сопоставлены со scenario.xlsx —
+        ? `<span class="h">${CHX.unmatchedSchemas().join(', ')}</span> не найдены в справочнике сценариев —
            отображаются техническими именами.`
-        : `Все схемы сопоставлены с названиями из scenario.xlsx.`
+        : `Все версии сопоставлены с названиями из ${
+            CHX.state.pgScenario&&CHX.state.pgScenario.size
+              ?'таблицы <code>scenario</code> (<code>pgs_app_metadata_db</code>)'
+              :'scenario.xlsx'}.`
     ]}
   ]);
 };
