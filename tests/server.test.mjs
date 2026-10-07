@@ -1,6 +1,6 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Тесты backend-прокси PostgreSQL (server.js): эндпоинты /api/pg/schemas и
-   /api/pg/unc — SQL агрегата неограниченного спроса собирается по бизнес-ключам
+   Тесты backend-прокси PostgreSQL (server.js): /api/pg/schemas,
+   /api/pg/scenarios и /api/pg/unc; SQL спроса собирается по бизнес-ключам
    independent_demand (item/demandqty/periodid/dmdstream/periodtype/demandtype/loc/date),
    фильтрует periodtype и не зависит от технических колонок sys_id/update_date_time.
 
@@ -95,7 +95,54 @@ test('GET /api/health и /api/pg/defaults', async () => {
     const d = await (await fetch(base + '/api/pg/defaults')).json();
     assert.equal(d.database, 'pgs_app_data_db');
     assert.equal(d.table, 'independent_demand');
+    assert.ok(h.endpoints.includes('/api/pg/scenarios'));
   });
+});
+
+test('POST /api/pg/scenarios читает sys_id/name из pgs_app_metadata_db.scenario', async () => {
+  const connections = [];
+  const calls = [];
+  const connect = async (conn) => {
+    connections.push(conn);
+    return {
+      async query(sql, params) {
+        calls.push({ sql: sq(sql), params });
+        if (/FROM information_schema\.tables/.test(sql))
+          return { rows: [{ s: 'public', t: 'scenario' }] };
+        if (/FROM information_schema\.columns/.test(sql))
+          return { rows: [{ c: 'sys_id' }, { c: 'name' }] };
+        if (sql.includes('FROM "public"."scenario"'))
+          return { rows: [
+            { sys_id: '4899', name: 'План на осень' },
+            { sys_id: '4941', name: 'План после изменений' }
+          ] };
+        return { rows: [] };
+      },
+      async close() {}
+    };
+  };
+  const app = createApp({ connect });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const response = await post(base, '/api/pg/scenarios', {
+      ...CONN, database: 'pgs_app_data_db'
+    });
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.database, 'pgs_app_metadata_db');
+    assert.equal(data.schema, 'public');
+    assert.deepEqual(data.scenarios, [
+      { sys_id: '4899', name: 'План на осень' },
+      { sys_id: '4941', name: 'План после изменений' }
+    ]);
+    assert.equal(connections.length, 1);
+    assert.equal(connections[0].database, 'pgs_app_metadata_db',
+      'backend всегда открывает metadata-БД, независимо от базы формы');
+    assert.equal(connections[0].user, CONN.user);
+    assert.ok(calls.some((c) => c.sql.includes('SELECT "sys_id"::text AS sys_id, "name"::text AS name')));
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
 test('404 неизвестного эндпоинта подписан сервисом (а не голым Not found)', async () => {

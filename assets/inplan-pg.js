@@ -3,7 +3,7 @@
    Зачем отдельное подключение: таблица independent_demand физически лежит в
    PostgreSQL, а не в ClickHouse. Браузер не умеет открывать TCP к Postgres,
    поэтому запросы идут через backend-прокси (server.js этого репозитория,
-   POST /api/pg/schemas и /api/pg/unc) — как в дашборде opti.
+   POST /api/pg/schemas, /api/pg/scenarios и /api/pg/unc) — как в дашборде opti.
 
    Соответствие версий: база ClickHouse «data_public_2» ↔ схема Postgres
    «public_2» (снимается префикс data_, регистр не важен; список схем, где
@@ -41,6 +41,12 @@ const PGX = window.PGX = {
     connected:false,          // backend ответил списком схем (креды валидны)
     checked:false,            // в этой загрузке уже пробовали (не дёргаем повторно)
     schemas:[],               // [{schema:'public_2', n:123}]
+    scenarioNames:[],         // [{sys_id:'4899', name:'...'}] из pgs_app_metadata_db.scenario
+    scenarioNamesLoaded:false,
+    scenarioNamesKey:null,
+    scenarioNamesPending:null,
+    scenarioNamesGeneration:0,
+    scenarioNamesError:null,  // необязательная загрузка подписей версий
     lastError:null,          // ошибка подключения (список схем)
     lastDataError:null,      // ошибка чтения конкретной схемы
     /* диагностика backend-прокси: без неё ошибка «Not found» от чужого
@@ -85,7 +91,10 @@ PGX.session = {
   clear(){ this.disabled=true; try{ localStorage.removeItem(LS_SESSION) }catch(e){} },
   exists(){ return !!this.read() }
 };
-PGX.forgetSession = ()=>{ PGX.session.clear(); PGX.state.connected=false; PGX.state.checked=false; PGX.state.schemas=[] };
+PGX.forgetSession = ()=>{
+  PGX.session.clear(); PGX.state.connected=false; PGX.state.checked=false; PGX.state.schemas=[];
+  PGX.invalidateScenarioNames();
+};
 /* Восстановление без сети: креды подставляются в cfg, фактическое
    подключение произойдёт при первой загрузке версий (ensureSchemas). */
 PGX.restoreSession = function(){
@@ -224,6 +233,75 @@ PGX.connBody = function(){
            user:c.user, password:c.password, ssl:c.ssl||'auto' };
 };
 
+/* Подписи версий — необязательный справочник. Ключ кеша не содержит сами
+   креды: используем короткий отпечаток параметров, чтобы не повторять запрос
+   при выборе нескольких версий и всё же сбрасывать кеш при смене подключения. */
+function scenarioNamesKey(){
+  const c=PGX.cfg;
+  const raw=[c.backend,c.host,c.port,c.user,c.password,c.ssl].map(v=>String(v||'')).join('\u001f');
+  let hash=2166136261;
+  for(let i=0;i<raw.length;i++){
+    hash^=raw.charCodeAt(i);
+    hash=Math.imul(hash,16777619);
+  }
+  return raw.length+':'+(hash>>>0).toString(16);
+}
+PGX.invalidateScenarioNames = function(){
+  const s=PGX.state;
+  s.scenarioNamesGeneration=(s.scenarioNamesGeneration||0)+1;
+  s.scenarioNames=[]; s.scenarioNamesLoaded=false; s.scenarioNamesKey=null;
+  s.scenarioNamesPending=null; s.scenarioNamesError=null;
+};
+/* Сервер игнорирует database из тела и открывает ровно pgs_app_metadata_db.
+   Ошибка этого справочника не должна ломать основную загрузку: возвращаем [] и
+   оставляем фронтенду прежний scenario.xlsx/технический labelFor. */
+PGX.scenarioNamesCurrent = function(){
+  return !!(PGX.state.scenarioNamesLoaded && PGX.state.scenarioNamesKey===scenarioNamesKey());
+};
+PGX.scenarioNamesRequestKey = scenarioNamesKey;
+PGX.loadScenarioNames = async function(options){
+  const force=!!(options&&options.force), c=PGX.cfg, s=PGX.state;
+  const key=scenarioNamesKey();
+  if(!c.host || !c.user){
+    PGX.invalidateScenarioNames();
+    return [];
+  }
+  if(s.scenarioNamesPending && s.scenarioNamesPending.key===key)
+    return s.scenarioNamesPending.promise;
+  if(!force && s.scenarioNamesLoaded && s.scenarioNamesKey===key)
+    return s.scenarioNames.slice();
+
+  const generation=s.scenarioNamesGeneration||0;
+  let pending;
+  const promise=(async()=>{
+    try{
+      const body=PGX.connBody();
+      body.database='pgs_app_metadata_db';
+      const result=await PGX.api('/api/pg/scenarios',body);
+      const rows=(result.scenarios||[]).map(r=>({
+        sys_id:String(r&&r.sys_id!=null?r.sys_id:'').trim(),
+        name:String(r&&r.name!=null?r.name:'').trim()
+      })).filter(r=>r.sys_id&&r.name);
+      if((s.scenarioNamesGeneration||0)===generation && key===scenarioNamesKey()){
+        s.scenarioNames=rows; s.scenarioNamesLoaded=true;
+        s.scenarioNamesKey=key; s.scenarioNamesError=null;
+      }
+      return rows;
+    }catch(e){
+      if((s.scenarioNamesGeneration||0)===generation && key===scenarioNamesKey()){
+        s.scenarioNames=[]; s.scenarioNamesLoaded=true;
+        s.scenarioNamesKey=key; s.scenarioNamesError=e.message;
+      }
+      return [];
+    }finally{
+      if(s.scenarioNamesPending===pending) s.scenarioNamesPending=null;
+    }
+  })();
+  pending={key,promise};
+  s.scenarioNamesPending=pending;
+  return promise;
+};
+
 /* PG-подключение считается настроенным, когда заданы хост/база/логин —
    пароль может быть пустым (trust-аутентификация). Без этих полей
    загрузчик работает по ClickHouse/demand_coverage, как раньше. */
@@ -262,6 +340,7 @@ PGX.invalidate = function(){
   PGX.state.connected=false; PGX.state.checked=false; PGX.state.schemas=[];
   PGX.state.lastError=null; PGX.state.lastDataError=null; PGX.state.stage=null;
   PGX.state.backend=null; PGX.state.backendOk=null; PGX.state.backendInfo=null;
+  PGX.invalidateScenarioNames();
 };
 /* Схема Postgres для базы ClickHouse: data_public_2 ↔ public_2.
    Список схем из backend — справочник: имя матчится без префикса в любом

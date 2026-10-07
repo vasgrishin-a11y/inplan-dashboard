@@ -25,6 +25,14 @@
 Соответствие версий между источниками: база ClickHouse `data_public_2` ↔ схема
 PostgreSQL `public_2` (снимается префикс `data_`, регистр не важен).
 
+Подписи версий при подключении ClickHouse автоматически читаются через backend
+из базы **`pgs_app_metadata_db`**, таблицы `scenario`: цифровой суффикс имени
+ClickHouse-базы после последнего `_` сопоставляется с `scenario.sys_id`, а
+пользователю показывается `scenario.name`. Поиск в списке версий работает по
+названию, номеру и техническому имени базы. Если metadata-БД, таблица или
+соответствующая запись недоступна, используется прежняя логика: название из
+`scenario.xlsx` (если загружено), иначе техническое имя схемы.
+
 ## Быстрый старт
 
 ```bash
@@ -39,6 +47,7 @@ npm start        # → http://localhost:8080 (PORT/HOST настраиваютс
 | `GET  /api/health`    | проверка, что backend жив                                         |
 | `GET  /api/pg/defaults` | хост/порт/база PG по умолчанию для формы подключения            |
 | `POST /api/pg/schemas` | схемы, в которых есть таблица `independent_demand`               |
+| `POST /api/pg/scenarios` | названия версий из `pgs_app_metadata_db.scenario` (`sys_id` + `name`) |
 | `POST /api/pg/unc`    | агрегат неограниченного спроса: `{schema, gran}` → итог и периоды по `Σ demandqty` |
 
 Логин/пароль PostgreSQL вводятся в модалке подключения (блок «PostgreSQL —
