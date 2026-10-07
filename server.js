@@ -13,6 +13,7 @@
  *                             от «backend устарел»)
  *   GET  /api/pg/defaults   — хост/порт/база по умолчанию для формы подключения
  *   POST /api/pg/schemas    — схемы, в которых есть таблица independent_demand
+ *   POST /api/pg/scenarios  — названия версий из pgs_app_metadata_db.scenario
  *   POST /api/pg/unc        — агрегат неограниченного спроса схемы:
  *                             {schema, gran} → {demUnc, n, periods, qtySource,
  *                             diagnostics}
@@ -42,6 +43,8 @@ const PG_DEFAULTS = {
    написание оставлено только как обратная совместимость для прежних выгрузок. */
 const TABLE_NAME = 'independent_demand';
 const TABLE_CANDIDATES = ['independent_demand', 'independentdemand'];
+const SCENARIO_DATABASE = 'pgs_app_metadata_db';
+const SCENARIO_TABLE = 'scenario';
 const MAX_SCHEMAS = 512;
 /* Подпись сервиса в каждом ответе (в т.ч. в ошибках). По ней фронтенд
    отличает три разные ситуации, которые раньше сливались в «Not found»:
@@ -49,8 +52,8 @@ const MAX_SCHEMAS = 512;
      • ответил наш, но без нужного эндпоинта  → backend устарел, нужен npm start свежей версии;
      • ответил наш и с эндпоинтом             → настоящая ошибка Postgres. */
 const SERVICE = 'inplan-dashboard';
-const API_LEVEL = 7;
-const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/unc'];
+const API_LEVEL = 8;
+const ENDPOINTS = ['/api/health', '/api/pg/defaults', '/api/pg/schemas', '/api/pg/scenarios', '/api/pg/unc'];
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -519,6 +522,70 @@ function createApp(deps) {
     } catch (e) { next(e); }
   });
 
+  /** Названия версий из метаданных планировщика.
+   * Креды берём из обычного PG-подключения, но база всегда фиксирована:
+   * сценарии лежат отдельно от входного спроса в pgs_app_metadata_db.
+   */
+  app.post('/api/pg/scenarios', async (req, res, next) => {
+    try {
+      const conn = normalizeConn({ ...(req.body || {}), database: SCENARIO_DATABASE });
+      let db;
+      try { db = await connect(conn); }
+      catch (e) { throw friendlyPgError(e, conn); }
+      try {
+        const tables = await db.query(
+          `SELECT table_schema AS s, table_name AS t
+             FROM information_schema.tables
+            WHERE lower(table_name) = $1
+              AND table_schema NOT IN ('pg_catalog','information_schema')
+            ORDER BY (table_schema = 'public') DESC, table_schema, table_name
+            LIMIT 1`,
+          [SCENARIO_TABLE]
+        );
+        const table = (tables.rows || [])[0];
+        if (!table) {
+          throw new HttpError(400,
+            `В базе «${SCENARIO_DATABASE}» не найдена таблица «${SCENARIO_TABLE}» или нет прав на неё.`);
+        }
+
+        const columnResult = await db.query(
+          `SELECT column_name AS c
+             FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2
+              AND lower(column_name) IN ('sys_id','name')
+            ORDER BY ordinal_position`,
+          [String(table.s), String(table.t)]
+        );
+        const columns = new Map((columnResult.rows || []).map(r => [String(r.c).toLowerCase(), String(r.c)]));
+        const sysIdColumn = columns.get('sys_id');
+        const nameColumn = columns.get('name');
+        if (!sysIdColumn || !nameColumn) {
+          throw new HttpError(400,
+            `В таблице «${SCENARIO_TABLE}» базы «${SCENARIO_DATABASE}» нужны столбцы sys_id и name.`);
+        }
+
+        const data = await db.query(
+          `SELECT ${qi(sysIdColumn)}::text AS sys_id, ${qi(nameColumn)}::text AS name
+             FROM ${qi(String(table.s))}.${qi(String(table.t))}
+            WHERE ${qi(sysIdColumn)} IS NOT NULL AND ${qi(nameColumn)} IS NOT NULL
+            ORDER BY ${qi(sysIdColumn)}`
+        );
+        const scenarios = (data.rows || []).map(r => ({
+          sys_id: String(r.sys_id == null ? '' : r.sys_id).trim(),
+          name: String(r.name == null ? '' : r.name).trim()
+        })).filter(r => r.sys_id && r.name);
+        res.json({ ok: true, database: SCENARIO_DATABASE,
+          schema: String(table.s), table: String(table.t), scenarios,
+          service: SERVICE, api: API_LEVEL });
+      } catch (e) {
+        if (e instanceof HttpError) throw e;
+        if (e && e.code === '42P01')
+          throw new HttpError(400, `В базе «${SCENARIO_DATABASE}» не найдена таблица «${SCENARIO_TABLE}» или нет прав на неё.`);
+        throw friendlyPgError(e, conn);
+      } finally { await db.close(); }
+    } catch (e) { next(e); }
+  });
+
   /** Агрегат неограниченного спроса схемы: итог + помесячный разрез. */
   app.post('/api/pg/unc', async (req, res, next) => {
     try {
@@ -728,5 +795,6 @@ module.exports = {
   mapColumns, COL_CANDIDATES, uncSql, bucketKeyExpr, independentDemandKeyCols,
   schemaCandidates, matchSchema,
   qi, friendlyPgError, HttpError, PG_DEFAULTS, TABLE_NAME,
+  SCENARIO_DATABASE, SCENARIO_TABLE,
   pgNumber, sumPgRows, SERVICE, API_LEVEL, ENDPOINTS
 };

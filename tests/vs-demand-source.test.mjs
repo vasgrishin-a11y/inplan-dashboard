@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Регрессия: источники строк спроса во вкладке «Сравнение версий».
+   Регрессия: источники спроса и объёмные строки во вкладке «Сравнение версий».
 
    Требование владельца дашборда (2026-10): неограниченный спрос ВЕЗДЕ считается
    по таблице `independent_demand` (Σ `demandqty`) — это вход модели. Таблица
@@ -21,6 +21,11 @@
 
    Проверяется подстановкой заведомо РАЗНЫХ чисел в три источника: по значению в
    матрице однозначно видно, какой источник его дал.
+
+   Объёмные планы для каждой ClickHouse-версии считаются отдельно из суммы
+   `order_operation_volume` по `operation_type`: production, movement и
+   procurement; логистический план — movement + stock (в классификации RCA
+   оба типа входят в логистический контур), а не повтор строки перемещений.
 
    Фолбэки: без PostgreSQL (или без таблицы в схеме) неограниченный спрос —
    покрытый + непокрытый из demand_coverage (с пометкой), без demand_coverage
@@ -78,7 +83,20 @@ const COV_P = [{ k: '2026-09', demUnc: 1200, ff: 950, uf: 250, late: 50 }];
 /* independent_demand в PostgreSQL: входной спрос 1300 — не совпадает ни с покрытием, ни с планом */
 const UNC = { demUnc: 1300, n: 15 };
 const UNC_P = [{ k: '2026-09', demUnc: 1300 }];
-const BY_OP = [{ t: 'production', c: 500, v: 48, n: 2 }, { t: 'movement', c: 300, v: 40, n: 2 }];
+const BY_OP = {
+  data_public_1: [
+    { t: 'production', c: 500, v: 48, n: 2 },
+    { t: 'movement', c: 300, v: 40, n: 2 },
+    { t: 'stock', c: 120, v: 8, n: 1 },
+    { t: 'procurement', c: 200, v: 13, n: 1 },
+  ],
+  data_public_2: [
+    { t: 'production', c: 700, v: 71, n: 3 },
+    { t: 'movement', c: 250, v: 23, n: 2 },
+    { t: 'stock', c: 140, v: 7, n: 2 },
+    { t: 'procurement', c: 310, v: 31, n: 2 },
+  ],
+};
 const DIM_P = [{ k: '1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
 const DIM_PR = [{ k: 'P1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
 const DIM_CL = [{ k: 'C1', mar: 760, sal: 19, unm: 1, rev: 1900 }];
@@ -104,7 +122,7 @@ function makeRoute(noCovFor) {
     if (/max\(update_date_time\)/.test(sql) && db && DBS[db]) return [{ n: DBS[db].n, ts: DBS[db].ts }];
     if (/SELECT periodtype AS t/.test(sql)) return db && DBS[db] ? DBS[db].grans.map(([t, n]) => ({ t, n })) : [];
     if (/count\(\) AS orders/.test(sql)) return [ORDERS_TOT];
-    if (/`operation_type` AS t/.test(sql)) return BY_OP;
+    if (/`operation_type` AS t/.test(sql)) return BY_OP[db] || [];
     if (/`o_p` AS k/.test(sql)) return DIM_P;
     if (/`o_prod` AS k/.test(sql)) return DIM_PR;
     if (/`o_cl` AS k/.test(sql)) return DIM_CL;
@@ -257,6 +275,42 @@ test('план и затраты не затронуты: отгрузка, Serv
   const slRow = [...sl].find((x) => x.querySelector('td').textContent.trim().startsWith('Service Level'));
   assert.match(slRow.querySelectorAll('td')[1].textContent, /90,0%/,
     'Service Level остаётся на базе плана marking_demand (900/1000)');
+});
+
+test('объёмные планы считаются отдельно по версиям: логистика = перемещения + хранение', async (t) => {
+  const ctx = await openVS(null, null);
+  t.after(ctx.close);
+
+  const versions = ctx.window.CHX.versions;
+  const base = versions.find((v) => v.isBase);
+  const other = versions.find((v) => !v.isBase);
+  assert.ok(base && other, 'сравнение содержит базовую и вторую версии');
+
+  const expectations = {
+    'План производства, т': {
+      src: 'marking_demand · production', byDb: { data_public_1: 48, data_public_2: 71 },
+    },
+    'План перемещений, т': {
+      src: 'marking_demand · movement', byDb: { data_public_1: 40, data_public_2: 23 },
+    },
+    'План логистики, т': {
+      src: 'marking_demand · movement + stock', byDb: { data_public_1: 48, data_public_2: 30 },
+    },
+    'План закупки сырья, т': {
+      src: 'marking_demand · procurement', byDb: { data_public_1: 13, data_public_2: 31 },
+    },
+  };
+
+  for (const [label, expected] of Object.entries(expectations)) {
+    const actual = ctx.row(label);
+    assert.equal(actual.src, expected.src, `${label}: тегом указан тип операции`);
+    assert.equal(actual.base, expected.byDb[base.id], `${label}: значение своей базовой версии`);
+    assert.equal(actual.other, expected.byDb[other.id], `${label}: значение своей сравниваемой версии`);
+  }
+
+  const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
+  assert.match(subs, /План логистики.*movement \+ stock/,
+    'в матрице раскрыто определение логистического объёма, не дублирующее строку перемещений');
 });
 
 test('если demand_coverage у версии недоступна — честный фолбэк ограниченного/неудовлетворённого на marking_demand', async (t) => {

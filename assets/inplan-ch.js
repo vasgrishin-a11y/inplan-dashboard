@@ -24,6 +24,7 @@ const CHX = window.CHX = {
   },
   state:{
     connected:false, dbs:[], granOptions:[], granByDb:{}, scenario:new Map(),
+    pgScenario:new Map(),
     lastError:null, busy:false
   },
   versions:[]                    // [{id,label,src,isBase,agg,dims}]
@@ -429,10 +430,50 @@ CHX.loadScenarioFile = function(file){
   }catch(e){}
 })();
 
-/* Сопоставление схемы с записью scenario:
-   1) прямая колонка database/schema; 2) числовой суффикс схемы == sys_id;
-   3) техническое имя схемы. */
+/* Справочник PG сопоставляет цифровой суффикс базы ClickHouse
+   (например, data_public_4899) с scenario.sys_id. Нормализация нулей слева
+   помогает при строковых sys_id; исходная XLSX-логика остаётся фолбэком. */
+function scenarioIdKey(value){
+  const id=String(value==null?'':value).trim();
+  return /^\d+$/.test(id)?id.replace(/^0+(?=\d)/,''):'';
+}
+CHX.versionNumber = function(db){
+  const m=String(db||'').match(/_(\d+)$/);
+  return m?m[1]:'';
+};
+CHX.applyPostgresScenarioRows = function(rows){
+  const map=new Map();
+  (Array.isArray(rows)?rows:[]).forEach(r=>{
+    const sysId=scenarioIdKey(r&&r.sys_id);
+    const name=String(r&&r.name!=null?r.name:'').trim();
+    if(sysId&&name&&!map.has(sysId)) map.set(sysId,{sysId,name});
+  });
+  CHX.state.pgScenario=map;
+  CHX.relabelVersions();
+  return map.size;
+};
+CHX.refreshPostgresScenarioLabels = async function(options){
+  if(!window.PGX||typeof PGX.loadScenarioNames!=='function')
+    return CHX.applyPostgresScenarioRows([]);
+  if(!PGX.cfg.host||!PGX.cfg.user)
+    return CHX.applyPostgresScenarioRows([]);
+  const key=PGX.scenarioNamesRequestKey?PGX.scenarioNamesRequestKey():null;
+  const generation=PGX.state.scenarioNamesGeneration||0;
+  const rows=await PGX.loadScenarioNames(options);
+  if((PGX.state.scenarioNamesGeneration||0)!==generation ||
+     (key&&PGX.scenarioNamesRequestKey&&key!==PGX.scenarioNamesRequestKey()))
+    return CHX.state.pgScenario.size;
+  return CHX.applyPostgresScenarioRows(rows);
+};
+
+/* Сопоставление версии с подписью: сначала scenario из metadata PG по
+   суффиксу sys_id, затем прежний scenario.xlsx (database/schema или sys_id),
+   и в последнюю очередь — техническое имя схемы. */
 CHX.labelFor = function(db){
+  const id=scenarioIdKey(CHX.versionNumber(db));
+  const pgMap=CHX.state.pgScenario;
+  const pgRec=id&&pgMap?pgMap.get(id):null;
+  if(pgRec&&pgRec.name) return pgRec.name;
   const m = CHX.state.scenario;
   if(!m || !m.size) return db;
   const direct = m.get('db:'+String(db).toLowerCase());
@@ -1083,6 +1124,11 @@ CHX.loadAll = async function(onProgress){
   if(!c.schemas.length) throw new Error('Не выбрано ни одной схемы');
   if(!c.base) c.base = c.schemas[0];
   const step = m => { if(onProgress) onProgress(m) };
+  /* Справочник имён необязательный: грузим параллельно с агрегатами и ждём
+     перед формированием подписей. При недоступности остаётся прежний labelFor. */
+  const scenarioNamesTask = Promise.resolve()
+    .then(()=>CHX.refreshPostgresScenarioLabels())
+    .catch(()=>CHX.applyPostgresScenarioRows([]));
 
   step('Загрузка агрегатов версий…');
   const aggs = [];
@@ -1101,6 +1147,7 @@ CHX.loadAll = async function(onProgress){
       a.notes.push('в версии нет periodtype '+c.gran+' — периодные агрегаты (покрытие, мощности, штрафы) посчитаны по periodtype '+g+' ('+CHX.granLabel(g)+')');
     aggs.push(a);
   }
+  await scenarioNamesTask;
 
   step('Детализация основной схемы…');
   const baseAgg = aggs.find(a=>a.db===c.base) || aggs[0];
@@ -1341,7 +1388,7 @@ function drawModal(){
     ${c.schemas.map(db=>`<span class="dt-chip" data-rmdb="${esc(db)}"
       title="Клик: убрать из выбора">${esc(CHX.labelFor(db))} ✕</span>`).join('')}
   </div>`:''}
-  <input class="pop-q" id="chmDbQ" type="text" placeholder="Поиск схемы — введите номер или имя…"
+  <input class="pop-q" id="chmDbQ" type="text" placeholder="Поиск версии — по названию, номеру или схеме…"
     value="${esc(st.dbq||'')}" style="margin-bottom:6px;width:100%">
   <div class="chm-list" id="chmDbList">
     ${st.dbs.slice()
@@ -1350,7 +1397,9 @@ function drawModal(){
       const on = c.schemas.includes(db), isBase = (c.base===db);
       const meta = (st.meta&&st.meta[db])||{};
       const lbl = CHX.labelFor(db);
-            return `<div class="chm-item ${on?'on':''}" data-dbrow="${esc(db)}">
+      const dbSearch = [lbl, db, CHX.versionNumber(db)].filter(Boolean).join(' ');
+      return `<div class="chm-item ${on?'on':''}" data-dbrow="${esc(db)}"
+        data-dbsearch="${esc(dbSearch)}">
         <input type="radio" name="chmBase" ${isBase?'checked':''} data-base="${esc(db)}"
                title="Основная схема (полная детализация)">
         <input type="checkbox" ${on?'checked':''} data-db="${esc(db)}">
@@ -1369,11 +1418,16 @@ function drawModal(){
     <span class="chm-hint">заказов основной схемы грузим построчно; остальное — агрегатами, детали по клику</span></div>
 
   <div class="chm-sec">Названия версий</div>
+  <div class="chm-note">При наличии учётных данных PostgreSQL названия загружаются автоматически из
+    <code>pgs_app_metadata_db.scenario</code>: номер в конце имени версии (например, <code>_4899</code>)
+    сопоставляется с <code>sys_id</code>, подпись берётся из <code>name</code>. Если база или запись недоступна,
+    сохраняются прежние подписи; файл ниже можно использовать как ручной фолбэк.</div>
   <div class="chm-row"><label>scenario.xlsx</label>
     <input type="file" id="chmScen" accept=".xlsx,.xls">
-    <span class="chm-hint">${CHX.state.scenario.size
-      ?`загружено ${CHX.state.scenario.size} записей`
-      :'без файла останутся технические имена схем'}</span></div>
+    <span class="chm-hint">${CHX.state.pgScenario&&CHX.state.pgScenario.size
+      ?`PG scenario: ${CHX.state.pgScenario.size} названий`
+      :CHX.state.scenario.size?`scenario.xlsx: ${CHX.state.scenario.size} записей`
+        :'если соответствие не найдено, останется текущее имя схемы'}</span></div>
 
   <div class="chm-act">
     <button class="btn p" id="chmLoad" ${c.schemas.length?'':'disabled'}>
@@ -1422,6 +1476,9 @@ function drawModal(){
       await PGX.ensureSchemas();
     }
     catch(e){ /* перерисовка покажет ошибку в pgmStat */ }
+    /* Названия версий читаются отдельно от independent_demand: отсутствие
+       таблицы scenario не должно мешать обычному подключению PG. */
+    await CHX.refreshPostgresScenarioLabels({force:true});
     if(st.connected) CHX.session.touch();
     drawModal();
   };
@@ -1435,8 +1492,12 @@ function drawModal(){
   g('chmX').onclick = g('chmClose').onclick = CHX.closeModal;
   g('chmMode').onchange = e=>{ sync(); c.useProxy = (e.target.value==='proxy'); drawModal() };
   g('chmConn').onclick = async ()=>{
-    sync(); g('chmStat').innerHTML = 'Подключение…';
-    try{ await CHX.connect(); drawModal() }
+    sync(); pgSync(); g('chmStat').innerHTML = 'Подключение…';
+    try{
+      await CHX.connect();
+      await CHX.refreshPostgresScenarioLabels();
+      drawModal();
+    }
     catch(e){ CHX.state.lastError = e.message; drawModal() }
   };
   g('chmSaveProf').onclick = ()=>{
@@ -1474,6 +1535,10 @@ function drawModal(){
        панель показывала бы periodtype ПРЕЖНЕЙ версии, а следующая загрузка
        пошла бы с чужим periodtype (данных по нему в новой базе может не быть). */
     if(st.connected && c.base && c.base !== oldBase) await CHX.refreshGran(c.base);
+    if(window.PGX){
+      pgSync();
+      await CHX.refreshPostgresScenarioLabels();
+    }
     if(st.connected) CHX.session.touch();
     drawModal();
   });
@@ -1483,6 +1548,10 @@ function drawModal(){
     const stat = document.getElementById('chmStat');
     if(stat) stat.innerHTML = 'Обновляю гранулярность основной схемы…';
     await CHX.refreshGran(c.base);
+    if(window.PGX){
+      pgSync();
+      await CHX.refreshPostgresScenarioLabels();
+    }
     if(st.connected) CHX.session.touch();
     drawModal();
   });
@@ -1494,14 +1563,37 @@ function drawModal(){
     if(st.connected) CHX.session.touch();
     drawModal();
   });
-  /* Поиск по схемам: фильтруем строки списка на месте, без перерисовки модалки */
-  if(g('chmDbQ')) g('chmDbQ').oninput = ()=>{
-    st.dbq = g('chmDbQ').value;
-    const s = st.dbq.trim().toLowerCase();
+  /* Поиск по названию scenario, номеру суффикса и техническому имени схемы. */
+  const applyDbFilter = ()=>{
+    const s = String((g('chmDbQ')||{}).value||'').trim().toLowerCase();
     m.querySelectorAll('#chmDbList .chm-item').forEach(it=>{
-      it.style.display = (!s || (it.dataset.dbrow||'').toLowerCase().includes(s)) ? '' : 'none';
+      const hay = ((it.dataset.dbsearch||'')+' '+(it.dataset.dbrow||'')).toLowerCase();
+      it.style.display = (!s || hay.includes(s)) ? '' : 'none';
     });
   };
+  if(g('chmDbQ')){
+    g('chmDbQ').oninput = ()=>{
+      st.dbq = g('chmDbQ').value;
+      applyDbFilter();
+    };
+    /* Если окно открыли на уже подключённом CH, попробуем подтянуть имена
+       при первом фокусе поиска — до того, как пользователь начнёт вводить имя. */
+    g('chmDbQ').onfocus = async ()=>{
+      if(!window.PGX||typeof PGX.loadScenarioNames!=='function') return;
+      pgSync();
+      if(!PGX.cfg.user){
+        if(CHX.state.pgScenario&&CHX.state.pgScenario.size){
+          CHX.applyPostgresScenarioRows([]);
+          if(m.style.display==='block') drawModal();
+        }
+        return;
+      }
+      if(PGX.scenarioNamesCurrent&&PGX.scenarioNamesCurrent()) return;
+      if(PGX.state.scenarioNamesPending) return;
+      await CHX.refreshPostgresScenarioLabels();
+      if(m.style.display==='block') drawModal();
+    };
+  }
   if(g('chmScen')) g('chmScen').onchange = async e=>{
     if(!e.target.files||!e.target.files[0]) return;
     try{ const n = await CHX.loadScenarioFile(e.target.files[0]);
@@ -1531,6 +1623,7 @@ function drawModal(){
   /* Возвращаем прокрутку списка и фокус туда, где они были до перерисовки */
   const listEl=document.getElementById('chmDbList');
   if(listEl&&prevScroll)listEl.scrollTop=prevScroll;
+  applyDbFilter();
   if(prevFocusId==='chmDbQ'){const fe=document.getElementById('chmDbQ');if(fe){fe.focus();fe.selectionStart=fe.value.length}}
 }
 
@@ -1552,6 +1645,11 @@ const VS_METRICS = [
   ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'independent_demand'],
   ['demLim','Ограниченный спрос, т',0,v=>nf(v),'demand_coverage'],
   ['sal','План продаж, т',1,v=>nf(v),'marking_demand'],
+  /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
+  ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
+  ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
+  ['planLogistics','План логистики, т',0,v=>nf(v,1),'marking_demand · movement + stock'],
+  ['planProcurement','План закупки сырья, т',0,v=>nf(v,1),'marking_demand · procurement'],
   ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v),'demand_coverage'],
   ['sl','Service Level',1,pc,'marking_demand'],
   ['late','Отгружено с опозданием, т',-1,v=>nf(v),'demand_coverage'],
@@ -1628,6 +1726,12 @@ function vsFlat(v){
     lm: num(t.lm), penNonDel: num(t.penaltyNonDel), penLate: num(t.penaltyLate),
     pd:(op.production||{}).c||0, mv:(op.movement||{}).c||0,
     pcst:(op.procurement||{}).c||0, st:(op.stock||{}).c||0,
+    /* order_operation_volume из marking_demand: агрегат своей версии по operation_type.
+       План логистики — движение плюс хранение (movement + stock), как в RCA логистики. */
+    planProduction:num((op.production||{}).v),
+    planMovements:num((op.movement||{}).v),
+    planLogistics:num((op.movement||{}).v)+num((op.stock||{}).v),
+    planProcurement:num((op.procurement||{}).v),
     capUtil: num(t.capUtil), bn: num(t.bnCount),
     planAvail: num(t.planAvail), expansion: num(t.expansion),
     orders: num(t.orders)
@@ -1736,6 +1840,8 @@ CHX.tabVS = function(){
     <div class="card w"><h3>Матрица показателей: все версии</h3>
       <div class="sub">Дельта считается к базе «${esc(base.label)}». Зелёный — улучшение с точки зрения бизнеса,
         ★ — лучшая версия по строке. Тег у показателя — таблица-источник</div>
+      <div class="sub">Объёмы взяты из <code>marking_demand.order_operation_volume</code> по типам операций: production, movement и procurement;
+        «План логистики» = movement + stock (перемещения и хранение).</div>
       <div class="sub">${covNote}</div><div id="vsMat"></div></div>`:''}
     ${VS_VIEW==='profile'?`
     <div class="card w"><h3>Радар версий</h3>
