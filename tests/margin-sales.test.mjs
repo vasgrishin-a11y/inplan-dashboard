@@ -60,8 +60,9 @@ const ORDERS_TOT = {
   orders: 8, rev: 50e9, cost: 30e9, mar: 20e9,
   dem: 5000, sal: 4000, unm: 1000, lm: 3e9, full: 3,
 };
-/* итог margin_sales: выручка 60 млрд, маржа 25 млрд — нарочно другие числа */
-const MS_TOT = { msRev: 60e9, msMar: 25e9, msRows: 12 };
+/* итог margin_sales: выручка 60 млрд, маржа 25 млрд — нарочно другие числа;
+   себестоимость 35 млрд — внутреннее тождество 60 − 35 = 25 сходится */
+const MS_TOT = { msRev: 60e9, msMar: 25e9, msCost: 35e9, msRows: 12 };
 const COV = { demUnc: 5500, ff: 4000, uf: 1500, inTime: 3800, late: 200, lostRev: 20e9, planRev: 50e9, prop: 5500 };
 const COV_P = [{ k: '2026-09', demUnc: 5500, ff: 4000, uf: 1500, late: 200 }];
 const BY_OP = [{ t: 'production', c: 5e9, v: 900, n: 2 }, { t: 'movement', c: 3e9, v: 900, n: 2 }];
@@ -211,6 +212,31 @@ test('снапшот версии для «Сравнения версий» б�
   assert.equal(snap.finSrc, 'margin_sales', 'источник финансов зафиксирован в снапшоте');
 });
 
+test('«Данные и качество»: сверка margin_sales против marking_demand + внутреннее тождество', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  await ctx.goTab('dq');
+  await settle(300); /* реестр #q3 рисуется в setTimeout(…,0) */
+
+  const q3 = ctx.document.getElementById('q3');
+  assert.ok(q3, 'реестр проверок отрисован');
+  const items = [...q3.querySelectorAll('.dq')];
+
+  /* кросс-сверка источников: 60/25 млрд (margin_sales) против 50/20 млрд
+     (marking_demand) — расхождение 16,7% / 20% больше допуска 0,5% → warning */
+  const cross = items.find((el) => /margin_sales против marking_demand/.test(el.textContent));
+  assert.ok(cross, 'проверка «Финансы: margin_sales против marking_demand» есть в реестре');
+  assert.ok(cross.classList.contains('w'), 'расхождение источников — предупреждение');
+  assert.match(clean(cross.textContent), /60,00 млрд/, 'названо число margin_sales');
+  assert.match(clean(cross.textContent), /50,00 млрд/, 'названо число marking_demand');
+  assert.match(cross.textContent, /iteration_number/, 'рекомендация называет вероятную причину');
+
+  /* внутреннее тождество margin_sales: 60 − 35 = 25 → info */
+  const ident = items.find((el) => /выручка − себестоимость = маржа/.test(el.textContent));
+  assert.ok(ident, 'проверка внутреннего тождества margin_sales есть в реестре');
+  assert.ok(ident.classList.contains('i'), 'тождество сходится — информационный статус');
+});
+
 test('фолбэк: пустая margin_sales → итоги marking_demand, без предупреждений', async (t) => {
   const ctx = await loadCH(false);
   t.after(ctx.close);
@@ -229,4 +255,11 @@ test('фолбэк: пустая margin_sales → итоги marking_demand, б�
   /* тихий фолбэк: пустая margin_sales — не повод для значка ⚠ */
   const warns = JSON.parse(ctx.ev('JSON.stringify(LOAD_WARNINGS.map(x=>x.title))'));
   assert.ok(!warns.some((x) => /margin_sales/.test(x)), 'нет предупреждений о margin_sales: ' + warns.join('; '));
+
+  /* и сверка источников в «Данных и качестве» не показывается — сверять нечего */
+  await ctx.goTab('dq');
+  await settle(300);
+  const q3 = ctx.document.getElementById('q3');
+  assert.ok(!/margin_sales против marking_demand/.test(q3.textContent),
+    'без margin_sales кросс-сверка не выводится');
 });

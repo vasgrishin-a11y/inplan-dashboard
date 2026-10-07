@@ -5044,6 +5044,37 @@ function tabDQ(){
       detLim?`Загружено ${nf(o.length)} заказов из ${nf(ordersSD)} по схеме — ${nf(demD)} т из ${nf(demSD)} т планового спроса (${pc(detShare)}). Карточки цепочки спроса считаются по агрегатам всей схемы, по-заказные разрезы и ставка упущенной маржи — по этой выборке.`
         :`Детализация полная: ${nf(o.length)} заказов, ${nf(demD)} т — сходится с агрегатом схемы (${nf(demSD)} т).`,
       detLim?'Если нужны по-заказные разрезы по всему плану, поднять лимит детализации в окне подключения ClickHouse. Смешивать агрегат схемы с урезанной выборкой в одной формуле нельзя: разница уходит в «не принято в план».':'—');
+
+  /* ── Пересчёт финансов по margin_sales (задача владельца 2026-10-06) ──
+     Карточки и сравнение версий показывают Σ revenue / Σ total_margin из
+     margin_sales, а графики и таблицы — суммы по заказам marking_demand.
+     Если источники расходятся, пользователь видит разные деньги в карточке
+     и в графике под ней — поэтому сверяем оба итога явно (тот же принцип,
+     что «Неограниченный спрос: определение»: два источника одного смысла).
+     Допуск 0,5% — как у тождеств covIds (Decimal-шум и округления выгрузки).
+     Второй проверкой — внутреннее тождество самой margin_sales:
+     Σ revenue − Σ |cost_of_demand| = Σ total_margin (аналог по-заказной
+     проверки «Маржа» выше, но по итоговой таблице). */
+  if(aggTD.finSrc==='margin_sales'){
+    const msRevQ=num(aggTD.rev),msMarQ=num(aggTD.mar),msCostQ=num(aggTD.msCost);
+    const mdRevQ=num(aggTD.revMd),mdMarQ=num(aggTD.marMd);
+    const devOf=(a,b)=>{const m=Math.max(Math.abs(a),Math.abs(b));return m>0?Math.abs(a-b)/m:0};
+    if(mdRevQ>0||mdMarQ!==0){
+      const devR=devOf(msRevQ,mdRevQ),devM=devOf(msMarQ,mdMarQ);
+      const okRM=devR<=.005&&devM<=.005;
+      add(okRM?'i':'w','Финансы: margin_sales против marking_demand',
+        `Карточки и сравнение версий считаются по <code>margin_sales</code>: выручка ${bn(msRevQ)} (против ${bn(mdRevQ)} по заказам <code>marking_demand</code>, расхождение ${pc(devR)}), маржа ${bn(msMarQ)} (против ${bn(mdMarQ)}, расхождение ${pc(devM)}).`,
+        okRM?'Итоговая таблица согласована с суммами по заказам: карточки, графики и таблицы показывают одни и те же деньги.'
+            :'Карточки (margin_sales) и графики/таблицы (marking_demand) показывают разные деньги. Проверить, что обе таблицы выгружены для одного прогона (runid/datasetid/configid) и одной итерации (iteration_number), и не осталось ли в margin_sales строк других версий.');
+    }
+    if(msCostQ>0){
+      const devI=Math.abs(msRevQ-msCostQ-msMarQ)/Math.max(Math.abs(msRevQ),1);
+      add(devI<=.005?'i':'w','margin_sales: выручка − себестоимость = маржа',
+        `Σ revenue ${bn(msRevQ)} − Σ |cost_of_demand| ${bn(msCostQ)} = ${bn(msRevQ-msCostQ)} против Σ total_margin ${bn(msMarQ)}: расхождение ${pc(devI)} от выручки.`,
+        devI<=.005?'Внутреннее тождество margin_sales соблюдено: состав себестоимости полон.'
+                  :'В total_margin входят статьи, которых нет в cost_of_demand (или наоборот): уточнить состав маржи у владельца модели, прежде чем сравнивать версии по этой таблице.');
+    }
+  }
   if(!(demUncD>0)){
     add('w','Неограниченный спрос',
       (uncSrcD==='independentdemand'

@@ -507,6 +507,7 @@ async function loadVersionAgg(db, gran){
     const ms = await chQuery(`SELECT
         sum(toFloat64(${q('revenue')}))      AS msRev,
         sum(toFloat64(${q('total_margin')})) AS msMar,
+        sum(toFloat64(abs(${q('cost_of_demand')}))) AS msCost,
         count() AS msRows
       FROM ${S_MS}`);
     const m0 = ms[0]||{};
@@ -516,6 +517,7 @@ async function loadVersionAgg(db, gran){
       out.totals.marMd = num(out.totals.mar);   // для сверки в «Данных и качестве»
       out.totals.rev = msRev;
       out.totals.mar = msMar;
+      out.totals.msCost = num(m0.msCost);       // Σ |cost_of_demand| — внутреннее тождество DQ
       out.totals.msRows = msRows;
       out.totals.finSrc = 'margin_sales';
       CHX.loaded.margin_sales = true;
