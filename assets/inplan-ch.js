@@ -2025,16 +2025,6 @@ const VS_METRICS = [
   ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'independent_demand'],
   ['demPlan','Ограниченный спрос (план), т',0,v=>nf(v),'marking_demand'],
   ['sal','План продаж, т',1,v=>nf(v),'marking_demand'],
-  ['unm','Дефицит плана, т',-1,v=>nf(v),'marking_demand'],
-  ['demLim','Покрытый спрос, т',0,v=>v==null?'—':nf(v),'demand_coverage'],
-  ['covUf','Непокрытый спрос, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
-  /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
-  ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
-  ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
-  ['planLogistics','План логистики, т',0,v=>nf(v,1),'marking_demand · movement + stock'],
-  ['planProcurement','План закупки сырья, т',0,v=>nf(v,1),'marking_demand · procurement'],
-  ['sl','Service Level',1,pc,'marking_demand'],
-  ['late','Отгружено с опозданием, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   /* Порядок — от общего к частному. Total берётся из DISTINCT-реестра
      independent_demand; статусы — из того же реестра, сопоставленного с
      заказами плана. У старого/частично совместимого источника матрица
@@ -2045,6 +2035,15 @@ const VS_METRICS = [
   ['ordPart','Заказов частично покрыто',0,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
   ['ordFullUnc','Заказов 100% не покрыто',-1,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
   ['ordCheck','Невязка заказов (должна быть 0)',0,v=>v==null?'—':nf(v),'сверка счёта'],
+  ['demLim','Покрытый спрос, т',0,v=>v==null?'—':nf(v),'demand_coverage'],
+  ['covUf','Непокрытый спрос, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
+  /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
+  ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
+  ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
+  ['planLogistics','План логистики, т',0,v=>nf(v,1),'marking_demand · movement + stock'],
+  ['planProcurement','План закупки сырья, т',0,v=>nf(v,1),'marking_demand · procurement'],
+  ['sl','Service Level',1,pc,'marking_demand'],
+  ['late','Отгружено с опозданием, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   ['lm','Упущенная маржа по дефициту плана (база: маржа/т заказа)',-1,bn,'marking_demand'],
   ['penNonDel','Штраф за непоставку',-1,bn,'demand_cost × demand_coverage'],
   ['penLate','Штраф за опоздание',-1,bn,'demand_cost × demand_coverage'],
@@ -2055,8 +2054,7 @@ const VS_METRICS = [
   ['capUtil','Средняя загрузка мощностей',0,pc,'capacity_view_sp'],
   ['bn','Узких мест (≥90%)',-1,v=>nf(v),'capacity_view_sp'],
   ['planAvail','Плановый ФРВ, ч',0,v=>nf(v),'rescapacity'],
-  ['expansion','Расширение мощности, ч',0,v=>nf(v),'rescapacity'],
-  ['orders','Заказов в marking_demand',0,v=>nf(v),'marking_demand']
+  ['expansion','Расширение мощности, ч',0,v=>nf(v),'rescapacity']
 ];
 
 /* ── Источники строк спроса в сравнении версий ──
@@ -2157,8 +2155,7 @@ function vsFlat(v){
     planLogistics:num((op.movement||{}).v)+num((op.stock||{}).v),
     planProcurement:num((op.procurement||{}).v),
     capUtil: num(t.capUtil), bn: num(t.bnCount),
-    planAvail: num(t.planAvail), expansion: num(t.expansion),
-    orders: num(t.orders)
+    planAvail: num(t.planAvail), expansion: num(t.expansion)
   };
 }
 
@@ -2390,8 +2387,10 @@ CHX.tabVS = function(){
           }});
       });
       cols.push({k:'spread', t:'Разброс', num:1, f:(v,r)=>v==null?'—':r._fmt(v)});
+      /* Строки — в порядке VS_METRICS («от общего к частному»); алфавитной сортировки по умолчанию нет.
+         Клик по заголовку сортирует как раньше. */
       dtable('#vsMat', cols, data,
-        {key:'vs_matrix', sort:'n', dir:'asc', h:520, csv:1, name:'versions_matrix'});
+        {key:'vs_matrix', sort:'__preserve__', dir:'asc', h:520, csv:1, name:'versions_matrix'});
     }
 
     /* ── Профиль: нормировка к лучшей версии ── */

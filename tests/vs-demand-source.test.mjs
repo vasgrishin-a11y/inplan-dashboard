@@ -229,7 +229,17 @@ async function openVS(noCovFor, pgMissingFor, pgOptions = {}, chOptions = {}) {
       other: toNum(tds[2].textContent.split('(')[0]),
     };
   };
-  return { dom, window: w, document: d, row, close() { try { dom.window.close(); } catch { /* jsdom */ } } };
+  /** Названия строк матрицы в порядке отрисовки, без тега источника. */
+  const labels = () => [...d.querySelectorAll('#vsMat table tbody tr')].map((tr) => {
+    const cell = tr.querySelector('td').cloneNode(true);
+    cell.querySelectorAll('.tag').forEach((tag) => tag.remove());
+    return cell.textContent.trim();
+  });
+  return {
+    dom, window: w, document: d, row, labels,
+    hasRow: (name) => labels().includes(name),
+    close() { try { dom.window.close(); } catch { /* jsdom */ } },
+  };
 }
 
 test('источники спроса: вход и план из своих таблиц, coverage показан отдельно', async (t) => {
@@ -239,14 +249,13 @@ test('источники спроса: вход и план из своих та
   const unlimited = ctx.row('Неограниченный спрос, т');
   const plan = ctx.row('Ограниченный спрос (план), т');
   const sales = ctx.row('План продаж, т');
-  const deficit = ctx.row('Дефицит плана, т');
   const coveredTons = ctx.row('Покрытый спрос, т');
   const uncoveredTons = ctx.row('Непокрытый спрос, т');
 
   assert.equal(unlimited.base, 1300, 'неограниченный спрос = Σ demandqty из independent_demand');
   assert.equal(plan.base, 1000, 'ограниченный спрос (план) = Σ demand_volume из marking_demand');
   assert.equal(sales.base, 900, 'план продаж = Σ results_sale из marking_demand');
-  assert.equal(deficit.base, 100, 'дефицит плана = Σ unsatisfied_demand из marking_demand');
+  assert.equal(ctx.hasRow('Дефицит плана, т'), false, 'строки «Дефицит плана» в матрице нет');
   assert.equal(coveredTons.base, 950, 'покрытый спрос отдельно из demand_coverage');
   assert.equal(uncoveredTons.base, 250, 'непокрытый спрос отдельно из demand_coverage');
 
@@ -265,7 +274,7 @@ test('источники спроса: вход и план из своих та
 
   for (const [metric, source] of [
     [unlimited, 'independent_demand'], [plan, 'marking_demand'], [sales, 'marking_demand'],
-    [deficit, 'marking_demand'], [coveredTons, 'demand_coverage'], [uncoveredTons, 'demand_coverage'],
+    [coveredTons, 'demand_coverage'], [uncoveredTons, 'demand_coverage'],
   ]) assert.equal(metric.src, source, `источник ${source} подписан`);
 
   const note = clean([...ctx.document.querySelectorAll('#main .sub')].map(x=>x.textContent).join(' '));
@@ -315,7 +324,7 @@ test('план и затраты не затронуты: отгрузка, Serv
   t.after(ctx.close);
 
   assert.equal(ctx.row('План продаж, т').base, 900, 'results_sale');
-  assert.equal(ctx.row('Заказов в marking_demand').base, 2, 'количество заказов плана из marking_demand');
+  assert.equal(ctx.hasRow('Заказов в marking_demand'), false, 'строки «Заказов в marking_demand» в матрице нет');
   /* SL = отгружено / принято в план = 900/1000 = 90%, а не 950/1200 и не 900/1300 */
   const sl = ctx.document.querySelectorAll('#vsMat table tbody tr');
   const slRow = [...sl].find((x) => x.querySelector('td').textContent.trim().startsWith('Service Level'));
@@ -367,12 +376,10 @@ test('если demand_coverage у версии недоступна — чест
 
   const unlimited = ctx.row('Неограниченный спрос, т');
   const plan = ctx.row('Ограниченный спрос (план), т');
-  const deficit = ctx.row('Дефицит плана, т');
   const covered = ctx.row('Покрытый спрос, т');
   const uncovered = ctx.row('Непокрытый спрос, т');
   assert.equal(unlimited.base, 1300, 'неограниченный спрос по-прежнему из PostgreSQL');
   assert.equal(plan.base, 1000, 'плановый спрос берётся из marking_demand');
-  assert.equal(deficit.base, 100, 'плановый дефицит берётся из marking_demand');
   assert.equal(covered.base, null, 'недоступный demand_coverage не маскируется нулём');
   assert.equal(uncovered.base, null, 'недоступный demand_coverage не маскируется нулём');
   assert.equal(covered.other, 950, 'у второй версии с покрытием показатель доступен');
@@ -407,4 +414,39 @@ test('если в PostgreSQL таблицы у версии нет — фолб�
 
   const notes = ctx.window.CHX.versions.flatMap((v) => (v.agg && v.agg.notes) || []).join(' ');
   assert.match(notes, /PG: Схема «public_1»/, 'в заметках загрузки — конкретная ошибка PostgreSQL');
+});
+
+test('матрица: строки в заданном порядке — заказы сразу за «План продаж, т»; дефицит и «Заказов в marking_demand» убраны', async (t) => {
+  const ctx = await openVS(null, null);
+  t.after(ctx.close);
+
+  const names = ctx.labels();
+  assert.equal(ctx.hasRow('Дефицит плана, т'), false, 'строки «Дефицит плана, т» нет');
+  assert.equal(ctx.hasRow('Заказов в marking_demand'), false, 'строки «Заказов в marking_demand» нет');
+
+  /* блок заказов — сразу за «План продаж, т», от общего к частному;
+     «100% не покрыто» и «Невязка» идут следом, не отрывая статусы от группы */
+  const at = names.indexOf('План продаж, т');
+  assert.ok(at >= 0, 'строка «План продаж, т» есть');
+  assert.deepEqual(names.slice(at, at + 7), [
+    'План продаж, т',
+    'Заказов (неогр. спрос)',
+    'Заказов всего покрыто',
+    'Заказов полностью покрыто',
+    'Заказов частично покрыто',
+    'Заказов 100% не покрыто',
+    'Невязка заказов (должна быть 0)',
+  ], 'после «План продаж, т» — заказы от общего к частному');
+
+  for (const name of ['Покрытый спрос, т', 'Непокрытый спрос, т', 'Service Level', 'Отгружено с опозданием, т', 'Плановый ФРВ, ч'])
+    assert.ok(names.includes(name), `строка «${name}» на месте`);
+
+  /* по умолчанию таблица не сортируется по алфавиту (раньше сортировалась) */
+  const byName = (a, b) => a.localeCompare(b, 'ru', { numeric: true });
+  assert.notDeepEqual(names, names.slice().sort(byName), 'порядок по умолчанию — не алфавитный');
+
+  /* клик по заголовку «Показатель» сортирует, как прежде */
+  ctx.document.querySelector('#vsMat .dt-t[data-sk="n"]').click();
+  assert.deepEqual(ctx.labels(), names.slice().sort((a, b) => byName(b, a)),
+    'клик по «Показатель» сортирует по убыванию');
 });
