@@ -181,7 +181,12 @@ test('неограниченный спрос = Σ demandqty (independent_demand
   assert.equal(ctx.vsRow('Неограниченный спрос, т'), 1500, 'входной спрос — независимый агрегат');
   assert.equal(ctx.vsRow('Ограниченный спрос (план), т'), 1000, 'плановый спрос — marking_demand');
   assert.equal(ctx.vsRow('План продаж, т'), 900, 'продажи — marking_demand');
-  assert.equal(ctx.vsRow('Дефицит плана, т'), 100, 'дефицит плана — marking_demand');
+  /* строки дефицита в матрице больше нет; величина та же — из marking_demand (covBasis.gapPlan) */
+  assert.equal(JSON.parse(ctx.window.eval('(function(){return JSON.stringify(covBasis(fOrders()).gapPlan)})()')), 100,
+    'дефицит плана — marking_demand (covBasis.gapPlan)');
+  const deficitRowShown = [...ctx.document.querySelectorAll('#vsMat table tbody tr')].some(
+    (x) => ((x.querySelector('td') || {}).textContent || '').trim().startsWith('Дефицит плана'));
+  assert.equal(deficitRowShown, false, 'строки «Дефицит плана» в матрице нет');
   assert.equal(ctx.vsRow('Покрытый спрос, т'), 950, 'покрытие — demand_coverage');
   assert.equal(ctx.vsRow('Непокрытый спрос, т'), 250, 'непокрытый объём — demand_coverage');
   assert.equal(ctx.vsRow('Заказов (неогр. спрос)'), 15,
