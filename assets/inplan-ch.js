@@ -526,6 +526,39 @@ CHX.relabelVersions = function(){
 CHX.unmatchedSchemas = () =>
   (CHX.cfg.schemas||[]).filter(db => CHX.labelFor(db) === db);
 
+/* Полная построчная сводка плана для классификации каждой строки
+   independent_demand в той же логике, что и в основной версии.
+   В независимом реестре нет order_id: используем бизнес-ключ товара,
+   локации, типа/потока спроса и ближайший объём (см. mergeIndependentOrders).
+   Читаем только компактные поля статуса, а не все финансы/операции. */
+async function loadVersionOrderSummary(db,gran){
+  const S_MD = src(db,'marking_demand');
+  let mdCols = null;
+  try{
+    const cols = await chQuery(`SELECT name FROM system.columns
+      WHERE database = ${qs(db)} AND table = 'marking_demand'`);
+    mdCols = new Set(cols.map(r=>String(r.name||'').toLowerCase()));
+  }catch(e){ /* без system.columns пробуем гарантированный набор */ }
+  const anyOr = (col, fallback) => mdCols && !mdCols.has(String(col).toLowerCase())
+    ? fallback : `any(${q(col)})`;
+  /* Сопоставляем тот же periodtype, что и DISTINCT-вход independent_demand.n.
+     Если схема не публикует periodtype в marking_demand, оставляем её исходный
+     охват: query ниже всё равно будет помечен как fallback в случае ошибки. */
+  const periodFilter=mdCols&&!mdCols.has('periodtype')?'':`WHERE ${q('periodtype')} = ${Math.trunc(num(gran))}`;
+  const rows = await chQuery(`SELECT order_id AS id,
+      ${anyOr('demand_period','0')} AS p,
+      ${anyOr('demand_product',"''")} AS prod,
+      ${anyOr('demand_location',"''")} AS loc,
+      ${anyOr('demand_demandtype',"''")} AS dt,
+      ${anyOr('dmdstream',"''")} AS stream,
+      ${anyOr('demand_volume','0')} AS dem,
+      ${anyOr('results_sale','0')} AS sal,
+      ${anyOr('unsatisfied_demand','0')} AS unm
+    FROM ${S_MD} ${periodFilter} GROUP BY order_id`);
+  return rows.map(r=>({id:num(r.id), p:r.p, prod:sany(r.prod), loc:sany(r.loc),
+    dt:sany(r.dt), stream:sany(r.stream), dem:num(r.dem), sal:num(r.sal), unm:num(r.unm)}));
+}
+
 /* ─────────────── 8. АГРЕГАТЫ ВЕРСИИ (считает ClickHouse) ─────────────── */
 async function loadVersionAgg(db, gran){
   const out = {db, gran, totals:{}, dims:{}, notes:[]};
@@ -670,6 +703,17 @@ async function loadVersionAgg(db, gran){
       FROM ${S_DC}`);
     out.totals.cov = cov[0] || {};
     out.totals.cov.demUncCov = num(out.totals.cov.demUnc);
+    /* Сохраняем исходную гранулярность demand_coverage до того, как основной
+       independent_demand-счётчик может заменить legacy-поля orderRows. */
+    if(Object.prototype.hasOwnProperty.call(out.totals.cov,'orderRows'))
+      out.totals.cov.demandCoverageOrderRows=num(out.totals.cov.orderRows);
+    if(Object.prototype.hasOwnProperty.call(out.totals.cov,'fullyUncoveredOrders'))
+      out.totals.cov.demandCoverageFullyUncoveredOrders=num(out.totals.cov.fullyUncoveredOrders);
+    if(Object.prototype.hasOwnProperty.call(out.totals.cov,'partiallyCoveredOrders'))
+      out.totals.cov.demandCoveragePartiallyCoveredOrders=num(out.totals.cov.partiallyCoveredOrders);
+    if(Object.prototype.hasOwnProperty.call(out.totals.cov,'fullyCoveredOrders'))
+      out.totals.cov.demandCoverageFullyCoveredOrders=num(out.totals.cov.fullyCoveredOrders);
+    out.totals.covAvailable = true;
     coverageAvailable = true;
     const covP = await chQuery(`SELECT ${pk} AS k,
         sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
@@ -753,10 +797,27 @@ async function loadVersionAgg(db, gran){
       const totalUnc = num(u.demUnc);
       const qty = u.qtySource||'demandqty';
       const detail = 'PostgreSQL · '+u.schema;
-      /* Полный реестр входных заказов используется после загрузки
-         marking_demand: совпавшие строки обогащают заказы сроком, а
-         отсутствующие добавляются в RCA как 100% не покрытые. */
+      /* n — точное число строк того же DISTINCT-реестра, по которому посчитана
+         Σ demandqty. Сохраняем его отдельно от необязательной детализации API:
+         count(*) важнее длины пустого массива, если backend старый/не смог
+         прочитать строки. */
       out.independentOrders = Array.isArray(u.orders) ? u.orders : [];
+      const hasIndependentOrderCount=!!u.countAvailable||out.independentOrders.length>0;
+      if(hasIndependentOrderCount){
+        out.totals.independentOrderCount = u.countAvailable
+          ? Math.max(0,Math.trunc(num(u.n))) : out.independentOrders.length;
+        out.totals.independentOrderCountSource = 'independent_demand';
+        out.totals.independentOrderDetailsCount = out.independentOrders.length;
+        out.totals.independentOrderDetailsComplete = out.independentOrders.length === out.totals.independentOrderCount;
+      }
+      /* Для каждой версии нужна такая же классификация входного заказа по
+         фактическому результату плана, как в covBasis()/DS основной версии.
+         Ошибка этого необязательного запроса не скрывает независимый счётчик:
+         матрица тогда покажет резервную классификацию и явную невязку. */
+      if(hasIndependentOrderCount && out.totals.independentOrderDetailsComplete && out.totals.independentOrderCount>0){
+        try{ out.orderSummary = await loadVersionOrderSummary(db,gran); }
+        catch(e){ out.notes.push('independent_demand × marking_demand: '+e.message+' — разбиение заказов сверяется по demand_coverage'); }
+      }
       if(totalUnc>0){
         applyUnc(totalUnc, u.periods, detail, qty);
       }else{
@@ -1376,6 +1437,30 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
 }
 CHX.mergeIndependentOrders=mergeIndependentOrders;
 
+/* Точное разложение реестра independent_demand по результату плана.
+   Строки плана без пары НЕ прибавляются к числу входных заказов; непарные
+   входные строки попадают в 100%-непокрытые. Поэтому total и три части имеют
+   один и тот же охват и должны складываться без остатка. */
+function independentOrderBreakdown(markingOrders, inputRows, penalties){
+  const inputs=Array.isArray(inputRows)?inputRows:[];
+  const merged=mergeIndependentOrders(markingOrders||[],inputs,penalties||[]);
+  const rows=merged.filter(o=>o.independentOnly||o.independentSourceId!=null);
+  const fullUnc=rows.filter(o=>num(o.sal)<=ORD_TOL).length;
+  const part=rows.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)>ORD_TOL).length;
+  const full=rows.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+  const lateRows=rows.filter(o=>o.late);
+  const lateFull=rows.filter(o=>o.late&&num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+  return {
+    total:inputs.length, classified:rows.length,
+    fullyUncoveredOrders:fullUnc, partiallyCoveredOrders:part, fullyCoveredOrders:full,
+    coveredOrders:part+full, delta:inputs.length-(fullUnc+part+full),
+    lateOrdersAll:lateRows.length, lateFullyCoveredOrders:lateFull,
+    lateFromIndependent:lateRows.reduce((sum,o)=>sum+num(o.sal),0),
+    source:'independent_demand × marking_demand'
+  };
+}
+CHX.independentOrderBreakdown=independentOrderBreakdown;
+
 CHX.loadAll = async function(onProgress){
   const c = CHX.cfg;
   if(!c.schemas.length) throw new Error('Не выбрано ни одной схемы');
@@ -1406,6 +1491,24 @@ CHX.loadAll = async function(onProgress){
   }
   await scenarioNamesTask;
 
+  /* Сопоставляем каждую PG-строку с заказами всей своей marking_demand-версии.
+     Это компактная классификация: полные orderSummary не остаются в памяти после
+     расчёта, а независимый total сохраняет backend count(*) из DISTINCT-входа. */
+  aggs.forEach(a=>{
+    const t=a.totals||{};
+    if(t.independentOrderCountSource==='independent_demand' && t.independentOrderDetailsComplete){
+      if(t.independentOrderCount===0){
+        t.orderStats=independentOrderBreakdown([],[],[]);
+      }else if(Array.isArray(a.orderSummary)){
+        const penalties=[].concat(a.penaltyFlat||[],a.penalty||[]);
+        t.orderStats=independentOrderBreakdown(a.orderSummary,a.independentOrders,penalties);
+        if(t.orderStats.delta!==0)
+          a.notes.push('independent_demand × marking_demand: '+t.orderStats.delta+' заказ(ов) не попали в разбиение статусов');
+      }
+    }
+    delete a.orderSummary;
+  });
+
   step('Детализация основной схемы…');
   const baseAgg = aggs.find(a=>a.db===c.base) || aggs[0];
   /* Если PG отдал полный реестр входа, загружаем не меньше строк плана:
@@ -1418,17 +1521,37 @@ CHX.loadAll = async function(onProgress){
      содержит все заказы неограниченного спроса, включая не попавшие в план. */
   const penalties=[].concat(baseAgg.penaltyFlat||[],baseAgg.penalty||[]);
   const mergedOrders=mergeIndependentOrders(detail.orders,baseAgg.independentOrders,penalties);
-  if((baseAgg.independentOrders||[]).length){
-    const fullUnc=mergedOrders.filter(o=>num(o.sal)<=ORD_TOL).length;
-    const part=mergedOrders.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)>ORD_TOL).length;
-    const full=mergedOrders.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
-    const late=mergedOrders.filter(o=>o.late&&num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+  const baseOrderStats=baseAgg.totals.orderStats;
+  const baseOrderInputCount=baseAgg.totals.independentOrderCount;
+  const baseHasIndependentCount=baseAgg.totals.independentOrderCountSource==='independent_demand';
+  if(baseOrderStats){
     const cov=baseAgg.totals.cov||(baseAgg.totals.cov={});
-    Object.assign(cov,{orderRows:mergedOrders.length,fullyUncoveredOrders:fullUnc,
-      partiallyCoveredOrders:part,fullyCoveredOrders:full,
-      lateOrdersAll:mergedOrders.filter(o=>o.late).length,lateFullyCoveredOrders:late});
-    cov.lateFromIndependent=S(mergedOrders.filter(o=>o.late),o=>o.sal);
+    Object.assign(cov,{orderRows:baseOrderStats.total,
+      fullyUncoveredOrders:baseOrderStats.fullyUncoveredOrders,
+      partiallyCoveredOrders:baseOrderStats.partiallyCoveredOrders,
+      fullyCoveredOrders:baseOrderStats.fullyCoveredOrders,
+      lateOrdersAll:baseOrderStats.lateOrdersAll,
+      lateFullyCoveredOrders:baseOrderStats.lateFullyCoveredOrders,
+      lateFromIndependent:baseOrderStats.lateFromIndependent});
     baseAgg.totals.orderSource='independent_demand';
+    baseAgg.totals.orderStatusSource=baseOrderStats.source;
+  }else if((baseAgg.independentOrders||[]).length){
+    /* Совместимость со старым backend без счётчика n/orderSummary. В основной
+       детализации явно отделяем совпавшие входные строки от plan-only строк,
+       иначе total выходил за пределы independent_demand. */
+    const linked=mergedOrders.filter(o=>o.independentOnly||o.independentSourceId!=null);
+    const fullUnc=linked.filter(o=>num(o.sal)<=ORD_TOL).length;
+    const part=linked.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)>ORD_TOL).length;
+    const full=linked.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length;
+    const lateRows=linked.filter(o=>o.late);
+    const cov=baseAgg.totals.cov||(baseAgg.totals.cov={});
+    Object.assign(cov,{orderRows:baseHasIndependentCount?baseOrderInputCount:linked.length,
+      fullyUncoveredOrders:fullUnc,partiallyCoveredOrders:part,fullyCoveredOrders:full,
+      lateOrdersAll:lateRows.length,
+      lateFullyCoveredOrders:lateRows.filter(o=>num(o.sal)>ORD_TOL&&num(o.unm)<=ORD_TOL).length});
+    cov.lateFromIndependent=S(lateRows,o=>o.sal);
+    baseAgg.totals.orderSource='independent_demand';
+    baseAgg.totals.orderStatusSource='independent_demand × marking_demand (детализация)';
   }
   /* сборка DS через существующий build() — вкладки продолжают работать */
   const ds = build({
@@ -1900,24 +2023,29 @@ const VS_METRICS = [
   ['mrg','Маржинальность',1,pc,'marking_demand'],
   ['mpt','Маржа на тонну',1,v=>nf(v)+' ₽','marking_demand'],
   ['demUnc','Неограниченный спрос, т',0,v=>nf(v),'independent_demand'],
-  ['demLim','Ограниченный спрос, т',0,v=>nf(v),'demand_coverage'],
+  ['demPlan','Ограниченный спрос (план), т',0,v=>nf(v),'marking_demand'],
   ['sal','План продаж, т',1,v=>nf(v),'marking_demand'],
+  ['unm','Дефицит плана, т',-1,v=>nf(v),'marking_demand'],
+  ['demLim','Покрытый спрос, т',0,v=>v==null?'—':nf(v),'demand_coverage'],
+  ['covUf','Непокрытый спрос, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
   ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
   ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
   ['planLogistics','План логистики, т',0,v=>nf(v,1),'marking_demand · movement + stock'],
   ['planProcurement','План закупки сырья, т',0,v=>nf(v,1),'marking_demand · procurement'],
-  ['unm','Неудовлетворённый спрос, т',-1,v=>nf(v),'demand_coverage'],
   ['sl','Service Level',1,pc,'marking_demand'],
-  ['late','Отгружено с опозданием, т',-1,v=>nf(v),'demand_coverage'],
-  /* Заказы — по demand_coverage (задача владельца 2026-10-05): всего строк =
-     все заказы неограниченного спроса; 100% не покрыто — fullfilleddemandqty = 0.
-     Показываем только при наличии счётчиков (старые снапшоты без них выведут 0 —
-     поле помечено источником demand_coverage, пустышки не будет). */
-  ['ordTotal','Заказов (неогр. спрос)',0,v=>nf(v),'demand_coverage'],
-  ['ordFullUnc','Заказов 100% не покрыто',-1,v=>nf(v),'demand_coverage'],
-  ['ordFull','Заказов полностью покрыто',1,v=>nf(v),'demand_coverage'],
-  ['lm','Упущенная маржа (база: маржа/т заказа)',-1,bn,'marking_demand'],
+  ['late','Отгружено с опозданием, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
+  /* Порядок — от общего к частному. Total берётся из DISTINCT-реестра
+     independent_demand; статусы — из того же реестра, сопоставленного с
+     заказами плана. У старого/частично совместимого источника матрица
+     показывает невязку, а не подменяет независимый total. */
+  ['ordTotal','Заказов (неогр. спрос)',0,v=>v==null?'—':nf(v),'independent_demand'],
+  ['ordCovered','Заказов всего покрыто',0,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
+  ['ordFull','Заказов полностью покрыто',1,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
+  ['ordPart','Заказов частично покрыто',0,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
+  ['ordFullUnc','Заказов 100% не покрыто',-1,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
+  ['ordCheck','Невязка заказов (должна быть 0)',0,v=>v==null?'—':nf(v),'сверка счёта'],
+  ['lm','Упущенная маржа по дефициту плана (база: маржа/т заказа)',-1,bn,'marking_demand'],
   ['penNonDel','Штраф за непоставку',-1,bn,'demand_cost × demand_coverage'],
   ['penLate','Штраф за опоздание',-1,bn,'demand_cost × demand_coverage'],
   ['pd','Затраты: производство',-1,bn,'marking_demand'],
@@ -1928,61 +2056,97 @@ const VS_METRICS = [
   ['bn','Узких мест (≥90%)',-1,v=>nf(v),'capacity_view_sp'],
   ['planAvail','Плановый ФРВ, ч',0,v=>nf(v),'rescapacity'],
   ['expansion','Расширение мощности, ч',0,v=>nf(v),'rescapacity'],
-  ['orders','Заказов',0,v=>nf(v),'marking_demand']
+  ['orders','Заказов в marking_demand',0,v=>nf(v),'marking_demand']
 ];
 
 /* ── Источники строк спроса в сравнении версий ──
-     Неограниченный спрос, т    = Σ demandqty              — independent_demand
-                                  (единое определение дашборда; загрузчик кладёт
-                                   его в totals.cov.demUnc, фолбэк — прежнее
-                                   fullfilleddemandqty + unfullfilleddemandqty)
-     Ограниченный спрос, т     = fullfilleddemandqty    — demand_coverage
-     Неудовлетворённый спрос,т = unfullfilleddemandqty  — demand_coverage
-   Неограниченный спрос — это ВХОД модели, а ограниченный/неудовлетворённый —
-   её ИСХОД, поэтому тождество «Неограниченный = Ограниченный + Неудовлетворённый»
-   между таблицами не гарантировано: расхождение входа и исхода ловит проверка
-   «Неограниченный спрос: определение» во вкладке «Данные и качество».
+   Входной (неограниченный) спрос: Σ demandqty из independent_demand.
+   Плановая цепочка, как в «Общем» и «Спросе и покрытии»:
+     ограниченный спрос (план) = Σ demand_volume,
+     план продаж = Σ results_sale,
+     дефицит плана = Σ unsatisfied_demand — всё из marking_demand;
+     Service Level = results_sale / demand_volume.
+   Выходные суммы demand_coverage показаны отдельно и с однозначными именами:
+     покрытый = Σ fullfilleddemandqty, непокрытый = Σ unfullfilleddemandqty.
+   Они могут не совпасть с планом или входом; это сверка двух разных таблиц,
+   а не замена спроса/дефицита плана.
 
-   Фолбэки остаются для версий без таблиц: без demand_coverage ограниченный и
-   неудовлетворённый спрос показаны по marking_demand (принято в план и дефицит
-   внутри плана — covOk=false, матрица об этом предупреждает), без
-   independent_demand неограниченный спрос — как покрытый + непокрытый
-   (uncSrc='demand_coverage'). */
+   Заказы: точный total — число строк backend `n` после той же DISTINCT-выборки
+   independent_demand, что использована для Σ demandqty. Для классификации эта
+   выборка сопоставляется с per-order результатом marking_demand по
+   item/location/demandtype/dmdstream и ближайшему объёму (как в основной
+   версии). Непарные входные строки — 100% не покрыты; plan-only строки не
+   прибавляются к total. Если деталей для сопоставления нет, статусы берутся из
+   demand_coverage, а строка невязки явно показывает расхождение источников.
+*/
 function vsFlat(v){
   const a = v.agg || {}, t = a.totals || {}, cov = t.cov || {}, op = t.byOp || {};
   const rev = num(t.rev), cost = num(t.cost), mar = num(t.mar), sal = num(t.sal);
   const ff = num(cov.ff), uf = num(cov.uf);
-  /* Неограниченный спрос: primary — Σ demandqty из independent_demand (загрузчик
-     уже положил его в cov.demUnc). При нулевом PG-итоге загрузчик выбирает
-     demand_coverage заранее, если покрытие доступно; явный ноль здесь остаётся
-     только для старых/неполных данных без рабочего покрытия. Фолбэк ff+uf
-     включаем также для старых данных без явного источника. */
+  const hasMetric=(obj,key)=>Object.prototype.hasOwnProperty.call(obj||{},key)
+    && obj[key]!==undefined && obj[key]!==null && Number.isFinite(Number(obj[key]));
+  /* Неограниченный спрос: primary — Σ demandqty из independent_demand.
+     Если источника нет, используется прежний фолбэк demand_coverage. */
   const hasExplicitUnc = Object.prototype.hasOwnProperty.call(cov,'demUnc') && !!t.uncSrc;
   const demUnc = hasExplicitUnc ? num(cov.demUnc) : (ff+uf);
-  const covOk = (ff>0||uf>0);          // demand_coverage по этой версии посчитана
-  const uncSrc = t.uncSrc || (covOk?'demand_coverage':'');  // откуда взят demUnc
-  const uncDetail = t.uncDetail || '';                      // схема PG / CH
-  const demPlan = num(t.dem);          // ограниченный спрос ПЛАНА (marking_demand)
+  const covOk = t.covAvailable!==undefined ? !!t.covAvailable
+    : (hasMetric(cov,'orderRows') || ff!==0 || uf!==0);
+  const uncSrc = t.uncSrc || (covOk?'demand_coverage':'');
+  const uncDetail = t.uncDetail || '';
+  const demPlan = num(t.dem);
+
+  const stats=t.orderStats||null;
+  const independentCountKnown=t.independentOrderCountSource==='independent_demand'
+    &&hasMetric(t,'independentOrderCount');
+  const dcPartsKnown=hasMetric(cov,'fullyUncoveredOrders')
+    &&hasMetric(cov,'partiallyCoveredOrders') && hasMetric(cov,'fullyCoveredOrders');
+  const mdPartsKnown=hasMetric(t,'zeroSalOrders')
+    &&hasMetric(t,'partCoveredOrders') && hasMetric(t,'fullCoveredOrders');
+  let ordTotal=independentCountKnown?Math.max(0,Math.trunc(num(t.independentOrderCount))):null;
+  let ordFullUnc=null,ordPart=null,ordFull=null;
+  let orderTotalSrc=independentCountKnown?'independent_demand':'',orderStatusSrc='';
+  if(independentCountKnown&&stats&&hasMetric(stats,'fullyUncoveredOrders')
+      &&hasMetric(stats,'partiallyCoveredOrders')&&hasMetric(stats,'fullyCoveredOrders')){
+    ordFullUnc=Math.max(0,Math.trunc(num(stats.fullyUncoveredOrders)));
+    ordPart=Math.max(0,Math.trunc(num(stats.partiallyCoveredOrders)));
+    ordFull=Math.max(0,Math.trunc(num(stats.fullyCoveredOrders)));
+    orderStatusSrc=stats.source||'independent_demand × marking_demand';
+  }else if(dcPartsKnown){
+    /* Это статусы результата coverage, а не подмена independent_demand.n.
+       Если охваты не совпадают, ниже останется ненулевая невязка. */
+    ordFullUnc=Math.max(0,Math.trunc(num(cov.fullyUncoveredOrders)));
+    ordPart=Math.max(0,Math.trunc(num(cov.partiallyCoveredOrders)));
+    ordFull=Math.max(0,Math.trunc(num(cov.fullyCoveredOrders)));
+    orderStatusSrc='demand_coverage';
+  }else if(mdPartsKnown){
+    ordFullUnc=Math.max(0,Math.trunc(num(t.zeroSalOrders)));
+    ordPart=Math.max(0,Math.trunc(num(t.partCoveredOrders)));
+    ordFull=Math.max(0,Math.trunc(num(t.fullCoveredOrders)));
+    orderStatusSrc='marking_demand';
+  }
+  const orderPartsKnown=ordFullUnc!=null&&ordPart!=null&&ordFull!=null;
+  const ordCovered=orderPartsKnown?ordPart+ordFull:null;
+  const ordDelta=orderPartsKnown&&ordTotal!=null?ordTotal-(ordFullUnc+ordPart+ordFull):null;
+  const ordCheck=ordDelta;
+  const orderCheckSrc=orderStatusSrc
+    ?(orderTotalSrc?orderTotalSrc+' ↔ '+orderStatusSrc:'нет independent_demand total · '+orderStatusSrc):'';
+  const lateIndependentKnown=!!(stats&&hasMetric(stats,'lateFromIndependent'));
+  const lateCoverageKnown=!!(covOk&&hasMetric(cov,'late'));
   return {
     _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk, uncSrc, uncDetail,
-    /* откуда взяты rev/mar: margin_sales (пересчёт 2026-10-06) или фолбэк
-       marking_demand — тег источника в матрице показывает фактическую таблицу.
-       revSrc — источник ВЫРУЧКИ: цены спроса demand_coverage × demand_cost
-       приоритетнее (2026-10-07); маржа остаётся на своей цепочке (finSrc). */
     finSrc: t.finSrc||'marking_demand',
     revSrc: t.revSrc||t.finSrc||'marking_demand',
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
-    demUnc, demLim: covOk?ff:demPlan, sal, unm: covOk?uf:num(t.unm),
-    /* Service Level остаётся «отгружено / принято в план» по marking_demand:
-       на базе покрытия он выродился бы в ff/(ff+uf) и дублировал бы строки спроса. */
-    sl: demPlan?sal/demPlan:0, late: num(cov.late),
-    /* Счёт заказов по demand_coverage (классификация 2026-10-05) —
-       null, когда счётчиков нет (старые снапшоты): матрица покажет «—»,
-       а не вводящий в заблуждение ноль. */
-    ordTotal: num(cov.orderRows)>0 ? num(cov.orderRows) : null,
-    ordFullUnc: num(cov.orderRows)>0 ? num(cov.fullyUncoveredOrders) : null,
-    ordPart: num(cov.orderRows)>0 ? num(cov.partiallyCoveredOrders) : null,
-    ordFull: num(cov.orderRows)>0 ? num(cov.fullyCoveredOrders) : null,
+    demUnc, demPlan, demLim:covOk?ff:null, sal, unm:num(t.unm),
+    covUf:covOk?uf:null,
+    /* Service Level совпадает с covBasis(): Σ results_sale / Σ demand_volume. */
+    sl: demPlan?sal/demPlan:0,
+    late:lateIndependentKnown?num(stats.lateFromIndependent)
+      :lateCoverageKnown?num(cov.late):null,
+    lateSrc:lateIndependentKnown?'independent_demand × marking_demand × demand_cost'
+      :lateCoverageKnown?'demand_coverage':'',
+    ordTotal, ordCovered, ordFullUnc, ordPart, ordFull, ordCheck,
+    ordDelta, orderTotalSrc, orderStatusSrc, orderCheckSrc,
     lm: num(t.lm), penNonDel: num(t.penaltyNonDel), penLate: num(t.penaltyLate),
     pd:(op.production||{}).c||0, mv:(op.movement||{}).c||0,
     pcst:(op.procurement||{}).c||0, st:(op.stock||{}).c||0,
@@ -2018,14 +2182,19 @@ CHX.tabVS = function(){
   const gransU = uq(rows, vGran);
   const gransMix = gransU.length > 1;
 
-  /* лучшая версия по каждой метрике */
+  /* лучшая версия по каждой метрике; неизвестные значения не считаются нулём */
   const best = {};
   VS_METRICS.forEach(([k,,dir])=>{
     if(!dir) return;
     let bv = null;
-    rows.forEach(r=>{ if(bv===null || r[k]*dir > bv.v*dir) bv = {id:r.id, v:r[k]} });
+    rows.forEach(r=>{
+      if(r[k]==null) return;
+      if(bv===null || r[k]*dir > bv.v*dir) bv = {id:r.id, v:r[k]};
+    });
     best[k] = bv && bv.id;
   });
+  const orderChecks=rows.filter(r=>r.ordCheck!=null);
+  const maxOrderCheck=orderChecks.length?Math.max(...orderChecks.map(r=>Math.abs(r.ordCheck))):null;
 
   const K = [
     ['Версий в сравнении', nf(rows.length), 'база: '+base.label, ''],
@@ -2038,36 +2207,53 @@ CHX.tabVS = function(){
     ['Разброс маржи',
       bn(Math.max(...rows.map(r=>r.mar))-Math.min(...rows.map(r=>r.mar))),
       'между лучшей и худшей версией', 'mid'],
+    ['Макс. невязка заказов',
+      maxOrderCheck==null?'—':nf(maxOrderCheck),
+      `проверено ${orderChecks.length} из ${rows.length} версий · ожидается 0`,
+      maxOrderCheck==null||orderChecks.length<rows.length?'mid':maxOrderCheck>0?'neg':'pos'],
     ['Гранулярность',
       gransMix ? gransU.map(g=>CHX.granLabel(g)).join(', ') : CHX.granLabel(gransU[0]),
       gransMix ? 'у версий разные periodtype — см. заметки загрузки' : 'periodtype '+gransU[0],
       gransMix ? 'mid' : '']
   ];
 
-  /* Источники спроса называем явно: неограниченный — из independent_demand
-     (Σ demandqty), ограниченный/неудовлетворённый — из demand_coverage; версии
-     с фолбэком перечисляем поимённо — это другая база, молчать нельзя. */
+  /* Источники и сверки объёмов/заказов указываем по фактической формуле,
+     а не по старым названиям строк. */
   const covFb = rows.filter(r=>!r.covOk);
   const uncFb = rows.filter(r=>r.uncSrc && r.uncSrc!=='independentdemand');
-  /* откуда реально прочитан входной спрос каждой версии (PostgreSQL-схема или
-     таблица в ClickHouse) — удобно для сверки, иначе смешение схем незаметно;
-     показываем и нулевой demandqty, потому что это валидный ответ PG, а не
-     отсутствие источника. */
+  const orderFb = rows.filter(r=>r.orderTotalSrc!=='independent_demand');
+  const orderMismatch = rows.filter(r=>r.ordCheck!=null&&Math.abs(r.ordCheck)>0);
   const uncDet = uq(rows.filter(r=>r.uncSrc==='independentdemand')
     .map(r=>r.label+' ← '+r.uncDetail).filter(s=>!/ ← $/.test(s)),x=>x);
+  const orderMismatchNote = orderMismatch.length
+    ? `<span class="neg">Невязка счёта заказов:</span> ${orderMismatch.map(r=>
+        `${esc(r.label)} — всего ${nf(r.ordTotal)}, части ${nf(r.ordFullUnc+r.ordPart+r.ordFull)}, `+
+        `разница ${r.ordDelta>0?'+':''}${nf(r.ordDelta)}`).join('; ')}. Проверьте полноту PG-детализации и сшивку с планом.`
+    : '';
   const covNote = [
-    `Неограниченный спрос — <code>independent_demand</code> (Σ <code>demandqty</code>,
-     {{DET}}ограниченный = покрытый (<code>fullfilleddemandqty</code>) и неудовлетворённый = непокрытый
-     (<code>unfullfilleddemandqty</code>) — из <code>demand_coverage</code>. Service Level и затраты — из <code>marking_demand</code>.`
-       .replace('{{DET}}', uncDet.length?('схемы: '+esc(uncDet.join('; '))+'); '):'из PostgreSQL; '),
+    `<b>Плановая цепочка (как в «Общем» и «Спросе и покрытии»):</b>
+      ограниченный спрос (план) = Σ <code>demand_volume</code>, план продаж = Σ <code>results_sale</code>,
+      дефицит плана = Σ <code>unsatisfied_demand</code> — <code>marking_demand</code>;
+      Service Level = продажи / план. Неограниченный спрос = Σ <code>demandqty</code> —
+      <code>independent_demand</code>${uncDet.length?` (схемы: ${esc(uncDet.join('; '))})`:''}.`,
+    `<b>Результат покрытия показан отдельно:</b> «Покрытый спрос» = Σ <code>fullfilleddemandqty</code>,
+      «Непокрытый спрос» = Σ <code>unfullfilleddemandqty</code>, оба из <code>demand_coverage</code>.
+      Это другой срез; он не подменяет план/дефицит и не обязан совпасть с входом.`,
+    `<b>Заказы:</b> всего — строки DISTINCT из <code>independent_demand</code>;
+      всего покрыто = полностью + частично; 100% не покрыто — непарные строки входа
+      или нулевая отгрузка. Невязка = всего − (полностью + частично + 100% не покрыто), ожидается 0.`,
+    orderFb.length
+      ? `<span class="neg">Точный счётчик independent_demand недоступен у версий: ${esc(orderFb.map(r=>r.label).join(', '))}</span>
+         — total в матрице показан как «—», строки demand_coverage не подставляются вместо независимого числа;
+         доступные статусы и невязка подписаны отдельно.` : '',
     uncFb.length
-      ? `<span class="neg">independent_demand недоступна у версий: ${esc(uncFb.map(r=>r.label).join(', '))}</span>
-         — их неограниченный спрос показан как покрытый + непокрытый из <code>demand_coverage</code>
-         (исход прогона, а не вход), строки неограниченного спроса между версиями не сопоставимы.` : '',
+      ? `<span class="neg">independent_demand недоступна для объёма у версий: ${esc(uncFb.map(r=>r.label).join(', '))}</span>
+         — неограниченный спрос показан как покрытый + непокрытый из <code>demand_coverage</code>; вход между версиями не сопоставим.` : '',
     covFb.length
       ? `<span class="neg">demand_coverage недоступна у версий: ${esc(covFb.map(r=>r.label).join(', '))}</span>
-         — для них «Ограниченный спрос» и «Неудовлетворённый спрос» показаны по <code>marking_demand</code>
-         (принято в план и дефицит внутри плана), это другая база, с покрытием версий они не сопоставимы.` : ''
+         — строки «Покрытый спрос», «Непокрытый спрос» и агрегат опозданий недоступны;
+         плановые значения остаются на <code>marking_demand</code>.` : '',
+    orderMismatchNote
   ].filter(Boolean).join('<br>');
 
   const html = `
@@ -2099,7 +2285,9 @@ CHX.tabVS = function(){
     ${VS_VIEW==='matrix'?`
     <div class="card w"><h3>Матрица показателей: все версии</h3>
       <div class="sub">Дельта считается к базе «${esc(base.label)}». Зелёный — улучшение с точки зрения бизнеса,
-        ★ — лучшая версия по строке. Тег у показателя — таблица-источник</div>
+        ★ — лучшая версия по строке. Тег у показателя — фактический источник.</div>
+      <div class="sub">Заказы идут от общего к частному: всего → покрыто (= полностью + частично) → полностью / частично → 100% не покрыто;
+        «Невязка заказов» должна быть 0.</div>
       <div class="sub">Объёмы взяты из <code>marking_demand.order_operation_volume</code> по типам операций: production, movement и procurement;
         «План логистики» = movement + stock (перемещения и хранение).</div>
       <div class="sub">${covNote}</div><div id="vsMat"></div></div>`:''}
@@ -2144,7 +2332,14 @@ CHX.tabVS = function(){
         if(k==='demUnc'){
           const srcName=s=>s==='independentdemand'?'independent_demand':s;
           const srcs=uq(rows.map(r=>srcName(r.uncSrc||'')).filter(Boolean),x=>x);
-          if(srcs.length) rec._src=srcs.join(' + ');
+          rec._src=srcs.length?srcs.join(' + '):'нет источника';
+        }else if(k==='late'){
+          const srcs=uq(rows.map(r=>r.lateSrc).filter(Boolean),x=>x);
+          rec._src=srcs.length?srcs.join(' / '):'нет источника';
+        }else if(['ordTotal','ordCovered','ordFull','ordPart','ordFullUnc','ordCheck'].includes(k)){
+          const srcs=uq(rows.map(r=>k==='ordTotal'?r.orderTotalSrc:
+            k==='ordCheck'?r.orderCheckSrc:r.orderStatusSrc).filter(Boolean),x=>x);
+          rec._src=srcs.length?srcs.join(' / '):'нет источника';
         }
         /* финансы — фактический источник: margin_sales (пересчёт 2026-10-06)
            или фолбэк marking_demand; при смешении версий тег называет обе.

@@ -2,16 +2,16 @@
    Регрессия: определение «Неограниченный спрос = Σ demandqty из independent_demand»
    действует во ВСЁМ дашборде, а не в одном разделе.
 
-   Требование владельца (2026-10): неограниченный спрос везде — это сумма
-   по столбцу `demandqty` таблицы `independent_demand` (вход модели). Раньше
-   показатель считался как покрытый + непокрытый из `demand_coverage`
-   (fullfilleddemandqty + unfullfilleddemandqty) — это ИСХОД прогона, и при
-   расхождении входа и исхода разделы могли показать не то число.
+   Требование владельца (2026-10): неограниченный спрос — вход модели
+   `Σ demandqty` из PostgreSQL independent_demand; плановые demand_volume,
+   results_sale и unsatisfied_demand — marking_demand; покрытый и непокрытый
+   спрос из demand_coverage — отдельные итоги прогона, не замена плана.
+   Для заказов total — independent_demand.n, а статусы/невязка — отдельные
+   поля с явными источниками.
 
    Проверяется моком, где таблицы намеренно расходятся (вход 1500 против
-   950 + 250 исхода): дашборд обязан показывать 1500 (demandqty) во всех
-   разделах и поднять проверку «Неограниченный спрос: определение», которая
-   сверяет вход (independent_demand) с исходом (demand_coverage).
+   950 + 250 coverage, план 1000/900/100): дашборд показывает каждое число
+   на своей методике и поднимает проверку входа против исхода.
 
    Запуск:  npm test
    ───────────────────────────────────────────────────────────────────────────── */
@@ -178,9 +178,14 @@ test('неограниченный спрос = Σ demandqty (independent_demand
     '«Общий» использует то же определение');
 
   await ctx.goTab('vs');
-  assert.equal(ctx.vsRow('Неограниченный спрос, т'), 1500, '«Сравнение версий» — то же число');
-  assert.equal(ctx.vsRow('Ограниченный спрос, т'), 950, 'ограниченный = покрытый (demand_coverage)');
-  assert.equal(ctx.vsRow('Неудовлетворённый спрос, т'), 250, 'неудовлетворённый = непокрытый (demand_coverage)');
+  assert.equal(ctx.vsRow('Неограниченный спрос, т'), 1500, 'входной спрос — независимый агрегат');
+  assert.equal(ctx.vsRow('Ограниченный спрос (план), т'), 1000, 'плановый спрос — marking_demand');
+  assert.equal(ctx.vsRow('План продаж, т'), 900, 'продажи — marking_demand');
+  assert.equal(ctx.vsRow('Дефицит плана, т'), 100, 'дефицит плана — marking_demand');
+  assert.equal(ctx.vsRow('Покрытый спрос, т'), 950, 'покрытие — demand_coverage');
+  assert.equal(ctx.vsRow('Непокрытый спрос, т'), 250, 'непокрытый объём — demand_coverage');
+  assert.equal(ctx.vsRow('Заказов (неогр. спрос)'), 15,
+    'total заказов — independent_demand.n, не число строк demand_coverage');
 
   await ctx.goTab('data');
   const checks = [...ctx.document.querySelectorAll('#q3 .dq')].map((x) => x.textContent.replace(/\s+/g, ' '));

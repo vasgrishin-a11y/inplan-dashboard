@@ -1,11 +1,12 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Регрессия: счёт заказов по demand_coverage и водопад «Тонны/Заказы»
-   (задача владельца 2026-10-05).
+   Регрессия: единый счёт заказов (independent_demand при наличии,
+   явно помеченный fallback иначе) и водопад «Тонны/Заказы».
 
-   1. Классификация заказов: всего строк demand_coverage = все заказы
-      неограниченного спроса; 100% не покрыто — fullfilleddemandqty = 0;
-      частично — unfullfilleddemandqty > 0 и fullfilleddemandqty > 0;
-      полностью — uf = 0 и ff > 0. Разбиение полное: сумма групп = всем строкам.
+   1. Total заказов неограниченного спроса берётся из независимого n, а не
+      подменяется числом строк demand_coverage. При отсутствии PG-подсчёта
+      fallback заметно маркируется; DQ отдельно сравнивает строки coverage.
+   2. Статусы: 100% не покрыто — отгрузка 0; частично — есть отгрузка и
+      дефицит; полностью — дефицита нет. Точное тождество: total = все три части.
    2. Водопад по заказам — те же названия столбцов, что в тоннах, и все шаги
       сходятся: Всего − 100% не покрыто = В оптимизации; − дефицит = План
       продаж; − опоздания = В срок (опоздания — среди полностью покрытых).
@@ -13,9 +14,9 @@
    4. Карточки: «Общий» — объединённая «Упущенная маржа и выручка», без
       «Не покрыто всего»; «Спрос и покрытие» — без четырёх убранных карточек,
       «Отгружено» → «План продаж», «Упущенная маржа» — последняя.
-   5. Фолбэки: без счётчиков demand_coverage — marking_demand; под фильтрами —
-      загруженная выборка.
-   6. DQ-проверки: разбиение заказов сходится; строка demand_coverage = заказ.
+   5. Фолбэки подписаны источником; под фильтрами — загруженная выборка.
+   6. DQ-проверки: единый total/статусы, точная невязка и отдельная проверка
+      гранулярности demand_coverage относительно заказов плана.
    7. Охват графиков (задача владельца 2026-10-06): водопад по умолчанию в
       режиме «Все заказы» и имеет два положения; у остальных графиков с
       охватом три положения — «План продаж» (умолчание), «Все заказы» и
@@ -194,7 +195,7 @@ test('водопад по заказам: те же столбцы, шаги с�
 
   const wf = JSON.parse(ctx.ev('(function(){return JSON.stringify(dmOrderWaterfall(covBasis(fOrders()).ord).map(b=>[b.k,b.v]))})()'));
   assert.deepEqual(wf.map((x) => x[0]), [
-    'Неограниченный спрос', 'Заказов 100% не покрыто', 'Заказов в оптимизации',
+    'Всего заказов неограниченного спроса', 'Заказов 100% не покрыто', 'Всего покрыто',
     'План продаж', 'Отгружено с опозданием', 'В срок',
   ], 'дефицит объединён с планом продаж');
   assert.deepEqual(wf.map((x) => x[1]), [100, -30, 70, 70, -6, 64], 'значения — счёт заказов');
@@ -342,20 +343,86 @@ test('фолбэки счёта заказов: marking_demand без счётч
   ctx.ev("clearF();render();undefined");
 });
 
-test('DQ: разбиение заказов сходится, строка demand_coverage = заказу', async (t) => {
+test('DQ: единый счёт заказов, точное разбиение и отдельная гранулярность demand_coverage', async (t) => {
   const ctx = await loadCH(true);
   t.after(ctx.close);
   await ctx.goTab('data');
 
   const checks = [...ctx.document.querySelectorAll('#q3 .dq')].map((x) => clean(x.textContent));
-  const cls = checks.find((x) => /Заказы: классификация/.test(x));
-  assert.ok(cls, 'проверка классификации заказов есть');
-  assert.match(cls, /100% не покрыто 30 \+ частично покрыто 20 \+ полностью покрыто 50/, 'группы названы числами');
+  const cls = checks.find((x) => /Заказы: полный счёт и статусы/.test(x));
+  assert.ok(cls, 'единая проверка total и статусов есть');
+  assert.match(cls, /Всего \(demand_coverage\) — 100/, 'без PG total fallback явно подписан');
+  assert.match(cls, /полностью 50 \+ частично 20 \+ 100% не покрыто 30 = 100/, 'группы названы числами');
+  assert.match(cls, /Невязка 0/, 'точное тождество сходится');
   assert.ok(!/⚠/.test(cls), 'разбиение сходится');
 
-  const row = checks.find((x) => /Заказы: строка = заказ/.test(x));
-  assert.ok(row, 'проверка «строка = заказ» есть');
-  assert.match(row, /100 строк = 90 заказов плана \+ 10 вне плана/, 'два независимых расчёта сошлись');
+  const row = checks.find((x) => /Заказы: строка coverage = заказ/.test(x));
+  assert.ok(row, 'отдельная проверка гранулярности «строка = заказ» есть');
+  assert.match(row, /100 строк против 90 заказов плана/, 'строки coverage сопоставлены с заказами плана');
+});
+
+
+test('DQ: независимый total и статусы сверяются точно, расхождение показано без округления', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  await ctx.goTab('data');
+  ctx.ev(`(function(){
+    const T=DS.agg.totals;
+    T.independentOrderCountSource='independent_demand';
+    T.independentOrderCount=95;
+    T.orderSource='independent_demand';
+    T.orderStatusSource='independent_demand × marking_demand';
+    T.orderStats={total:95,fullyUncoveredOrders:30,partiallyCoveredOrders:20,
+      fullyCoveredOrders:50,coveredOrders:70,delta:-5,source:'independent_demand × marking_demand'};
+    render();
+  })()`);
+  await settle(250);
+  const checks=[...ctx.document.querySelectorAll('#q3 .dq')].map(x=>clean(x.textContent));
+  const row=checks.find(x=>/Заказы: полный счёт и статусы/.test(x));
+  assert.ok(row,'единая сверка total и статусов есть');
+  assert.match(row,/Всего \(independent_demand\) — 95/);
+  assert.match(row,/полностью 50 \+ частично 20 \+ 100% не покрыто 30 = 100/);
+  assert.match(row,/Невязка -5/,'точная целочисленная разница сохранена');
+  assert.match(row,/Критично/,'расхождение помечено как критическое');
+  const coverage=checks.find(x=>/Заказы: строки demand_coverage/.test(x));
+  assert.match(coverage,/100 строк demand_coverage разложены/,
+    'проверка исходного числа строк coverage не перезаписана independent total');
+});
+
+
+test('локальный snap/tabVS: independent_demand сохраняет точный ноль, недоступное остаётся «—»', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  ctx.ev(`(function(){
+    const T=DS.agg.totals;
+    T.independentOrderCountSource='independent_demand';
+    T.independentOrderCount=0;
+    T.orderSource='independent_demand';
+    T.orderStats={total:0,fullyUncoveredOrders:0,partiallyCoveredOrders:0,
+      fullyCoveredOrders:0,lateOrdersAll:0,lateFullyCoveredOrders:0,lateFromIndependent:0,
+      source:'independent_demand × marking_demand'};
+    const a=snap(DS);a.name='Точная нулевая версия';
+    delete T.independentOrderCountSource;delete T.independentOrderCount;delete T.orderSource;delete T.orderStats;
+    const b=snap(DS);b.name='Версия без независимого счётчика';
+    localStorage.setItem('sop_vers',JSON.stringify([a]));
+    sessionStorage.removeItem('vA');sessionStorage.removeItem('vB');
+  })()`);
+  await ctx.goTab('vs');
+
+  const row=(name)=>{
+    const tr=[...ctx.document.querySelectorAll('#v3 tbody tr')]
+      .find(r=>clean(r.querySelector('td')?.textContent)===name);
+    assert.ok(tr,`строка «${name}» есть в локальном сравнении`);
+    return [...tr.querySelectorAll('td')].map(td=>clean(td.textContent));
+  };
+  const total=row('Заказов неограниченного спроса (independent_demand)');
+  assert.equal(total[1],'0','известный точный ноль остаётся нулём');
+  assert.equal(total[2],'—','отсутствующий independent_demand total отображается как «—»');
+  const mismatch=row('Невязка заказов (должна быть 0)');
+  assert.equal(mismatch[1],'0','нулевая проверенная невязка остаётся нулём');
+  assert.equal(mismatch[2],'—','невязка без total недоступна, не подменена нулём');
+  assert.match(clean(ctx.document.querySelector('#main')?.textContent||''),/проверено 1 из 2 версий/,
+    'подпись сообщает полноту проверки');
 });
 
 test('стадия заказа считается по правилам demand_coverage на данных marking_demand', async (t) => {

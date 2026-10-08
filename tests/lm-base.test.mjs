@@ -343,8 +343,8 @@ test('свод спроса: все тождества сходятся и по�
     assert.ok(close(left, right, 0.005), `тождество заказов не сходится: ${left} против ${right}`);
     assert.match(cells[3].textContent, /сходится/, 'статус тождества заказов — «сходится»');
   });
-  assert.match(rows.map((r) => r.textContent).join(' | '), /Всего заказов = 100% не покрыто \+ частично \+ полностью/,
-    'тождество разбиения заказов показано');
+  assert.match(rows.map((r) => r.textContent).join(' | '), /Всего заказов \([^)]*\) = полностью \+ частично \+ 100% не покрыто/,
+    'тождество разбиения заказов показано с фактическим источником счётчика');
   const moneyRow = rows.find((r) => /lostrevenue/i.test(r.textContent));
   assert.ok(moneyRow, 'денежная сверка с lostrevenue показана');
   assert.ok(parseBn(moneyRow.querySelectorAll('td')[1].textContent) > 0,
