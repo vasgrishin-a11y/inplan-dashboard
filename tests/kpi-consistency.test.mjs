@@ -185,9 +185,24 @@ test('«Общий» считает итоги в охвате цепочки с
   assert.equal(ctx.kpiVal('Маржа на тонну'), 5000000, 'маржа на тонну 20 млрд / 4000 т');
 
   /* было: 90,0% по выборке — стало: 80,0%, как на вкладке «Спрос и покрытие» */
-  assert.equal(ctx.card('Service Level').v, '80,0%', 'Service Level — 4000 из 5000 т');
-  assert.equal(ctx.card('Service Level').s, '4 000 из 5 000 т', 'подпись в том же охвате');
+  assert.equal(ctx.card('Покрытие спроса').v, '80,0%', 'Покрытие спроса — 4000 из 5000 т');
+  assert.equal(ctx.card('Покрытие спроса').s, '4 000 из 5 000 т', 'подпись в том же охвате');
   assert.match(ctx.card('Валовая выручка').s, /агрегат всей схемы/, 'охват назван явно');
+});
+
+test('«Общий»: карточки покрытия и OTIF используют новые названия и сохраняют подсказки', async (t) => {
+  const ctx = await loadCH();
+  t.after(ctx.close);
+  await ctx.goTab('ov');
+
+  assert.ok(ctx.kpi('Покрытие спроса'), 'карточка Service Level переименована');
+  assert.ok(ctx.kpi('IBP OTIF'), 'карточка OTIF переименована');
+  assert.equal(ctx.kpi('Service Level'), undefined, 'старое название Service Level не осталось в «Общем»');
+  assert.equal(ctx.kpi('OTIF Service Level'), undefined, 'старое название OTIF не осталось в «Общем»');
+  assert.match(ctx.kpi('Покрытие спроса').querySelector('[data-help]').dataset.help, /Σ sal \/ Σ dem/,
+    'формула покрытия спроса сохранена');
+  assert.match(ctx.kpi('IBP OTIF').querySelector('[data-help]').dataset.help, /полностью покрытые/,
+    'формула IBP OTIF сохранена');
 });
 
 test('Service Level и дефицит одинаковы на «Общем» и в «Спросе и покрытии»', async (t) => {
@@ -197,7 +212,7 @@ test('Service Level и дефицит одинаковы на «Общем» и 
   await ctx.goTab('ov');
   /* 2026-10-05: «Не покрыто всего» удалена из «Общего», «Упущенная маржа» и
      «Упущенная выручка» объединены в одну карточку */
-  const ov = { sl: ctx.card('Service Level').v, lm: ctx.kpiVal('Упущенная маржа и выручка') };
+  const ov = { sl: ctx.card('Покрытие спроса').v, lm: ctx.kpiVal('Упущенная маржа и выручка') };
   await ctx.goTab('dm');
   const dm = { sl: ctx.card('План продаж').s, gap: ctx.kpiVal('Не покрыто всего'), lm: ctx.kpiVal('Упущенная маржа'),
     mrg: ctx.card('Маржинальность продаж') };
@@ -218,7 +233,7 @@ test('Service Level и дефицит одинаковы на «Общем» и 
   assert.equal(V.gap, dm.gap, '«Не покрыто всего» — агрегат схемы');
 });
 
-test('упущенная выручка и «Заказов выполнено» берут объём из того же охвата', async (t) => {
+test('упущенная выручка в том же охвате; без разбивки заказов KPI показывает «—»', async (t) => {
   const ctx = await loadCH();
   t.after(ctx.close);
   await ctx.goTab('ov');
@@ -231,11 +246,10 @@ test('упущенная выручка и «Заказов выполнено»
   const merged = ctx.card('Упущенная маржа и выручка');
   assert.match(clean(merged.s), /упущенная выручка 10,80 млрд/, 'упущенная выручка = ставка × непокрытый объём схемы');
 
-  /* было «0 из 2» — считались только загруженные заказы.
-     2026-10-05: счёт — по классификации заказов (demand_coverage → marking_demand):
-     фолбэком служит агрегат countIf(unm <= 1e-9) */
-  assert.equal(ctx.card('Заказов выполнено').v, '3 из 8', 'из агрегата заказов схемы');
-  assert.equal(ctx.card('Заказов выполнено').s, '37,5% портфеля', 'доля от всех заказов схемы');
+  /* Total из marking_demand доступен, но полная классификация статусов в этом
+     mock не передана — KPI не должен выводить старое частичное countIf как итог. */
+  assert.equal(ctx.card('Заказов выполнено').v, '—', 'без полного набора статусов значение недоступно');
+  assert.equal(ctx.card('Заказов выполнено').s, 'нет полной разбивки заказов', 'причина недоступности названа');
 });
 
 test('снапшот версии описывает план целиком, а не верхушку портфеля', async (t) => {

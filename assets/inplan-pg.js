@@ -409,11 +409,11 @@ PGX.problem = function(){
 /* Числа в ответе обычно уже JSON-number: server.js нормализует PG numeric.
    Но совместимый/старый прокси может вернуть numeric строкой, в том числе с
    десятичной запятой. Не превращаем такое значение в ноль на границе API. */
-function apiNumber(value){
-  if(typeof value === 'number') return Number.isFinite(value)?value:0;
-  if(value===undefined || value===null) return 0;
+function apiNumberOrNull(value){
+  if(typeof value === 'number') return Number.isFinite(value)?value:null;
+  if(value===undefined || value===null) return null;
   let s=String(value).trim().replace(/[\s\u00a0\u202f]/g,'');
-  if(!s) return 0;
+  if(!s) return null;
   const comma=s.lastIndexOf(','), dot=s.lastIndexOf('.');
   if(comma>=0 && dot>=0){
     if(comma>dot) s=s.replace(/\./g,'').replace(',','.');
@@ -423,7 +423,11 @@ function apiNumber(value){
     s=p.length===2 && p[1].length<=2 ? p[0]+'.'+p[1] : s.replace(/,/g,'');
   }
   const n=Number(s);
-  return Number.isFinite(n)?n:0;
+  return Number.isFinite(n)?n:null;
+}
+function apiNumber(value){
+  const n=apiNumberOrNull(value);
+  return n===null?0:n;
 }
 /* Агрегат неограниченного спроса версии: {demUnc, n, periods:[{k,demUnc}], schema}.
    Бросает ошибку — вызывающий (loadVersionAgg) перейдёт к следующему источнику. */
@@ -442,7 +446,9 @@ PGX.uncFor = async function(db, gran){
     throw e;
   }
   PGX.state.lastDataError = null;
-  return { demUnc:apiNumber(r.demUnc), n:Math.max(0,Math.trunc(apiNumber(r.n))),
+  const orderCount=apiNumberOrNull(r.n);
+  return { demUnc:apiNumber(r.demUnc), n:orderCount===null?0:Math.max(0,Math.trunc(orderCount)),
+           countAvailable:orderCount!==null,
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:apiNumber(p.demUnc)})),
            /* Построчный вход нужен для полного реестра RCA. Старый backend
               может не прислать orders — тогда загрузчик сохранит прежний

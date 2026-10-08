@@ -266,9 +266,9 @@ test('Service Level считается в том же охвате, что и ц
 
   await ctx.goTab('ov');
   /* 2026-10-05: карточка «Не покрыто всего» из «Общего» удалена (осталась в «Спросе
-     и покрытии»); согласованность вкладок проверяем по Service Level того же охвата */
-  const sl = ctx.kpi('Service Level');
-  assert.ok(sl, 'карточка Service Level есть');
+     и покрытии»); метрика Service Level теперь названа «Покрытие спроса». */
+  const sl = ctx.kpi('Покрытие спроса');
+  assert.ok(sl, 'карточка «Покрытие спроса» есть');
   assert.equal(sl.querySelector('.v').textContent.trim(), '90,0%',
     '«Общий» согласован с «Спросом и покрытием»: SL в охвате схемы');
   assert.match(sl.querySelector('.s').textContent, /4.500 из 5.000 т/, 'подпись в том же охвате схемы');
