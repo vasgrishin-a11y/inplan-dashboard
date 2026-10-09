@@ -187,8 +187,11 @@ test('неограниченный спрос = Σ demandqty (independent_demand
   const deficitRowShown = [...ctx.document.querySelectorAll('#vsMat table tbody tr')].some(
     (x) => ((x.querySelector('td') || {}).textContent || '').trim().startsWith('Дефицит плана'));
   assert.equal(deficitRowShown, false, 'строки «Дефицит плана» в матрице нет');
-  assert.equal(ctx.vsRow('Покрытый спрос, т'), 950, 'покрытие — demand_coverage');
-  assert.equal(ctx.vsRow('Непокрытый спрос, т'), 250, 'непокрытый объём — demand_coverage');
+  assert.equal(ctx.vsRow('Покрытый спрос, т'), 950, 'покрытый объём — demand_coverage');
+  assert.equal(ctx.vsRow('Непокрытый спрос, т'), 600,
+    'итог непокрытого спроса совпадает с карточкой: 1500 independent_demand − 900 продаж');
+  assert.equal(ctx.vsRow('Непокрытый спрос по demand_coverage, т'), 250,
+    'сырой unfullfilleddemandqty сохранён отдельной строкой');
   assert.equal(ctx.vsRow('Заказов (неогр. спрос)'), 15,
     'total заказов — independent_demand.n, не число строк demand_coverage');
 
