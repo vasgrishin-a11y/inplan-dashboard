@@ -2037,13 +2037,12 @@ const VS_METRICS = [
   ['ordCheck','Невязка заказов (должна быть 0)',0,v=>v==null?'—':nf(v),'сверка счёта'],
   ['demLim','Покрытый спрос, т',0,v=>v==null?'—':nf(v),'demand_coverage'],
   ['gapTotal','Непокрытый спрос, т',-1,v=>nf(v),'independent_demand − marking_demand'],
-  ['covUf','Непокрытый спрос по demand_coverage, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
   ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
   ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
   ['planLogistics','План логистики, т',0,v=>nf(v,1),'marking_demand · movement + stock'],
   ['planProcurement','План закупки сырья, т',0,v=>nf(v,1),'marking_demand · procurement'],
-  ['sl','Service Level',1,pc,'marking_demand'],
+  ['sl','Покрытие спроса',1,pc,'marking_demand'],
   ['late','Отгружено с опозданием, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   ['lm','Упущенная маржа по дефициту плана (база: маржа/т заказа)',-1,bn,'marking_demand'],
   ['penNonDel','Штраф за непоставку',-1,bn,'demand_cost × demand_coverage'],
@@ -2150,8 +2149,7 @@ function vsFlat(v){
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
     demUnc, demPlan, demLim:covOk?ff:null, sal, unm,
     gapTotal, gapSrc,
-    covUf:covOk?uf:null,
-    /* Service Level совпадает с covBasis(): Σ results_sale / Σ demand_volume. */
+    /* «Покрытие спроса» (карточка «Общий») совпадает с covBasis(): Σ results_sale / Σ demand_volume. */
     sl: demPlan?sal/demPlan:0,
     late:lateIndependentKnown?num(stats.lateFromIndependent)
       :lateCoverageKnown?num(cov.late):null,
@@ -2212,7 +2210,7 @@ CHX.tabVS = function(){
     ['Лидер по марже',
       (rows.slice().sort((a,b)=>b.mar-a.mar)[0]||{}).label||'—',
       bn((rows.slice().sort((a,b)=>b.mar-a.mar)[0]||{}).mar||0), 'pos'],
-    ['Лидер по Service Level',
+    ['Лидер по покрытию спроса',
       (rows.slice().sort((a,b)=>b.sl-a.sl)[0]||{}).label||'—',
       pc((rows.slice().sort((a,b)=>b.sl-a.sl)[0]||{}).sl||0), 'pos'],
     ['Разброс маржи',
@@ -2367,7 +2365,7 @@ CHX.tabVS = function(){
 
     /* ── Профиль: нормировка к лучшей версии ── */
     if(VS_VIEW==='profile'){
-      const rdef = [['mar','Валовая маржа',1,bn],['sl','Service Level',1,pc],
+      const rdef = [['mar','Валовая маржа',1,bn],['sl','Покрытие спроса',1,pc],
         ['mpt','Маржа/т',1,v=>nf(v)+' ₽'],['capUtil','Загрузка мощностей',1,pc],
         ['unm','Дефицит',-1,v=>nf(v)+' т'],['penNonDel','Штрафы',-1,bn],['mv','Логистика',-1,bn]];
       const raxes = rdef.map(([k,name,dir,fmt])=>{
@@ -2379,7 +2377,7 @@ CHX.tabVS = function(){
         rows.slice(0,6).map((r,i)=>({name:r.label,c:PAL[i%PAL.length],
           vals:raxes.map(ax=>ax.norm[i]),raw:raxes.map(ax=>ax.vOf(r))})));
       const keys = ['mar','sl','mpt','capUtil'];
-      const names = ['Маржа','Service Level','Маржа/т','Загрузка мощностей'];
+      const names = ['Маржа','Покрытие спроса','Маржа/т','Загрузка мощностей'];
       const inv = ['unm','penNonDel','mv'];
       const invNames = ['Дефицит (инв.)','Штрафы (инв.)','Логистика (инв.)'];
       const allK = keys.concat(inv), allN = names.concat(invNames);
@@ -2456,7 +2454,7 @@ CHX.tabVS = function(){
 
   /* ── Вердикт по блокам для N версий ── */
   const blocks = [
-    ['Финансы (маржа)','mar',1], ['Спрос (Service Level)','sl',1],
+    ['Финансы (маржа)','mar',1], ['Спрос (покрытие спроса)','sl',1],
     ['Дефицит','unm',-1], ['Штрафы','penNonDel',-1],
     ['Логистика','mv',-1], ['Производство','pd',-1],
     ['Закупки','pcst',-1], ['Загрузка мощностей','capUtil',1]
@@ -2479,8 +2477,8 @@ CHX.tabVS = function(){
         ? `Версия <span class="h">${esc(rank[0][0])}</span> доминирует. Перед принятием проверьте,
            не достигнут ли результат за счёт роста штрафов или нереалистичной загрузки мощностей.`
         : `Явного лидера нет — версии выигрывают в разных блоках. Решение принимать по приоритетному
-           блоку: обычно маржа, затем Service Level.`,
-      `Если маржа выросла, а Service Level упал — это перераспределение объёма в пользу дорогих позиций;
+           блоку: обычно маржа, затем покрытие спроса.`,
+      `Если маржа выросла, а покрытие спроса упало — это перераспределение объёма в пользу дорогих позиций;
        смотрите разрез «Клиент» на тепловой карте.`,
       `Если снизилась логистика, но выросло хранение — затраты переехали между статьями,
        сравнивайте сумму блоков, а не отдельные строки.`

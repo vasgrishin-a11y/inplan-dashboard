@@ -4,7 +4,7 @@
 
    - Неограниченный спрос: Σ demandqty из PostgreSQL independent_demand.
    - Плановая цепочка: demand_volume / results_sale / unsatisfied_demand,
-     Service Level = results_sale / demand_volume — marking_demand.
+     «Покрытие спроса» (как карточка «Общий») = results_sale / demand_volume — marking_demand.
    - «Непокрытый спрос» в матрице = карточка «Не покрыто всего»:
      max(0, Σ demandqty independent_demand − Σ results_sale marking_demand).
    - Сырые покрытый / непокрытый итоги demand_coverage остаются отдельными строками.
@@ -251,7 +251,6 @@ test('источники спроса: вход и план из своих та
   const sales = ctx.row('План продаж, т');
   const coveredTons = ctx.row('Покрытый спрос, т');
   const uncoveredTons = ctx.row('Непокрытый спрос, т');
-  const coverageUncoveredTons = ctx.row('Непокрытый спрос по demand_coverage, т');
 
   assert.equal(unlimited.base, 1300, 'неограниченный спрос = Σ demandqty из independent_demand');
   assert.equal(plan.base, 1000, 'ограниченный спрос (план) = Σ demand_volume из marking_demand');
@@ -259,7 +258,8 @@ test('источники спроса: вход и план из своих та
   assert.equal(ctx.hasRow('Дефицит плана, т'), false, 'строки «Дефицит плана» в матрице нет');
   assert.equal(coveredTons.base, 950, 'покрытый спрос отдельно из demand_coverage');
   assert.equal(uncoveredTons.base, 400, 'непокрытый спрос в сравнении = 1300 independent_demand − 900 results_sale');
-  assert.equal(coverageUncoveredTons.base, 250, 'сырой unfullfilleddemandqty доступен отдельно из demand_coverage');
+  assert.equal(ctx.hasRow('Непокрытый спрос по demand_coverage, т'), false,
+    'сырая строка «Непокрытый спрос по demand_coverage» убрана из сравнения версий');
   assert.equal(sales.base + uncoveredTons.base, unlimited.base,
     'сумма плана продаж и непокрытого спроса совпадает с карточкой «Не покрыто всего»');
 
@@ -280,15 +280,13 @@ test('источники спроса: вход и план из своих та
     [unlimited, 'independent_demand'], [plan, 'marking_demand'], [sales, 'marking_demand'],
     [coveredTons, 'demand_coverage'],
     [uncoveredTons, 'independent_demand − marking_demand'],
-    [coverageUncoveredTons, 'demand_coverage'],
   ]) assert.equal(metric.src, source, `источник ${source} подписан`);
 
   const matrixCard = ctx.document.querySelector('#vsMat')?.closest('.card');
   assert.ok(matrixCard, 'карточка матрицы показателей отображается');
   assert.equal(matrixCard.querySelectorAll('.sub').length, 0,
     'описательные абзацы под заголовком матрицы убраны');
-  assert.notEqual(coveredTons.base + coverageUncoveredTons.base, unlimited.base,
-    'сырые суммы demand_coverage остаются отдельным срезом входа');
+  assert.ok(coveredTons.base < unlimited.base, 'покрытый объём demand_coverage остаётся отдельным срезом входа');
 });
 
 
@@ -322,17 +320,20 @@ test('независимый счётчик: точный ноль виден, �
     'невязка без второй стороны недоступна');
 });
 
-test('план и затраты не затронуты: отгрузка, Service Level и маржа — из marking_demand', async (t) => {
+test('план и затраты не затронуты: отгрузка, покрытие спроса и маржа — из marking_demand', async (t) => {
   const ctx = await openVS(null, null);
   t.after(ctx.close);
 
   assert.equal(ctx.row('План продаж, т').base, 900, 'results_sale');
   assert.equal(ctx.hasRow('Заказов в marking_demand'), false, 'строки «Заказов в marking_demand» в матрице нет');
-  /* SL = отгружено / принято в план = 900/1000 = 90%, а не 950/1200 и не 900/1300 */
+  /* покрытие спроса = отгружено / принято в план = 900/1000 = 90%, а не 950/1200 и не 900/1300 */
   const sl = ctx.document.querySelectorAll('#vsMat table tbody tr');
-  const slRow = [...sl].find((x) => x.querySelector('td').textContent.trim().startsWith('Service Level'));
+  assert.equal([...sl].some((x) => x.querySelector('td').textContent.trim().startsWith('Service Level')), false,
+    'строки «Service Level» в сравнении версий больше нет');
+  const slRow = [...sl].find((x) => x.querySelector('td').textContent.trim().startsWith('Покрытие спроса'));
+  assert.ok(slRow, 'строка «Покрытие спроса» на месте Service Level');
   assert.match(slRow.querySelectorAll('td')[1].textContent, /90,0%/,
-    'Service Level остаётся на базе плана marking_demand (900/1000)');
+    'покрытие спроса остаётся на базе плана marking_demand (900/1000)');
 });
 
 test('объёмные планы считаются отдельно по версиям: логистика = перемещения + хранение', async (t) => {
@@ -382,7 +383,7 @@ test('если demand_coverage у версии недоступна — total ga
   assert.equal(plan.base, 1000, 'плановый спрос берётся из marking_demand');
   assert.equal(covered.base, null, 'недоступный demand_coverage не маскируется нулём');
   assert.equal(uncovered.base, 400, 'итог непокрытого спроса доступен по independent_demand − marking_demand');
-  assert.equal(ctx.row('Непокрытый спрос по demand_coverage, т').base, null,
+  assert.equal(ctx.hasRow('Непокрытый спрос по demand_coverage, т'), false,
     'сырой итог demand_coverage остаётся неизвестным, если таблица недоступна');
   assert.equal(covered.other, 950, 'у второй версии с покрытием показатель доступен');
   assert.equal(uncovered.other, 400, 'у второй версии total gap = independent_demand − продажи');
@@ -396,7 +397,7 @@ test('если нет independent_demand и demand_coverage — total gap воз
 
   assert.equal(ctx.row('Непокрытый спрос, т').base, 100,
     'когда входная и coverage-базы недоступны, gap равен Σ unsatisfied_demand');
-  assert.equal(ctx.row('Непокрытый спрос по demand_coverage, т').base, null,
+  assert.equal(ctx.hasRow('Непокрытый спрос по demand_coverage, т'), false,
     'сырой unfullfilleddemandqty без demand_coverage недоступен');
   assert.equal(ctx.hasRow('Неудовлетворённый спрос, т'), false,
     'отдельную строку дефицита плана не возвращаем в матрицу');
@@ -449,7 +450,7 @@ test('матрица: строки в заданном порядке — зак
   ], 'после «План продаж, т» — заказы от общего к частному');
 
   for (const name of ['Покрытый спрос, т', 'Непокрытый спрос, т',
-    'Непокрытый спрос по demand_coverage, т', 'Service Level', 'Отгружено с опозданием, т', 'Плановый ФРВ, ч'])
+    'Покрытие спроса', 'Отгружено с опозданием, т', 'Плановый ФРВ, ч'])
     assert.ok(names.includes(name), `строка «${name}» на месте`);
 
   /* по умолчанию таблица не сортируется по алфавиту (раньше сортировалась) */
