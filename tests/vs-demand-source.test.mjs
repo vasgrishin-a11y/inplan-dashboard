@@ -5,8 +5,9 @@
    - Неограниченный спрос: Σ demandqty из PostgreSQL independent_demand.
    - Плановая цепочка: demand_volume / results_sale / unsatisfied_demand,
      Service Level = results_sale / demand_volume — marking_demand.
-   - Покрытый / непокрытый спрос — fullfilleddemandqty /
-     unfullfilleddemandqty из demand_coverage (отдельный срез, не план).
+   - «Непокрытый спрос» в матрице = карточка «Не покрыто всего»:
+     max(0, Σ demandqty independent_demand − Σ results_sale marking_demand).
+   - Сырые покрытый / непокрытый итоги demand_coverage остаются отдельными строками.
    - Заказов всего — точный independent_demand.n, не число строк
      demand_coverage. Статусы и невязка показываются отдельно; недоступное —
      «—», известный ноль — «0».
@@ -132,7 +133,6 @@ function makeRoute(noCovFor, chOptions = {}) {
 }
 
 const settle = (ms = 80) => new Promise((r) => setTimeout(r, ms));
-const clean = (s) => String(s).replace(/\u00a0|\u202f/g,' ').replace(/\s+/g,' ').trim();
 async function waitFor(fn, timeout, label) {
   const t0 = Date.now();
   while (Date.now() - t0 < (timeout || 10000)) {
@@ -251,13 +251,17 @@ test('источники спроса: вход и план из своих та
   const sales = ctx.row('План продаж, т');
   const coveredTons = ctx.row('Покрытый спрос, т');
   const uncoveredTons = ctx.row('Непокрытый спрос, т');
+  const coverageUncoveredTons = ctx.row('Непокрытый спрос по demand_coverage, т');
 
   assert.equal(unlimited.base, 1300, 'неограниченный спрос = Σ demandqty из independent_demand');
   assert.equal(plan.base, 1000, 'ограниченный спрос (план) = Σ demand_volume из marking_demand');
   assert.equal(sales.base, 900, 'план продаж = Σ results_sale из marking_demand');
   assert.equal(ctx.hasRow('Дефицит плана, т'), false, 'строки «Дефицит плана» в матрице нет');
   assert.equal(coveredTons.base, 950, 'покрытый спрос отдельно из demand_coverage');
-  assert.equal(uncoveredTons.base, 250, 'непокрытый спрос отдельно из demand_coverage');
+  assert.equal(uncoveredTons.base, 400, 'непокрытый спрос в сравнении = 1300 independent_demand − 900 results_sale');
+  assert.equal(coverageUncoveredTons.base, 250, 'сырой unfullfilleddemandqty доступен отдельно из demand_coverage');
+  assert.equal(sales.base + uncoveredTons.base, unlimited.base,
+    'сумма плана продаж и непокрытого спроса совпадает с карточкой «Не покрыто всего»');
 
   const orders = ctx.row('Заказов (неогр. спрос)');
   assert.equal(orders.base, 15, 'total заказов = independent_demand.n, не 100 строк coverage');
@@ -274,15 +278,17 @@ test('источники спроса: вход и план из своих та
 
   for (const [metric, source] of [
     [unlimited, 'independent_demand'], [plan, 'marking_demand'], [sales, 'marking_demand'],
-    [coveredTons, 'demand_coverage'], [uncoveredTons, 'demand_coverage'],
+    [coveredTons, 'demand_coverage'],
+    [uncoveredTons, 'independent_demand − marking_demand'],
+    [coverageUncoveredTons, 'demand_coverage'],
   ]) assert.equal(metric.src, source, `источник ${source} подписан`);
 
-  const note = clean([...ctx.document.querySelectorAll('#main .sub')].map(x=>x.textContent).join(' '));
-  assert.match(note, /Невязка счёта заказов/,
-    'методическая подпись показывает реальное расхождение total и статусов');
-  assert.match(note, /разница -85/);
-  assert.notEqual(coveredTons.base + uncoveredTons.base, unlimited.base,
-    'вход и выход прогона остаются разными показателями и не склеиваются');
+  const matrixCard = ctx.document.querySelector('#vsMat')?.closest('.card');
+  assert.ok(matrixCard, 'карточка матрицы показателей отображается');
+  assert.equal(matrixCard.querySelectorAll('.sub').length, 0,
+    'описательные абзацы под заголовком матрицы убраны');
+  assert.notEqual(coveredTons.base + coverageUncoveredTons.base, unlimited.base,
+    'сырые суммы demand_coverage остаются отдельным срезом входа');
 });
 
 
@@ -296,9 +302,6 @@ test('независимый счётчик: точный ноль виден, �
   t.after(missing.close);
   assert.equal(missing.row('Заказов (неогр. спрос)').base, null,
     'когда PG не вернул n, число строк demand_coverage не подставляется');
-  const missingNote = clean([...missing.document.querySelectorAll('#main .sub')].map(x=>x.textContent).join(' '));
-  assert.match(missingNote,/Точный счётчик independent_demand недоступен/,
-    'методическая заметка явно называет недоступный источник total');
   assert.equal(missing.row('Невязка заказов').base, null,
     'без total невязка недоступна, а не равна нулю');
   assert.equal(missing.row('Заказов всего покрыто').base, 70,
@@ -363,12 +366,9 @@ test('объёмные планы считаются отдельно по ве�
     assert.equal(actual.other, expected.byDb[other.id], `${label}: значение своей сравниваемой версии`);
   }
 
-  const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
-  assert.match(subs, /План логистики.*movement \+ stock/,
-    'в матрице раскрыто определение логистического объёма, не дублирующее строку перемещений');
 });
 
-test('если demand_coverage у версии недоступна — честный фолбэк ограниченного/неудовлетворённого на marking_demand', async (t) => {
+test('если demand_coverage у версии недоступна — total gap считается по independent_demand и плану, сырые показатели недоступны', async (t) => {
   /* у базовой версии (data_public_1) покрытия нет: запрос вернул нули.
      PostgreSQL при этом доступна — неограниченный спрос остаётся 1300. */
   const ctx = await openVS('data_public_1', null);
@@ -381,14 +381,25 @@ test('если demand_coverage у версии недоступна — чест
   assert.equal(unlimited.base, 1300, 'неограниченный спрос по-прежнему из PostgreSQL');
   assert.equal(plan.base, 1000, 'плановый спрос берётся из marking_demand');
   assert.equal(covered.base, null, 'недоступный demand_coverage не маскируется нулём');
-  assert.equal(uncovered.base, null, 'недоступный demand_coverage не маскируется нулём');
+  assert.equal(uncovered.base, 400, 'итог непокрытого спроса доступен по independent_demand − marking_demand');
+  assert.equal(ctx.row('Непокрытый спрос по demand_coverage, т').base, null,
+    'сырой итог demand_coverage остаётся неизвестным, если таблица недоступна');
   assert.equal(covered.other, 950, 'у второй версии с покрытием показатель доступен');
-  assert.equal(uncovered.other, 250, 'у второй версии с покрытием показатель доступен');
+  assert.equal(uncovered.other, 400, 'у второй версии total gap = independent_demand − продажи');
   assert.equal(unlimited.src, 'independent_demand', 'источник неограниченного спроса не менялся');
 
-  const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
-  assert.match(subs, /demand_coverage недоступна у версий/,
-    'подмена источника названа явно, а не спрятана');
+});
+
+test('если нет independent_demand и demand_coverage — total gap возвращается к дефициту плана', async (t) => {
+  const ctx = await openVS('data_public_1', 'noPG');
+  t.after(ctx.close);
+
+  assert.equal(ctx.row('Непокрытый спрос, т').base, 100,
+    'когда входная и coverage-базы недоступны, gap равен Σ unsatisfied_demand');
+  assert.equal(ctx.row('Непокрытый спрос по demand_coverage, т').base, null,
+    'сырой unfullfilleddemandqty без demand_coverage недоступен');
+  assert.equal(ctx.hasRow('Неудовлетворённый спрос, т'), false,
+    'отдельную строку дефицита плана не возвращаем в матрицу');
 });
 
 test('если в PostgreSQL таблицы у версии нет — фолбэк неограниченного спроса на покрытый + непокрытый с пометкой', async (t) => {
@@ -399,18 +410,17 @@ test('если в PostgreSQL таблицы у версии нет — фолб�
   const unlimited = ctx.row('Неограниченный спрос, т');
   assert.equal(unlimited.base, 1200, 'без PG-таблицы — покрытый 950 + непокрытый 250 из demand_coverage');
   assert.equal(unlimited.other, 1300, 'у версии с PG-таблицей — Σ demandqty');
+  const gap = ctx.row('Непокрытый спрос, т');
+  assert.equal(gap.base, 300, 'фолбэк gap = (950 + 250) из demand_coverage − 900 продаж');
+  assert.equal(gap.other, 400, 'основной gap = 1300 из independent_demand − 900 продаж');
+  assert.match(gap.src, /demand_coverage.*marking_demand/);
+  assert.match(gap.src, /independent_demand.*marking_demand/);
   const orderTotal = ctx.row('Заказов (неогр. спрос)');
   assert.equal(orderTotal.base, null, 'без точного independent_demand.n общее число заказов недоступно');
   assert.equal(orderTotal.other, 15, 'у версии с PG-таблицей показан независимый n');
   assert.equal(ctx.row('Невязка заказов').base, null, 'нет total — нет и невязки');
   assert.match(unlimited.src, /demand_coverage/, 'тег строки показывает фолбэк-базу');
   assert.match(unlimited.src, /independent_demand/, 'тег строки показывает и основную базу');
-
-  const subs = [...ctx.document.querySelectorAll('#main .card .sub')].map((x) => x.textContent).join(' ');
-  assert.match(subs, /independent_demand недоступен у версий/,
-    'недоступность независимого счётчика названа явно');
-  assert.match(subs, /строки demand_coverage не подставляются вместо независимого числа/,
-    'строка общего числа не заменена строками demand_coverage');
 
   const notes = ctx.window.CHX.versions.flatMap((v) => (v.agg && v.agg.notes) || []).join(' ');
   assert.match(notes, /PG: Схема «public_1»/, 'в заметках загрузки — конкретная ошибка PostgreSQL');
@@ -438,7 +448,8 @@ test('матрица: строки в заданном порядке — зак
     'Невязка заказов (должна быть 0)',
   ], 'после «План продаж, т» — заказы от общего к частному');
 
-  for (const name of ['Покрытый спрос, т', 'Непокрытый спрос, т', 'Service Level', 'Отгружено с опозданием, т', 'Плановый ФРВ, ч'])
+  for (const name of ['Покрытый спрос, т', 'Непокрытый спрос, т',
+    'Непокрытый спрос по demand_coverage, т', 'Service Level', 'Отгружено с опозданием, т', 'Плановый ФРВ, ч'])
     assert.ok(names.includes(name), `строка «${name}» на месте`);
 
   /* по умолчанию таблица не сортируется по алфавиту (раньше сортировалась) */

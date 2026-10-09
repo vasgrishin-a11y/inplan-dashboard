@@ -2013,9 +2013,9 @@ let VS_DIM  = 'period';   // period | product | client
 let VS_TARGET = null;     // версия для waterfall
 
 /* Метрики версии: [ключ, название, направление (1 лучше больше), формат, источник].
-   Источник — таблица ClickHouse, из которой реально считается строка: он выводится
-   тегом в матрице, чтобы входной спрос (independent_demand), покрытие
-   (demand_coverage) и план/затраты (marking_demand) нельзя было перепутать. */
+   Источник — таблица/формула, из которой реально считается строка: он выводится
+   тегом в матрице, чтобы входной спрос (independent_demand), итог «Не покрыто всего»
+   (independent_demand − marking_demand) и сырое покрытие (demand_coverage) не путались. */
 const VS_METRICS = [
   ['rev','Валовая выручка',1,bn,'marking_demand'],
   ['cost','Себестоимость',-1,bn,'marking_demand'],
@@ -2036,7 +2036,8 @@ const VS_METRICS = [
   ['ordFullUnc','Заказов 100% не покрыто',-1,v=>v==null?'—':nf(v),'independent_demand × marking_demand'],
   ['ordCheck','Невязка заказов (должна быть 0)',0,v=>v==null?'—':nf(v),'сверка счёта'],
   ['demLim','Покрытый спрос, т',0,v=>v==null?'—':nf(v),'demand_coverage'],
-  ['covUf','Непокрытый спрос, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
+  ['gapTotal','Непокрытый спрос, т',-1,v=>nf(v),'independent_demand − marking_demand'],
+  ['covUf','Непокрытый спрос по demand_coverage, т',-1,v=>v==null?'—':nf(v),'demand_coverage'],
   /* Объёмы операций, т: логистический контур дашборда включает movement и stock. */
   ['planProduction','План производства, т',0,v=>nf(v,1),'marking_demand · production'],
   ['planMovements','План перемещений, т',0,v=>nf(v,1),'marking_demand · movement'],
@@ -2064,10 +2065,13 @@ const VS_METRICS = [
      план продаж = Σ results_sale,
      дефицит плана = Σ unsatisfied_demand — всё из marking_demand;
      Service Level = results_sale / demand_volume.
-   Выходные суммы demand_coverage показаны отдельно и с однозначными именами:
-     покрытый = Σ fullfilleddemandqty, непокрытый = Σ unfullfilleddemandqty.
-   Они могут не совпасть с планом или входом; это сверка двух разных таблиц,
-   а не замена спроса/дефицита плана.
+   Строка «Непокрытый спрос» в матрице повторяет карточку «Не покрыто всего»:
+     max(0, Σ independent_demand.demandqty − Σ marking_demand.results_sale).
+   Если неограниченный вход недоступен, его база — покрытый + непокрытый из
+   demand_coverage; если и она нулевая/недоступна, используется дефицит плана.
+   Сырые итоги demand_coverage показаны отдельными строками: покрытый = Σ
+   fullfilleddemandqty, непокрытый = Σ unfullfilleddemandqty. Это отдельный срез,
+   который может не совпасть с total gap.
 
    Заказы: точный total — число строк backend `n` после той же DISTINCT-выборки
    independent_demand, что использована для Σ demandqty. Для классификации эта
@@ -2090,8 +2094,17 @@ function vsFlat(v){
   const covOk = t.covAvailable!==undefined ? !!t.covAvailable
     : (hasMetric(cov,'orderRows') || ff!==0 || uf!==0);
   const uncSrc = t.uncSrc || (covOk?'demand_coverage':'');
-  const uncDetail = t.uncDetail || '';
   const demPlan = num(t.dem);
+  const unm = num(t.unm);
+  /* Та же формула, что в covBasis() и карточке «Не покрыто всего»:
+     входной спрос − продажи плана; при отсутствии ненулевой базы — дефицит плана.
+     Входной источник уже выбран единообразно выше: independent_demand или
+     отмеченный фолбэк demand_coverage (покрытый + непокрытый). */
+  const gapTotal = demUnc>0 ? Math.max(0,demUnc-sal) : unm;
+  const gapSrc = demUnc>0
+    ? ((uncSrc==='independentdemand'||uncSrc==='independent_demand')
+      ? 'independent_demand − marking_demand' : 'demand_coverage − marking_demand')
+    : 'marking_demand';
 
   const stats=t.orderStats||null;
   const independentCountKnown=t.independentOrderCountSource==='independent_demand'
@@ -2131,11 +2144,12 @@ function vsFlat(v){
   const lateIndependentKnown=!!(stats&&hasMetric(stats,'lateFromIndependent'));
   const lateCoverageKnown=!!(covOk&&hasMetric(cov,'late'));
   return {
-    _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk, uncSrc, uncDetail,
+    _v:v, label:v.label, id:v.id, isBase:v.isBase, covOk, uncSrc,
     finSrc: t.finSrc||'marking_demand',
     revSrc: t.revSrc||t.finSrc||'marking_demand',
     rev, cost, mar, mrg: rev?mar/rev:0, mpt: sal?mar/sal:0,
-    demUnc, demPlan, demLim:covOk?ff:null, sal, unm:num(t.unm),
+    demUnc, demPlan, demLim:covOk?ff:null, sal, unm,
+    gapTotal, gapSrc,
     covUf:covOk?uf:null,
     /* Service Level совпадает с covBasis(): Σ results_sale / Σ demand_volume. */
     sl: demPlan?sal/demPlan:0,
@@ -2214,45 +2228,6 @@ CHX.tabVS = function(){
       gransMix ? 'mid' : '']
   ];
 
-  /* Источники и сверки объёмов/заказов указываем по фактической формуле,
-     а не по старым названиям строк. */
-  const covFb = rows.filter(r=>!r.covOk);
-  const uncFb = rows.filter(r=>r.uncSrc && r.uncSrc!=='independentdemand');
-  const orderFb = rows.filter(r=>r.orderTotalSrc!=='independent_demand');
-  const orderMismatch = rows.filter(r=>r.ordCheck!=null&&Math.abs(r.ordCheck)>0);
-  const uncDet = uq(rows.filter(r=>r.uncSrc==='independentdemand')
-    .map(r=>r.label+' ← '+r.uncDetail).filter(s=>!/ ← $/.test(s)),x=>x);
-  const orderMismatchNote = orderMismatch.length
-    ? `<span class="neg">Невязка счёта заказов:</span> ${orderMismatch.map(r=>
-        `${esc(r.label)} — всего ${nf(r.ordTotal)}, части ${nf(r.ordFullUnc+r.ordPart+r.ordFull)}, `+
-        `разница ${r.ordDelta>0?'+':''}${nf(r.ordDelta)}`).join('; ')}. Проверьте полноту PG-детализации и сшивку с планом.`
-    : '';
-  const covNote = [
-    `<b>Плановая цепочка (как в «Общем» и «Спросе и покрытии»):</b>
-      ограниченный спрос (план) = Σ <code>demand_volume</code>, план продаж = Σ <code>results_sale</code>,
-      дефицит плана = Σ <code>unsatisfied_demand</code> — <code>marking_demand</code>;
-      Service Level = продажи / план. Неограниченный спрос = Σ <code>demandqty</code> —
-      <code>independent_demand</code>${uncDet.length?` (схемы: ${esc(uncDet.join('; '))})`:''}.`,
-    `<b>Результат покрытия показан отдельно:</b> «Покрытый спрос» = Σ <code>fullfilleddemandqty</code>,
-      «Непокрытый спрос» = Σ <code>unfullfilleddemandqty</code>, оба из <code>demand_coverage</code>.
-      Это другой срез; он не подменяет план/дефицит и не обязан совпасть с входом.`,
-    `<b>Заказы:</b> всего — строки DISTINCT из <code>independent_demand</code>;
-      всего покрыто = полностью + частично; 100% не покрыто — непарные строки входа
-      или нулевая отгрузка. Невязка = всего − (полностью + частично + 100% не покрыто), ожидается 0.`,
-    orderFb.length
-      ? `<span class="neg">Точный счётчик independent_demand недоступен у версий: ${esc(orderFb.map(r=>r.label).join(', '))}</span>
-         — total в матрице показан как «—», строки demand_coverage не подставляются вместо независимого числа;
-         доступные статусы и невязка подписаны отдельно.` : '',
-    uncFb.length
-      ? `<span class="neg">independent_demand недоступна для объёма у версий: ${esc(uncFb.map(r=>r.label).join(', '))}</span>
-         — неограниченный спрос показан как покрытый + непокрытый из <code>demand_coverage</code>; вход между версиями не сопоставим.` : '',
-    covFb.length
-      ? `<span class="neg">demand_coverage недоступна у версий: ${esc(covFb.map(r=>r.label).join(', '))}</span>
-         — строки «Покрытый спрос», «Непокрытый спрос» и агрегат опозданий недоступны;
-         плановые значения остаются на <code>marking_demand</code>.` : '',
-    orderMismatchNote
-  ].filter(Boolean).join('<br>');
-
   const html = `
   <div class="frow">
     <div class="fg"><label>База сравнения</label>
@@ -2281,13 +2256,7 @@ CHX.tabVS = function(){
   <div class="grid">
     ${VS_VIEW==='matrix'?`
     <div class="card w"><h3>Матрица показателей: все версии</h3>
-      <div class="sub">Дельта считается к базе «${esc(base.label)}». Зелёный — улучшение с точки зрения бизнеса,
-        ★ — лучшая версия по строке. Тег у показателя — фактический источник.</div>
-      <div class="sub">Заказы идут от общего к частному: всего → покрыто (= полностью + частично) → полностью / частично → 100% не покрыто;
-        «Невязка заказов» должна быть 0.</div>
-      <div class="sub">Объёмы взяты из <code>marking_demand.order_operation_volume</code> по типам операций: production, movement и procurement;
-        «План логистики» = movement + stock (перемещения и хранение).</div>
-      <div class="sub">${covNote}</div><div id="vsMat"></div></div>`:''}
+      <div id="vsMat"></div></div>`:''}
     ${VS_VIEW==='profile'?`
     <div class="card w"><h3>Радар версий</h3>
       <div class="sub">Лучшее значение по каждой оси задаёт длину луча: наружу — сильнее.
@@ -2324,12 +2293,15 @@ CHX.tabVS = function(){
     if(VS_VIEW==='matrix'){
       const data = VS_METRICS.map(([k,name,dir,fmt,src])=>{
         const rec = {n:name, _k:k, _dir:dir, _fmt:fmt, _src:src, base:base[k]};
-        /* источник неограниченного спроса — фактический: если хоть одна версия
-           на фолбэке, тег показывает обе таблицы (подробности — в covNote) */
+        /* Источник неограниченного спроса — фактический: если версии используют
+           разные источники, тег показывает их оба. */
         if(k==='demUnc'){
           const srcName=s=>s==='independentdemand'?'independent_demand':s;
           const srcs=uq(rows.map(r=>srcName(r.uncSrc||'')).filter(Boolean),x=>x);
           rec._src=srcs.length?srcs.join(' + '):'нет источника';
+        }else if(k==='gapTotal'){
+          const srcs=uq(rows.map(r=>r.gapSrc).filter(Boolean),x=>x);
+          rec._src=srcs.length?srcs.join(' / '):'нет источника';
         }else if(k==='late'){
           const srcs=uq(rows.map(r=>r.lateSrc).filter(Boolean),x=>x);
           rec._src=srcs.length?srcs.join(' / '):'нет источника';

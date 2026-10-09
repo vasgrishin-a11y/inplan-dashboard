@@ -218,8 +218,10 @@ test('неограниченный спрос приходит из PostgreSQL �
   const cells = [...uncTr.querySelectorAll('td')].slice(1)
     .map((td) => toNum(td.textContent.split('(')[0]));
   assert.deepEqual(cells.slice(0, 2), [1500, 1700], 'обе версии читаются из своих PG-схем');
-  assert.match(d.getElementById('main').textContent, /PostgreSQL · public_1/,
-    'в сравнении версий подписана PG-схема каждой версии');
+  assert.equal(d.querySelector('#vsMat')?.closest('.card').querySelectorAll('.sub').length, 0,
+    'под матрицей нет пояснительного текста со схемами PostgreSQL');
+  assert.match(uncTr.querySelector('td').innerHTML, /independent_demand/,
+    'источник для строки остаётся в теге матрицы');
 
   /* DQ: сверка «определение» работает и на PG-источнике */
   await ctx.goTab('data');
