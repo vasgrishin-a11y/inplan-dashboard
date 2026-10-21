@@ -647,3 +647,54 @@ test('«Заказы спроса» использует номера, назв�
     assert.ok(rawHeaders.includes(h),`«Заказы спроса» содержит «${h}»`);
   }
 });
+
+test('водопад в режиме «Тонны»: «План продаж» = sal и образует лесенку столбиков с «Отгружено с опозданием» и «В срок»', async (t) => {
+  const ctx = await loadCH(true);
+  t.after(ctx.close);
+  await ctx.goTab('dm');
+
+  /* Захватываем items, передаваемые в chWaterfall('#d0', ...) в режиме «Тонны» */
+  const wf = JSON.parse(ctx.ev(`(function(){
+    let captured = null;
+    const orig = chWaterfall;
+    chWaterfall = function(id, h, items, fmt, tips, cb){
+      if(id === '#d0') captured = items.map((it, idx) => ({ ...it, tip: tips ? tips(idx) : '' }));
+      return orig.apply(this, arguments);
+    };
+    try {
+      const btn = document.querySelector('#d0mode [data-wfmode="tons"]');
+      if (btn) btn.click();
+      if (!captured && REDRAW['#d0']) REDRAW['#d0']();
+    } finally {
+      chWaterfall = orig;
+    }
+    return JSON.stringify(captured);
+  })()`));
+
+  assert.ok(Array.isArray(wf), 'водопад #d0 отрисован в режиме «Тонны»');
+  assert.deepEqual(wf.map((b) => [b.k, b.v, b.type]), [
+    ['Неограниченный спрос', 6000, 'total'],
+    ['Заказов 100% не покрыто', -1000, 'delta'],
+    ['Заказов в оптимизации', 5000, 'total'],
+    ['План продаж', 4000, 'total'],
+    ['Отгружено с опозданием', -200, 'delta'],
+    ['В срок', 3800, 'total'],
+  ], '«План продаж» отражает фактический объём продаж (sal = 4000 т), а не ограниченный спрос (5000 т)');
+
+  /* Проверяем геом. ступени (лесенку столбиков) так же, как их строит chWaterfall */
+  let lvl = 0;
+  const bars = wf.map((it) => {
+    if (it.type === 'total') { lvl = it.v; return { ...it, y0: 0, y1: it.v, after: it.v }; }
+    const y0 = lvl; lvl += it.v;
+    return { ...it, y0: Math.min(y0, lvl), y1: Math.max(y0, lvl), after: lvl };
+  });
+  assert.equal(bars[0].y1, 6000);
+  assert.equal(bars[1].y1, 6000);
+  assert.equal(bars[1].y0, 5000);
+  assert.equal(bars[2].y1, 5000, '«Заказов в оптимизации» продолжает уровень после «100% не покрыто»');
+  assert.ok(bars[3].y1 < bars[2].y1, '«План продаж» (4000 т) ниже «Заказов в оптимизации» (5000 т) на величину дефицита');
+  assert.equal(bars[4].y1, bars[3].y1, '«Отгружено с опозданием» начинается ровно от вершины «Плана продаж» (4000 т)');
+  assert.equal(bars[4].y0, bars[5].y1, 'нижний край «Отгружено с опозданием» (3800 т) совпадает с вершиной «В срок» (3800 т)');
+  assert.match(wf[3].tip, /Дефицит плана:\s*1[\s\u00a0]000 т/, 'в подсказке «Плана продаж» указан дефицит плана');
+});
+
