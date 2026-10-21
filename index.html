@@ -2938,8 +2938,12 @@ function chWaterfall(id,h,items,fmt,tips,cb){
         x.fillStyle=s.c||col;x.fillRect(bx,st,iw,Math.max(sb-st,s.v?2:0));
       });
     }else{x.fillStyle=col;x.fillRect(bx,top,iw,Math.max(bot-top,b.v?2:0))}
-    if(i<bars.length-1){const cy=Y(b.after);x.strokeStyle=CH.axis;x.lineWidth=1;x.setLineDash([3,3]);
-      x.beginPath();x.moveTo(bx+iw,cy);x.lineTo(bx+bw+(bw-iw)/2,cy);x.stroke();x.setLineDash([])}
+    if(i<bars.length-1){const nb=bars[i+1],cy=Y(b.after),ny=nb.type==='total'?Y(nb.y1):cy,nx=bx+bw+(bw-iw)/2;
+      x.strokeStyle=CH.axis;x.lineWidth=1;x.setLineDash([3,3]);
+      x.beginPath();x.moveTo(bx+iw,cy);
+      if(Math.abs(ny-cy)>1){const mx=(bx+iw+nx)/2;x.lineTo(mx,cy);x.lineTo(mx,ny);x.lineTo(nx,ny)}
+      else x.lineTo(nx,cy);
+      x.stroke();x.setLineDash([])}
     const txt=b.type==='total'?fmt(b.v):(b.v<0?'−':'+')+fmt(Math.abs(b.v));
     barLab(c,x,txt,bx+iw/2,top-4);
     reg(c,p.l+bw*i,p.t,bw,ph,tips?tips(i):`<b>${b.k}</b><br>${fmt(Math.abs(b.v))}`,cb?()=>cb(i):null)});
@@ -3853,10 +3857,7 @@ function tabDM(){
     if(useUnc&&includeUncovered)w.push({k:'Неограниченный спрос',v:demUnc,st:'all',type:'total',c:CH.d1},
       {k:'Заказов 100% не покрыто',v:-notPlanned,st:'fullUnc',type:'delta'});
     w.push({k:'Заказов в оптимизации',v:dem,st:'inOpt',type:'total',c:CH.d2},
-      {k:'План продаж',v:dem,st:'plan',type:'total',c:CH.d3,segments:[
-        {v:sal,c:CH.d3,t:'Выполнено'},
-        {v:unm,c:CH.warn,t:'Дефицит плана'}
-      ]});
+      {k:'План продаж',v:sal,st:'plan',type:'total',c:CH.d3});
     if(useUnc&&late!=null&&inTime!=null)w.push({k:'Отгружено с опозданием',v:-late,st:'late',type:'delta'},
       {k:'В срок',v:inTime,st:'intime',type:'total',c:CH.ok});
     return w;
@@ -3941,7 +3942,7 @@ function tabDM(){
   ${kpisHtml(K)}
   <div class="grid">
     <div class="card w"><h3>Водопад спроса: от неограниченного к отгрузке в срок</h3>
-      <div class="sub" id="d0sub">Тонны. В «Плане продаж» жёлтым показан дефицит, синим — выполненная часть. Клик по столбцу — фильтр RCA</div>
+      <div class="sub" id="d0sub">Тонны. Цепочка объёмов: от неограниченного спроса через план продаж к отгрузке в срок. Клик по столбцу — фильтр RCA</div>
       ${chartScopeHtml('d0',D,useUnc||ordDCready)}
       <div class="seg" id="d0mode" role="group" aria-label="Единица водопада: тонны или заказы" style="margin:2px 0 10px">
         <button type="button" class="btn" data-wfmode="tons">Тонны</button>
@@ -3980,7 +3981,7 @@ function tabDM(){
       const uncAvail=isOrd?ordDCready:useUnc;
       if(sub)sub.textContent=(isOrd
         ?'Заказы. «План продаж»: полностью выполненные + частично выполненные (жёлтый сегмент). Клик — фильтр RCA'
-        :'Тонны. «План продаж»: выполнено (синий) + дефицит (жёлтый). Клик — фильтр RCA')
+        :'Тонны. Цепочка объёмов: от неограниченного спроса через план продаж к отгрузке в срок. Клик — фильтр RCA')
         +(includeUncovered
           ?(uncAvail?' Показаны все заказы.':' Неограниченный спрос недоступен — водопад от ограниченного спроса.')
           :' 100% непокрытые заказы скрыты.')
@@ -4010,6 +4011,7 @@ function tabDM(){
           }else{
             tip+=`${nf(val)} т`;
             if(b.segments)tip+=b.segments.map(s=>`<br>${esc(s.t)}: ${nf(s.v)} т`).join('');
+            if(b.st==='plan'&&unm>0)tip+=`<br>Дефицит плана: ${nf(unm)} т`;
             if(b.type==='delta'&&demUnc>0)tip+=`<br>${pc(val/demUnc)} от неограниченного спроса`;
           }
           tip+=`<br>Клик — фильтр таблицы RCA`;
