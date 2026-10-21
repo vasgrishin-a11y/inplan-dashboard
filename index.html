@@ -739,7 +739,10 @@ details.src-fold .dq{margin:0}
 <script>
 /* ═══════════════ 1. ВСТРОЕННЫЕ ДЕМО-ДАННЫЕ ═══════════════ */
 const SEED={
- name:"Демо: run 19 / cfg 300 / ds 14",
+ /* Имя демонстрационного набора — то, что видно в шапке («Активная версия
+    Демо-набор: металлургия»). Технические хвосты прежнего имени
+    («run 19 / cfg 300 / ds 14») убраны: этого требовал владелец. */
+ name:"Демо-набор: металлургия",
  orders:[
   {id:1,p:0,d:"2026-04",loc:"Sale_RU_3",prod:"FPRL_5",cl:"Роснефть",dem:10000,sal:3348.6,unm:6651.4,price:5562900,cpt:154383.18,mpt:5408516.82,rev:18627923755,cost:516967429,mar:18110956326,dt:2},
   {id:2,p:0,d:"2026-04",loc:"Sale_EX_2",prod:"FPSO_1",cl:"Вьетнам",dem:10000,sal:10000,unm:0,price:696500,cpt:107532.29,mpt:588967.71,rev:6965000000,cost:1075322865,mar:5889677135,dt:2},
@@ -952,6 +955,11 @@ let LG_LAYER_BEFORE_NODE=null;
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 /* nf, esc, sany, xstr, num, pnum, plural определены в assets/inplan-common.js (общие с chain.html) */
 const bn=v=>nf(v/1e9,2)+' млрд',mln=v=>nf(v/1e6,1)+' млн',pc=v=>nf((isFinite(v)?v:0)*100,1)+'%';
+/* Деньги с единицей по масштабу: мост изменений сравнивает и миллиарды выручки,
+   и десятки миллионов затрат — в «млрд» вторая половина столбцов превращалась
+   в «−0,00 млрд» и читалась как отсутствие вклада. */
+const money=v=>{const a=Math.abs(isFinite(v)?v:0);
+  return a===0?'0':a>=1e8?bn(v):a>=1e5?mln(v):nf(v/1e3,0)+' тыс'};
 /* Удельный показатель (₽/т, ₽ за тонно-период и т.п.). При нулевом знаменателе
    ответа НЕТ — показываем «—». Прежняя идиома x/Math.max(vol,1) выдавала всю
    сумму затрат как ставку за одну тонну, если объём в выгрузке нулевой или
@@ -1656,7 +1664,11 @@ function lmTotals(B,D){
   /* Итог считается от объёма цепочки, а коэффициенты лишь распределяют его по
      доступным строкам. При урезанной детализации нераспределённая часть явно
      остаётся в unattr, а не исчезает из KPI. */
-  const lmPlan=B.gapPlan*rate,kPlan=lmDet>0?lmPlan/lmDet:0;
+  /* planK — коэффициент распределения плановой базы по строкам. Считаем его
+     как отношение объёмов (gapPlan / дефицит детализации), а не как
+     lmPlan/lmDet: двойное деление через ставку давало 0.9999999999999998
+     там, где ответ ровно 1, и ломало проверки «масштаб не применяется». */
+  const lmPlan=B.gapPlan*rate,kPlan=lmDet>0&&unmDet>0?B.gapPlan/unmDet:0;
   if(unmDet>0&&lmDet>0)rateSrc='средневзвешенная ставка дефицита плана';
 
   /* ── База «Непокрытый спрос» (задача владельца 2026-10-05, п.3.5.1) ──
@@ -3934,7 +3946,7 @@ function tabDM(){
     (B.partial?`детализация ${nf(B.orders)} из ${nf(B.ordersAll)} заказов · `:'')+(B.demo?'демо-агрегат покрытия · ':'')+(useUnc
       ?`${B.uncSrc==='demand_coverage'?'demand_coverage':'independent_demand · '+B.uncQty} + marking_demand · не покрыто ${nf(B.gapTotal)} т · заказов ${ordW(ord.total)} (${ord.srcLong}) · база «${T.base==='unc'?'Непокрытый спрос':'Дефицит плана'}»`
       :hasDC?'активны фильтры — расчёт по marking_demand':'нет independent_demand — расчёт по marking_demand'),
-    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса синтезирован из заказов (в демо-файле нет <code>independent_demand</code>), поэтому тонны условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; Service Level и дефицит — <code>marking_demand</code>; late и статусы заказов имеют источник в подписи. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${T.base==='unc'?'Непокрытый спрос':'Дефицит плана'}». Счёт заказов: ${ord.srcLong}.`
+    `${B.demo?`<b>Демо-набор:</b> агрегат неограниченного спроса и счётчик входных заказов синтезированы из заказов (в демо-файле нет независимого реестра <code>independent_demand</code>), поэтому тонны и счётчики условные — логика тождеств, баз и упущенной маржи настоящая. `:''}${useUnc?`${B.demo?'':`Неограниченный спрос — агрегат ${B.uncSrc==='demand_coverage'?'<code>demand_coverage</code> (покрытый + непокрытый, фолбэк при недоступном или нулевом independent_demand)':`<code>independent_demand</code> (<code>${B.uncQty}</code>)`} по всей схеме; Service Level и дефицит — <code>marking_demand</code>; late и статусы заказов имеют источник в подписи. `}Не покрыто всего ${nf(B.gapTotal)} т, упущенная маржа считается по базе «${T.base==='unc'?'Непокрытый спрос':'Дефицит плана'}». Счёт заказов: ${ord.srcLong}.`
       :hasDC?`Активны фильтры: неограниченный спрос (<code>independent_demand</code>) не разрезается по фильтрам, поэтому водопад начинается с ограниченного спроса, а упущенная маржа считается по дефициту плана.`
       :'Таблица <code>independent_demand</code> не загружена — водопад построен от ограниченного спроса <code>marking_demand</code>, упущенная маржа считается по дефициту плана.'}${
       B.partial?` <b>Детализация ограничена лимитом загрузки:</b> ${nf(B.orders)} заказов из ${nf(B.ordersAll)} по схеме. Цепочка спроса и Service Level посчитаны по агрегатам всей схемы (${nf(B.dem)} т плана), иначе незагруженные заказы попали бы в «не принято в план». Таблицы, разрезы и упущенная маржа ниже строятся по загруженной выборке: её средневзвешенная ставка ₽/т перенесена на полный объём базы.`:''}`)}
@@ -4789,6 +4801,9 @@ function snap(ds){
   const ppCols=uq(o,x=>x.p);
   const ppM=ppRows.map(p=>ppCols.map(c0=>S(o.filter(x=>x.prod===p&&x.p===c0),x=>x.mar)));
   return {name:ds.name,ts:ds.ts,
+    /* демо-снапшот: цифры синтетические (агрегат покрытия и счётчик входных
+       заказов синтезированы) — вкладка сравнения проговаривает это отдельно */
+    demo:!!((ds.agg||{}).demo),
     orders:useAgg&&Object.prototype.hasOwnProperty.call(aggT,'orders')?num(aggT.orders):o.filter(x=>!x.independentOnly).length,
     ordersDet:o.filter(x=>!x.independentOnly).length,scope:useAgg?'schema':'detail',
     orderCountKnown:orderState.totalSrc==='independent_demand',
@@ -4864,7 +4879,7 @@ function clearSavedDataset(){
 function expireActiveDatasetIfNeeded(){
   if(DS && !DS._demo && !readActiveDataset()){
     clearSavedDataset();
-    DS=build(SEED);DS._demo=true;TAB='ov';STAT_PIN=false;clearF();render();
+    DS=demoDataset();TAB='ov';STAT_PIN=false;clearF();render();
   }
 }
 function autosaveDS(){
@@ -4906,10 +4921,18 @@ function tabVsRoute(){
   return (window.CHX&&CHX.tabVS)?CHX.tabVS():tabVS();
 }
 function tabVS(){
-  const V=getVers();
+  /* Автоматически созданная демо-версия показывается только рядом с демо-набором:
+     сравнивать её с боевым планом бессмысленно, а удалять чужую запись нельзя —
+     при возврате на демо-набор версия снова нужна. */
+  const V0=getVers();
+  const V=(DS&&DS._demo)?V0:V0.filter(v=>!v.demoSeed);
   const cur=snap(DS);
   if(!V.length)return `<div class="empty"><h2>Сохранённых версий нет</h2><p>Загрузите файл и нажмите кнопку сохранения версии в шапке. Затем загрузите другой файл, снова сохраните — и здесь появится сравнение.</p></div>`;
-  const list=[{...cur,name:'Текущая: '+cur.name,_cur:1},...V];
+  /* В демо-наборе две версии — базовый план (сохранён при первом запуске) и
+     активный сценарий; подписываем их по-человечески, иначе в списке два
+     одинаковых «Демо-набор: металлургия». */
+  const curName=DS&&DS._demo?`Демо-набор: металлургия · фокус на маржу (текущая)`:'Текущая: '+cur.name;
+  const list=[{...cur,name:curName,_cur:1},...V];
   const gi=(k,def)=>{const s=sessionStorage.getItem(k);const n=s===null?def:parseInt(s,10);
     return isFinite(n)&&n>=0?n:def};
   const iA=gi('vA',Math.min(1,list.length-1)),iB=gi('vB',0);
@@ -5050,6 +5073,7 @@ function tabVS(){
   </div>
   <p class="thin-note">Упущенная маржа в старых версиях заморожена в момент снапшота базовым методом «маржа заказа» по базе «Дефицит плана»; текущие методы и базы применяются только к активным данным. Полная цена отказа — строка «Упущенная маржа по непокрытому спросу» (восстановлена из сохранённых объёмов той же замороженной ставкой) и объёмные строки «Не покрыто всего» / «Не принято в план»; они есть только у версий, в датасете которых был demand_coverage.${(A.finSrc==='margin_sales'||B.finSrc==='margin_sales')?` Валовая выручка и валовая маржа ${A.finSrc==='margin_sales'&&B.finSrc==='margin_sales'?'обеих версий':'версии '+(A.finSrc==='margin_sales'?'A':'B')} пересчитаны по таблице <code>margin_sales</code> (Σ revenue / Σ total_margin); у версий без неё — фолбэк marking_demand.`:''}${(()=>{const cov=v=>v&&v.revSrc&&/demand_coverage/.test(String(v.revSrc));const a=cov(A),b=cov(B);return (a||b)?` Валовая выручка ${a&&b?'обеих версий':'версии '+(a?'A':'B')} пересчитана по ценам спроса (<code>demand_coverage</code> × <code>demand_cost</code>/<code>demand_cost_ti</code>: выполненный объём × цена, без цены в периоде — ближайший период); маржа — по прежней цепочке. У версий без цен — прежняя методика.`:'';})()}</p>
   <p class="thin-note">${orderSourceNote}</p>
+  ${(A.demo||B.demo)?`<p class="thin-note"><b>Демо-набор «металлургия»:</b> версия A — базовый план, версия B — активный сценарий «фокус на маржу» (объём перераспределён в пользу высокомаржинальных позиций, логистика и закупка дешевле, хранение дороже). Агрегат неограниченного спроса, счётчик входных заказов и опоздания в демо синтезированы из самих заказов — в демо-файле нет <code>independent_demand</code> и <code>demand_coverage</code>. Тонны и суммы условные; логика сравнения, тождеств и моста изменений — настоящая.</p>`:''}
   ${kpisHtml([['Изменение валовой маржи',bn(d(A.mar,B.mar)),pc(r(A.mar,B.mar)),d(A.mar,B.mar)>=0?'pos':'neg'],
        ['Изменение себестоимости',bn(d(A.cost,B.cost)),pc(r(A.cost,B.cost)),d(A.cost,B.cost)<=0?'pos':'neg'],
        ['Изменение Service Level',pc(d(slOf(A),slOf(B))),'процентных пунктов',slOf(B)>=slOf(A)?'pos':'neg'],
@@ -5094,8 +5118,8 @@ function tabVS(){
       {name:'Версия B',c:CH.d4,vals:axes.map(ax=>ax.norm[1]),raw:axes.map(ax=>ax.vOf(B))}
     ]);
     /* мост изменений */
-    chWaterfall('#v5',H('#v5',300,0.6),wf,v=>bn(Math.abs(v)),
-      i=>`<b>${wf[i].k}</b><br>${wf[i].type==='total'?bn(wf[i].v):`${wf[i].v>=0?'+':'−'}${bn(Math.abs(wf[i].v))} к марже`}`
+    chWaterfall('#v5',H('#v5',300,0.6),wf,money,
+      i=>`<b>${wf[i].k}</b><br>${wf[i].type==='total'?money(wf[i].v):`${wf[i].v>=0?'+':'−'}${money(Math.abs(wf[i].v))} к марже`}`
         +(wf[i].k==='Прочие затраты'?'<br><span style="color:var(--scp-text-3)">Не разложено по типам операций: себестоимость заказа минус сумма операций</span>':''),
       null);
     const norm=[['Выручка',A.rev,B.rev],['Себестоимость',A.cost,B.cost],['Валовая маржа',A.mar,B.mar],
@@ -5421,8 +5445,8 @@ function tabDQ(){
              :'Уточнить, по какой базе и по какой цене считается lostrevenue: включает ли внеплановый спрос, учитывает ли скидки/надбавки, та ли маржа на тонну.');
     }
     if(aggD.demo)add('i','Демо-агрегат покрытия',
-      'В демо-наборе <code>demand_coverage</code> синтезирован из заказов (в демо-файле этой таблицы нет): тонны и суммы условные, логика тождеств, баз и ставок — настоящая.',
-      'Для боевых чисел подключить ClickHouse-схему с настоящей <code>demand_coverage</code>.');
+      'В демо-наборе <code>demand_coverage</code> и счётчик входных заказов <code>independent_demand</code> синтезированы из заказов (в демо-файле этих таблиц нет): тонны, суммы и счётчики условные, логика тождеств, баз и ставок — настоящая.',
+      'Для боевых чисел подключить ClickHouse-схему с настоящими <code>demand_coverage</code> и <code>independent_demand</code>.');
   }
 
   /* Приоритет заказа — колонка demandtype (marking_demand / demand_coverage).
@@ -7836,8 +7860,9 @@ function go(tab){
   if(tab==='cost')tab='ov';
   TAB=tab;render();
 }
-/* Подпись активной версии в шапке: техническое имя схемы (если подключён
-   ClickHouse) либо имя загруженного файла/демо-набора. Полное имя — в title. */
+/* Подпись активной версии в шапке: ОДНО название — расшифровка версии из БД
+   (сценарий), иначе техническое имя схемы, иначе имя загруженного файла или
+   демо-набора. Полный набор полей остаётся в title. */
 function verCaption(){
   if(!DS)return null;
   /* Версии ClickHouse живут в CHX.versions, но после перезагрузки страницы
@@ -7855,19 +7880,24 @@ function verCaption(){
   else if(DS.src==='clickhouse'){kind='ClickHouse'}
   return {name:String(DS.name||'Датасет'),tech,label,kind};
 }
-/* Подпись активной версии в шапке: имя набора (или понятное имя версии, если
-   сценарий расшифрован) + тип источника + техническое имя схемы. Живёт вне
-   #stat, поэтому не исчезает после загрузки файла и не перекрывается
-   сообщениями о состоянии подключения. */
+/* Подпись активной версии в шапке — ровно два смысловых элемента:
+   «Активная версия» + название версии. Название: расшифровка версии из БД
+   (сценарий), если её нет — техническое имя схемы, если нет и его — имя
+   загруженного файла или демо-набора. Тип источника и прочие хвосты
+   («ClickHouse · data_public_1 · схема …») убраны из строки: они дублировали
+   название и занимали место в шапке; полная расшифровка — в title.
+   Живёт вне #stat, поэтому не исчезает после загрузки файла. */
 function paintVerCaption(){
   const el=$('#pgVer');if(!el)return;
   if(!DS){el.innerHTML='';return}
   const v=verCaption();
-  const main=v.label||v.name;
-  const tail=[v.kind,v.label&&v.label!==v.name?v.name:'',v.tech?'схема '+v.tech:''].filter(Boolean);
-  el.innerHTML=`<span class="hv-t">Активная версия</span>`
-    +`<span class="hv-v" title="${esc([v.label,v.name,v.tech].filter(Boolean).join(' · '))}">${esc(main)}</span>`
-    +`<span class="hv-s">· ${esc(tail.join(' · '))}</span>`;
+  const main=v.label||v.tech||v.name;
+  const full=[v.label,v.tech&&v.tech!==v.label?v.tech:'',v.name,v.kind].filter(Boolean).join(' · ');
+  /* пробел между элементами обязателен: в flex-контейнере он не влияет на
+     вид (там gap), но без него подпись читалась бы слитно — «Активная
+     версияДемо-набор…» — в textContent, поиске и скринридере */
+  el.innerHTML=`<span class="hv-t">Активная версия</span> `
+    +`<span class="hv-v" title="${esc(full)}">${esc(main)}</span>`;
 }
 function render(){
   if(!DS){
@@ -8173,9 +8203,20 @@ function demoCoverage(ds){
     lateOrd=Math.round(ordFull*0.04);
   const byP=grp(ds.orders,o=>o.d||periodLabel(o.p),v=>({sal:S(v,o=>o.sal),unm:S(v,o=>o.unm),dem:S(v,o=>o.dem)}))
     .sort((a,b)=>String(a.k).localeCompare(String(b.k)));
+  /* Независимый счётчик входных заказов тоже синтезируется: total = заказы
+     плана + заказы «вне плана» (те же 12%). Без него вкладка «Сравнение
+     версий» не могла заполнить строки счёта заказов и невязку (в демо-наборе
+     independent_demand нет), и половина таблицы отличий оставалась «—».
+     Источник помечается как independent_demand — так же, как и остальной
+     демо-агрегат (agg.demo=true), поэтому блоки показывают пометку «демо». */
+  const orderTotal=ds.orders.length+unpl;
   ds.agg={demo:true,
-    totals:{cov:{demUnc,ff:sal,uf:notPlanned+unm,inTime:Math.max(0,sal-late),late,
-      orderRows:ds.orders.length+unpl,
+    totals:{independentOrderCountSource:'independent_demand',
+      independentOrderCount:orderTotal,
+      orderSource:'independent_demand',
+      orderStatusSource:'independent_demand × demand_coverage (демо-синтез)',
+      cov:{demUnc,ff:sal,uf:notPlanned+unm,inTime:Math.max(0,sal-late),late,
+      orderRows:orderTotal,
       fullyUncoveredOrders:ordFullUncDet+unpl,partiallyCoveredOrders:ordPart,
       fullyCoveredOrders:ordFull,lateOrdersAll:lateOrd,lateFullyCoveredOrders:lateOrd,
       lostRev:S(ds.orders,o=>o.unm*o.price)+notPlanned*defPrice,
@@ -8185,11 +8226,87 @@ function demoCoverage(ds){
   return ds;
 }
 
+/* ── Вторая демо-версия: «фокус на маржу» ──
+   Вкладка «Сравнение версий» показывает версии плана, поэтому демо-набору нужны
+   две сопоставимые версии с полным набором разрезов. Базовая версия — встроенные
+   данные SEED как есть, вторая — тот же портфель после управленческого решения:
+     • объём перераспределяется в пользу высокомаржинальных позиций (верхняя
+       треть по марже на тонну): отгрузка дотягивается до спроса;
+     • низкомаржинальные позиции (нижняя треть) отдают объём: растёт дефицит
+       внутри плана, зато освобождаются мощности;
+     • логистика дешевеет на 6% (укороченные плечи), закупка — на 4%
+       (более выгодные ставки), хранение дорожает на 8% (более крупные партии);
+     • загрузка мощностей пересчитывается от изменения объёма по заводу,
+       поэтому «Мощности» и «Цепочка заказа» тоже отражают новый сценарий.
+   Данные синтетические, но связные: sal + unm = dem, rev = sal × price,
+   cost = sal × cpt, mar = rev − cost, объёмы операций масштабированы вместе
+   с заказом — тождества и DQ-проверки демо-набора сходятся. */
+function demoFocusSrc(){
+  const rows=Array.isArray(SEED.orders)?SEED.orders:[];
+  const mpts=rows.map(o=>num(o.price)-num(o.cpt)).sort((a,b)=>a-b);
+  const q=p=>mpts.length?mpts[Math.min(mpts.length-1,Math.max(0,Math.round((mpts.length-1)*p)))]:0;
+  const lo=q(0.35),hi=q(0.70);
+  const ratio=new Map();
+  const orders=rows.map(o=>{
+    const price=num(o.price),cpt=num(o.cpt),dem=num(o.dem),sal0=num(o.sal);
+    const mpt=price-cpt;
+    const f=mpt>=hi?1.35:mpt<=lo?0.72:1;
+    const sal=Math.max(0,Math.min(dem,sal0*f+(mpt>=hi?0.05*dem:0)));
+    ratio.set(o.id,sal0>0?sal/sal0:1);
+    return {...o,sal,unm:Math.max(0,dem-sal),
+      rev:sal*price,cost:sal*cpt,mar:sal*(price-cpt)};
+  });
+  const ops=(SEED.ops||[]).map(r=>{
+    const f=ratio.has(r.o)?ratio.get(r.o):1;
+    let rate=num(r.r);
+    /* r ≤ 1 — «заглушка» без стоимости (см. build: stub), ставку не трогаем */
+    if(rate>1){
+      if(r.t==='mv')rate*=0.94;
+      else if(r.t==='pc')rate*=0.96;
+      else if(r.t==='st')rate*=1.08;
+    }
+    return {...r,v:num(r.v)*f,r:rate};
+  });
+  const pdByPlant=(list,pl)=>list.reduce((s,r)=>r.t==='pd'&&r.pl===pl?s+num(r.v):0,0);
+  const capacity=(SEED.capacity||[]).map(c=>{
+    const before=pdByPlant(SEED.ops||[],c.pl)||0, after=pdByPlant(ops,c.pl)||0;
+    const f=before>0?after/before:1;
+    const load=Math.max(0,num(c.load)*f), avail=num(c.avail);
+    return {...c,load,free:Math.max(0,avail-load),util:avail>0?load/avail:0};
+  });
+  return {name:SEED.name,orders,ops,capacity};
+}
+/* Демо-датасет: заказы (версия «фокус на маржу») + синтезированный агрегат
+   покрытия. Помечается _demo: шапка подписывает источник, блоки спроса —
+   «демо-агрегат». */
+function demoDataset(){
+  const ds=demoCoverage(build(demoFocusSrc()));
+  ds._demo=true;
+  return ds;
+}
+/* Сохранённая версия «базовый план» — вторая сторона демо-сравнения.
+   Создаётся один раз (флаг в localStorage): после «Удалить историю версий»
+   демо-версии не возвращаются сами, пока пользователь не сбросит флаг. */
+const DEMO_VERS_KEY='sop_demo_vers_v1';
+function seedDemoVersions(){
+  try{
+    if(getVers().length)return false;
+    if(localStorage.getItem(DEMO_VERS_KEY))return false;
+    const base=snap(demoCoverage(build(SEED)));
+    base.name='Демо-набор: металлургия · базовый план';
+    base.demo=true;
+    base.demoSeed=true;   // создана автоматически: рядом с боевыми данными не показывается
+    localStorage.setItem('sop_vers',JSON.stringify([base]));
+    localStorage.setItem(DEMO_VERS_KEY,'1');
+    return true;
+  }catch(e){console.warn('Демо-версия для сравнения не создана:',e);return false}
+}
+
 /* стартуем с последнего автосохранения, иначе — на демо-наборе */
 const SAVED=restoreDS();
 if(!SAVED){clearSavedDataset()}
-DS=SAVED?SAVED.ds:demoCoverage(build(SEED));
-if(!SAVED)DS._demo=true;
+DS=SAVED?SAVED.ds:demoDataset();
+if(!SAVED){seedDemoVersions()}
 render(); /* render() сам вызовет lmSegBuild() для релевантного блока */
 setInterval(expireActiveDatasetIfNeeded,60000);
 if(SAVED){
