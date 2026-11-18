@@ -1733,7 +1733,7 @@ function drawModal(){
     <input id="pgmBackend" type="text" value="${esc(PGX.cfg.backend)}"
       placeholder="пусто = этот же сервер (npm start)">
     <span class="chm-hint">URL запущенного server.js. Пусто — берётся адрес этой страницы, поэтому
-      открывать дашборд нужно по адресу server.js (http://localhost:8080): со статического хостинга
+      открывать дашборд нужно по адресу server.js (http://localhost:8082): со статического хостинга
       запросы <code>/api/pg/*</code> упираются в чужой 404</span></div>
   <div class="chm-row"><label>Хост / Порт</label>
     <input id="pgmHost" type="text" value="${esc(PGX.cfg.host)}" style="flex:1">
