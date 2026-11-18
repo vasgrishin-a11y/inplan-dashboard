@@ -1311,7 +1311,7 @@ backend есть, но старой версии (без `/api/pg/unc`).
   Ответ `/api/pg/unc` возвращает и фактическую `schema`, и `requested`.
 - **`assets/inplan-pg.js`** — поиск backend перед первым запросом
   (`detectBackend` по `/api/health`: ручной адрес → origin страницы →
-  `http://localhost:8080`, кроме https-страниц, где браузер всё равно
+  `http://localhost:8082`, кроме https-страниц, где браузер всё равно
   заблокирует mixed content), человеческие тексты вместо чужого «Not found»
   (`backendHint()`), стадия отказа (`state.stage`: `backend`/`pg`),
   `schemaMap()` для сверки версий CH ↔ схем PG и `problem()` для значка.

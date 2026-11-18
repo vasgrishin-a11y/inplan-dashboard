@@ -27,7 +27,7 @@
  * «public_2» (префикс data_ отрезается на фронтенде, регистр не важен).
  *
  * Для тестов DB-слой инжектится: createApp({connect}).
- * Запуск: npm start (PORT=8080, HOST=0.0.0.0 по умолчанию).
+ * Запуск: npm start (PORT=8082, HOST=0.0.0.0 по умолчанию).
  */
 
 const path = require('path');
@@ -35,8 +35,8 @@ const express = require('express');
 const { Client } = require('pg');
 
 const PG_DEFAULTS = {
-  host: 'db-postgresql-app.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
-  port: 48235,
+  host: '127.0.0.1',
+  port: 25432,
   database: 'pgs_app_data_db'       // точное имя продуктивной базы (владелец, 2026-10)
 };
 /* Фактическое имя таблицы в PostgreSQL — independent_demand. Старое слитное
@@ -779,7 +779,7 @@ function createApp(deps) {
 }
 
 if (require.main === module) {
-  const PORT = Number(process.env.PORT) || 8080;
+  const PORT = Number(process.env.PORT) || 8082;
   const HOST = process.env.HOST || '0.0.0.0';
   createApp().listen(PORT, HOST, () => {
     console.log(`In.Plan dashboard + PG-прокси → http://${HOST}:${PORT}`);

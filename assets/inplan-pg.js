@@ -25,7 +25,7 @@ const PGX = window.PGX = {
     /* адрес backend-прокси: '' — тот же origin, что и страница (npm start).
        При открытии дашборда со статического хостинга/file:// здесь должен
        быть URL запущенного server.js (например http://host:8080). */
-    backend:'http://localhost:3000',
+    backend:'http://localhost:8082',
     host:'127.0.0.1',
     port:25432,
     database:'pgs_app_data_db',
@@ -107,7 +107,7 @@ PGX.restoreSession = function(){
 };
 
 /* ─────────────── 3. API-КЛИЕНТ ─────────────── */
-const LOCAL_BACKEND = 'http://localhost:8080';
+const LOCAL_BACKEND = 'http://localhost:8082';
 /* Адрес из настроек (пусто — свой origin). Если автопоиск нашёл рабочий
    backend, пользуемся им: пользователю не нужно знать про поле «Backend». */
 PGX.backendBase = function(){
@@ -132,9 +132,9 @@ PGX.backendCandidates = function(){
   const manual = (PGX.cfg.backend||'').trim().replace(/\/+$/,'');
   if(manual) return [manual];
   const proto = (typeof location!=='undefined' && location.protocol) || 'http:';
-  if(proto==='file:') return [LOCAL_BACKEND, 'http://127.0.0.1:8080'];
+  if(proto==='file:') return [LOCAL_BACKEND, 'http://127.0.0.1:8082'];
   const list = [''];
-  if(proto!=='https:') list.push(LOCAL_BACKEND, 'http://127.0.0.1:8080');
+  if(proto!=='https:') list.push(LOCAL_BACKEND, 'http://127.0.0.1:8082');
   return list;
 };
 /* GET /api/health: жив ли backend и какой он версии. Никогда не бросает. */
@@ -173,9 +173,9 @@ PGX.backendHint = function(){
   const manual = (PGX.cfg.backend||'').trim();
   const https = typeof location!=='undefined' && location.protocol==='https:';
   if(manual) return 'Проверьте адрес backend «'+manual+'»: там должен отвечать server.js (npm start).';
-  if(https) return 'Откройте дашборд по адресу запущенного server.js (npm start → http://localhost:8080) '+
+  if(https) return 'Откройте дашборд по адресу запущенного server.js (npm start → http://localhost:8082) '+
     'или укажите его адрес в поле «Backend»: со страницы по HTTPS браузер не пустит запрос на http://localhost.';
-  return 'Запустите backend: npm start в папке дашборда — и откройте страницу по адресу http://localhost:8080 '+
+  return 'Запустите backend: npm start в папке дашборда — и откройте страницу по адресу http://localhost:8082 '+
     '(или впишите адрес запущенного server.js в поле «Backend»).';
 };
 PGX.api = async function(pathName, body){
