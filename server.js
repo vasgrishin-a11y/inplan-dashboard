@@ -35,8 +35,8 @@ const express = require('express');
 const { Client } = require('pg');
 
 const PG_DEFAULTS = {
-  host: 'db-postgresql-app.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
-  port: 48235,
+  host: '127.0.0.1',
+  port: 25432,
   database: 'pgs_app_data_db'       // точное имя продуктивной базы (владелец, 2026-10)
 };
 /* Фактическое имя таблицы в PostgreSQL — independent_demand. Старое слитное

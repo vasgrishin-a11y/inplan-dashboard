@@ -25,7 +25,7 @@ const PGX = window.PGX = {
     /* адрес backend-прокси: '' — тот же origin, что и страница (npm start).
        При открытии дашборда со статического хостинга/file:// здесь должен
        быть URL запущенного server.js (например http://host:8080). */
-    backend:'http://localhost:3000',
+    backend:'',
     host:'127.0.0.1',
     port:25432,
     database:'pgs_app_data_db',
