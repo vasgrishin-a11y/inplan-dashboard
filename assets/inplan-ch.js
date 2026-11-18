@@ -2446,7 +2446,7 @@ CHX.tabVS = function(){
           v=>mln(v)+' ₽', null);
       else{
         const g2 = cv('#vsHeat',180);
-        if(g2){ g2.x.fillStyle=CH.axis; g2.x.textAlign='center'; g2.x.font='13px Open Sans, sans-serif';
+        if(g2){ g2.x.fillStyle=CH.axis; g2.x.textAlign='center'; g2.x.font='13px Manrope, Arial, sans-serif';
           g2.x.fillText('Недостаточно данных по выбранному разрезу', g2.w/2, 90) }
       }
     }
