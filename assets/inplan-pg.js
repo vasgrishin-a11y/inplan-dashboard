@@ -25,11 +25,11 @@ const PGX = window.PGX = {
     /* адрес backend-прокси: '' — тот же origin, что и страница (npm start).
        При открытии дашборда со статического хостинга/file:// здесь должен
        быть URL запущенного server.js (например http://host:8080). */
-    backend:'',
-    host:'db-postgresql-app.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
-    port:48235,
+    backend:'http://localhost:3000',
+    host:'127.0.0.1',
+    port:25432,
     database:'pgs_app_data_db',
-    user:'', password:'', ssl:'auto',
+    user:'vasily_admin', password:'', ssl:'off',
     /* Ручное соответствие «база ClickHouse → схема PostgreSQL»:
        {'data_public_4899':'public_1494'}. Нужно, когда нумерация прогонов в
        ClickHouse и схем в Postgres не совпадает (а она совпадает не всегда:

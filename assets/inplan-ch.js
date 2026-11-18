@@ -16,8 +16,8 @@ const SESSION_TTL_MS = 4 * 60 * 60 * 1000; // 4 часа с последней �
 /* ─────────────── 1. КОНФИГУРАЦИЯ ─────────────── */
 const CHX = window.CHX = {
   cfg:{
-    host:'clickhouse.k8s.b1gahmn2gdjf3lsm4jeh.in-plan.ru',
-    port:443, proto:'https', user:'readonly', pass:'',
+    host:'127.0.0.1',
+    port:28123, proto:'http', user:'vasily_admin', pass:'',
     useProxy:false, proxyUrl:'/api/ch',
     schemas:[], base:'', gran:4,
     detailOrders:2000            // сколько заказов тянуть детально в основную схему
