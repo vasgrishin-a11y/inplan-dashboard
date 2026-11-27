@@ -316,28 +316,36 @@ PGX.enabled = function(){
    отправлять 10 одинаковых неудачных запросов. */
 PGX.ensureSchemas = async function(){
   if(PGX.state.connected) return PGX.state.schemas;
+  if(PGX.state.schemasPending) return PGX.state.schemasPending;
   if(PGX.state.checked && PGX.state.lastError) throw new Error(PGX.state.lastError);
   PGX.state.checked = true;
-  try{
-    /* сначала ищем сам backend — чтобы отличить «нет прокси» от «ошибка PG» */
-    if(PGX.state.backendOk===null) await PGX.detectBackend();
-    const r = await PGX.api('/api/pg/schemas', PGX.connBody());
-    PGX.state.schemas = (r.schemas||[]).map(s=>({schema:String(s.schema), n:Number(s.n)||0}));
-    PGX.state.connected = true;
-    PGX.state.lastError = null;
-    PGX.session.enable();
-    PGX.session.touch();
-    return PGX.state.schemas;
-  }catch(e){
-    PGX.state.connected = false;
-    PGX.state.lastError = e.message;
-    throw e;
-  }
+  const pending = (async ()=>{
+    try{
+      /* сначала ищем сам backend — чтобы отличить «нет прокси» от «ошибка PG» */
+      if(PGX.state.backendOk===null) await PGX.detectBackend();
+      const r = await PGX.api('/api/pg/schemas', PGX.connBody());
+      PGX.state.schemas = (r.schemas||[]).map(s=>({schema:String(s.schema), n:Number(s.n)||0}));
+      PGX.state.connected = true;
+      PGX.state.lastError = null;
+      PGX.session.enable();
+      PGX.session.touch();
+      return PGX.state.schemas;
+    }catch(e){
+      PGX.state.connected = false;
+      PGX.state.lastError = e.message;
+      throw e;
+    }finally{
+      if(PGX.state.schemasPending === pending) PGX.state.schemasPending = null;
+    }
+  })();
+  PGX.state.schemasPending = pending;
+  return pending;
 };
 /* Дисквалификация текущего подключения — при смене кредов в модалке.
    Адрес backend ищем заново: его могли поправить в том же окне. */
 PGX.invalidate = function(){
   PGX.state.connected=false; PGX.state.checked=false; PGX.state.schemas=[];
+  PGX.state.schemasPending=null;
   PGX.state.lastError=null; PGX.state.lastDataError=null; PGX.state.stage=null;
   PGX.state.backend=null; PGX.state.backendOk=null; PGX.state.backendInfo=null;
   PGX.invalidateScenarioNames();
@@ -447,19 +455,30 @@ PGX.uncFor = async function(db, gran){
   }
   PGX.state.lastDataError = null;
   const orderCount=apiNumberOrNull(r.n);
-  return { demUnc:apiNumber(r.demUnc), n:orderCount===null?0:Math.max(0,Math.trunc(orderCount)),
+  const rawOrders = Array.isArray(r.orders) ? r.orders : [];
+  const orders = [];
+  for(let i=0; i<rawOrders.length; i++){
+    const o = rawOrders[i] || {};
+    const demandqty = apiNumber(o.demandqty);
+    if(Math.abs(demandqty) <= 1e-9) continue;
+    orders.push({
+      sourceId:o.sourceId||orders.length+1, item:String(o.item||''),
+      demandqty, periodid:String(o.periodid||''),
+      dmdstream:String(o.dmdstream||''), periodtype:apiNumber(o.periodtype),
+      demandtype:o.demandtype==null?'':String(o.demandtype),
+      loc:String(o.loc||''), date:String(o.date||'')
+    });
+  }
+  const rawN = orderCount===null ? 0 : Math.max(0,Math.trunc(orderCount));
+  const effectiveN = (orderCount!==null && rawOrders.length===rawN && orders.length<rawOrders.length)
+    ? orders.length : rawN;
+  return { demUnc:apiNumber(r.demUnc), n:effectiveN,
            countAvailable:orderCount!==null,
            periods:(r.periods||[]).map(p=>({k:String(p.k), demUnc:apiNumber(p.demUnc)})),
            /* Построчный вход нужен для полного реестра RCA. Старый backend
               может не прислать orders — тогда загрузчик сохранит прежний
               агрегатный режим без выдуманных строк. */
-           orders:(r.orders||[]).map((o,i)=>({
-             sourceId:o.sourceId||i+1, item:String(o.item||''),
-             demandqty:apiNumber(o.demandqty), periodid:String(o.periodid||''),
-             dmdstream:String(o.dmdstream||''), periodtype:apiNumber(o.periodtype),
-             demandtype:o.demandtype==null?'':String(o.demandtype),
-             loc:String(o.loc||''), date:String(o.date||'')
-           })),
+           orders,
            schema:r.schema||schema, table:r.table||'independent_demand',
            qtySource:r.qtySource||((r.cols||{}).qty)||'demandqty',
            keyCols:Array.isArray(r.keyCols)?r.keyCols:[], distinct:!!r.distinct,

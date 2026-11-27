@@ -31,8 +31,9 @@
  */
 
 const path = require('path');
+const zlib = require('zlib');
 const express = require('express');
-const { Client } = require('pg');
+const { Pool } = require('pg');
 
 const PG_DEFAULTS = {
   host: '127.0.0.1',
@@ -196,6 +197,23 @@ function sslConfig(mode) {
   if (mode === 'strict') return { rejectUnauthorized: true };
   return { rejectUnauthorized: false }; // insecure
 }
+/* Краткоживущий пул соединений PG (TTL бездействия 60 с): убирает повторные
+   TCP/TLS-рукопожатия при загрузке нескольких схем и позволяет параллельно
+   выполнять запросы periods + details внутри /api/pg/unc, не оставляя креды
+   в памяти после завершения сессии загрузки. */
+const PG_POOL_TTL_MS = 60000;
+const pgPools = new Map();
+const sslModeCache = new Map();
+
+function touchPoolEntry(key, entry) {
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    pgPools.delete(key);
+    entry.pool.end().catch(() => {});
+  }, PG_POOL_TTL_MS);
+  if (entry.timer && typeof entry.timer.unref === 'function') entry.timer.unref();
+}
+
 async function defaultConnect(conn) {
   const base = {
     host: conn.host,
@@ -203,27 +221,57 @@ async function defaultConnect(conn) {
     database: conn.database,
     user: conn.user,
     password: conn.password,
+    max: 6,
+    idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 15000,
     statement_timeout: 180000,
     application_name: 'inplan-dashboard'
   };
-  const open = async mode => {
-    const client = new Client({ ...base, ssl: sslConfig(mode) });
-    await client.connect();
-    return client;
+  const hostKey = `${conn.host}:${conn.port}`;
+  const openPool = async mode => {
+    const key = [conn.host, conn.port, conn.database, conn.user, conn.password, mode].join('\0');
+    let entry = pgPools.get(key);
+    if (entry) {
+      touchPoolEntry(key, entry);
+      return { key, entry };
+    }
+    const pool = new Pool({ ...base, ssl: sslConfig(mode) });
+    pool.on('error', () => {});
+    try {
+      const probe = await pool.connect();
+      probe.release();
+    } catch (e) {
+      await pool.end().catch(() => {});
+      throw e;
+    }
+    entry = { pool, timer: null };
+    pgPools.set(key, entry);
+    touchPoolEntry(key, entry);
+    return { key, entry };
   };
-  let client;
-  if (conn.ssl && conn.ssl !== 'auto') client = await open(conn.ssl);
-  else {
-    try { client = await open('insecure'); }
-    catch (e) {
-      if (isSslError(e)) client = await open('off');
-      else throw e;
+  let opened;
+  if (conn.ssl && conn.ssl !== 'auto') {
+    opened = await openPool(conn.ssl);
+  } else {
+    const preferred = sslModeCache.get(hostKey) || 'insecure';
+    const fallback = preferred === 'insecure' ? 'off' : 'insecure';
+    try {
+      opened = await openPool(preferred);
+      sslModeCache.set(hostKey, preferred);
+    } catch (e) {
+      if (isSslError(e)) {
+        opened = await openPool(fallback);
+        sslModeCache.set(hostKey, fallback);
+      } else throw e;
     }
   }
+  const { key, entry } = opened;
   return {
-    query: (text, params) => client.query(text, params),
-    close: () => client.end().catch(() => {})
+    query: (text, params) => {
+      touchPoolEntry(key, entry);
+      return entry.pool.query(text, params);
+    },
+    close: async () => { touchPoolEntry(key, entry); }
   };
 }
 
@@ -357,6 +405,10 @@ function uncSql(schema, cols, gran, tableName = TABLE_NAME) {
     params.push(gran);
     filters.push(`${qi(cols.ptype)} = $${params.length}`);
   }
+  /* Нулевые строки входного спроса бизнесово не являются заказами и на больших
+     разреженных матрицах раздувают DISTINCT, трафик и детализацию дашборда.
+     Допуск 1e-9 согласован с ClickHouse (Decimal шум в 12-м знаке). */
+  filters.push(`abs(${qi(qty)}) > 0.000000001`);
 
   const keyCols = independentDemandKeyCols(cols);
   const identityCols = uniq([cols.item, cols.periodid, cols.dmdstream, cols.dtype, cols.loc, cols.date]);
@@ -470,8 +522,28 @@ function createApp(deps) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Access-Control-Max-Age', '86400');
-    res.setHeader('Vary', 'Origin');
+    res.setHeader('Vary', 'Origin, Accept-Encoding');
     if (req.method === 'OPTIONS') return res.status(204).end();
+    const ae = String(req.headers['accept-encoding'] || '');
+    if (/\bgzip\b/i.test(ae)) {
+      const origJson = res.json.bind(res);
+      res.json = function (body) {
+        if (res.headersSent || res.getHeader('Content-Encoding')) return origJson(body);
+        const raw = Buffer.from(JSON.stringify(body), 'utf8');
+        if (raw.length < 1024) return origJson(body);
+        zlib.gzip(raw, { level: 6 }, (err, gz) => {
+          if (err || res.headersSent) {
+            if (!res.headersSent) origJson(body);
+            return;
+          }
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('Content-Length', String(gz.length));
+          res.end(gz);
+        });
+        return res;
+      };
+    }
     next();
   });
   app.use(express.json({ limit: '256kb' }));
@@ -708,38 +780,53 @@ function createApp(deps) {
             });
           }
         }
+        const readDetails = async () => {
+          try {
+            const det = await db.query(q.details.sql, q.details.params);
+            const out = [];
+            for (const r of (det.rows || [])) {
+              const qtyVal = pgNumber(r.demandqty);
+              const demandqty = Number.isFinite(qtyVal) ? qtyVal : 0;
+              if (Math.abs(demandqty) <= 1e-9) continue;
+              out.push({
+                sourceId: out.length + 1,
+                item: r.item == null ? '' : String(r.item),
+                demandqty,
+                periodid: r.periodid == null ? '' : String(r.periodid),
+                dmdstream: r.dmdstream == null ? '' : String(r.dmdstream),
+                periodtype: r.periodtype == null ? null : pgNumber(r.periodtype),
+                demandtype: r.demandtype == null ? '' : String(r.demandtype),
+                loc: r.loc == null ? '' : String(r.loc),
+                date: r.date == null ? '' : String(r.date)
+              });
+            }
+            return out;
+          } catch (e) {
+            /* агрегат и периодный разрез остаются доступны */
+            return [];
+          }
+        };
+
+        /* RCA получает все ненулевые строки входного спроса. На пуле соединений
+           периодный разрез и детализация выполняются параллельно. */
+        let orders = [];
         if (recovered && rawPeriods) {
           periods = [...rawPeriods.entries()]
             .map(([k, value]) => ({ k, demUnc: value }))
             .sort((a, b) => a.k.localeCompare(b.k));
+          orders = await readDetails();
         } else if (q.periods) {
-          try {
-            const p = await db.query(q.periods.sql, q.periods.params);
-            periods = (p.rows || []).map(r => {
-              const value = r.demUnc !== undefined ? r.demUnc : r.demunc;
-              return { k: String(r.k), demUnc: pgNumber(value) || 0 };
-            });
-          } catch (e) { throw friendlyPgError(e, conn); }
-        }
-        /* RCA получает все строки входного спроса. Ошибка необязательной
-           детализации не должна скрывать корректный агрегат старому/частично
-           совместимому PostgreSQL-прокси. */
-        let orders = [];
-        try {
-          const det = await db.query(q.details.sql, q.details.params);
-          orders = (det.rows || []).map((r, i) => ({
-            sourceId: i + 1,
-            item: r.item == null ? '' : String(r.item),
-            demandqty: Number.isFinite(pgNumber(r.demandqty)) ? pgNumber(r.demandqty) : 0,
-            periodid: r.periodid == null ? '' : String(r.periodid),
-            dmdstream: r.dmdstream == null ? '' : String(r.dmdstream),
-            periodtype: r.periodtype == null ? null : pgNumber(r.periodtype),
-            demandtype: r.demandtype == null ? '' : String(r.demandtype),
-            loc: r.loc == null ? '' : String(r.loc),
-            date: r.date == null ? '' : String(r.date)
-          }));
-        } catch (e) {
-          /* агрегат и периодный разрез остаются доступны */
+          const [pRes, detOrders] = await Promise.all([
+            db.query(q.periods.sql, q.periods.params).catch(e => { throw friendlyPgError(e, conn); }),
+            readDetails()
+          ]);
+          periods = (pRes.rows || []).map(r => {
+            const value = r.demUnc !== undefined ? r.demUnc : r.demunc;
+            return { k: String(r.k), demUnc: pgNumber(value) || 0 };
+          });
+          orders = detOrders;
+        } else {
+          orders = await readDetails();
         }
         res.json({
           ok: true, schema, requested: wanted, exact, table: tableName, gran,

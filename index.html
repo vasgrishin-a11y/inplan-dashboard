@@ -1912,12 +1912,19 @@ function dtable(sel,cols,rows,opts){
     :(d[c.k]===''||d[c.k]==null?'—':(typeof d[c.k]==='number'?nf(d[c.k],2):esc(d[c.k])));
   const plain=(c,d)=>String(cell(c,d)).replace(/<[^>]*>/g,'').trim();
 
+  const uqvCache=new Map();
+  let qTimer=null;
+  const rowSearchText=d=>{
+    if(d._q===undefined) d._q=cols.map(c=>plain(c,d).toLowerCase()).join('\u0001');
+    return d._q;
+  };
+
   function view(){
     let out=data;
     cols.forEach(c=>{const s=st.flt[c.k];
       if(s&&s.length){const set=new Set(s);out=out.filter(d=>set.has(String(d[c.k]==null?'':d[c.k])))}});
     const q=st.q.trim().toLowerCase();
-    if(q)out=out.filter(d=>cols.some(c=>plain(c,d).toLowerCase().includes(q)));
+    if(q)out=out.filter(d=>rowSearchText(d).includes(q));
     const sc=cols.find(c=>c.k===st.sort);
     if(sc){const dir=st.dir==='asc'?1:-1;
       out=out.slice().sort((a,b)=>{const x=a[sc.k],y=b[sc.k];
@@ -1926,8 +1933,13 @@ function dtable(sel,cols,rows,opts){
         return String(x==null?'':x).localeCompare(String(y==null?'':y),'ru',{numeric:true})*dir})}
     return out;
   }
-  const uqv=c=>[...new Set(data.map(d=>String(d[c.k]==null?'':d[c.k])))]
-    .sort((a,b)=>a.localeCompare(b,'ru',{numeric:true}));
+  const uqv=c=>{
+    if(!uqvCache.has(c.k)){
+      uqvCache.set(c.k,[...new Set(data.map(d=>String(d[c.k]==null?'':d[c.k])))]
+        .sort((a,b)=>a.localeCompare(b,'ru',{numeric:true})));
+    }
+    return uqvCache.get(c.k);
+  };
 
   function draw(){
     const out=view(), pg=opts.pg||0;
@@ -1965,8 +1977,19 @@ function dtable(sel,cols,rows,opts){
     </div>`;
 
     const qi=host.querySelector('.dt-q');
-    qi.oninput=()=>{const p=qi.selectionStart;st.q=qi.value;st.pg=1;draw();
-      const n=host.querySelector('.dt-q');n.focus();n.selectionStart=n.selectionEnd=p};
+    qi.oninput=()=>{
+      st.q=qi.value;st.pg=1;
+      const runDraw=()=>{
+        const cur=host.querySelector('.dt-q');
+        const p=cur?cur.selectionStart:st.q.length;
+        draw();
+        const n=host.querySelector('.dt-q');
+        if(n){n.focus();n.selectionStart=n.selectionEnd=p}
+      };
+      if(qTimer)clearTimeout(qTimer);
+      if(data.length>500)qTimer=setTimeout(runDraw,120);
+      else runDraw();
+    };
     host.querySelectorAll('.dt-t').forEach(e=>e.onclick=()=>{
       const k=e.dataset.sk;
       if(st.sort===k)st.dir=st.dir==='asc'?'desc':'asc';else{st.sort=k;st.dir='desc'}
@@ -2095,17 +2118,43 @@ const cap = (src.capacity || []).map(c=>({
 }
 /* ═══════════════ 4.2. ДВИЖОК СКВОЗНОГО АНАЛИЗА МОЩНОСТЕЙ И RCA ═══════════════ */
 const CapacityRCA = {
+  _capIdx: null,          // WeakMap: DS.capacity → Map по нормализованному ресурсу
+  _logIdx: null,
+  _idxFor(srcCapacity){
+    if(!this._capIdx) this._capIdx=new WeakMap();
+    if(!this._logIdx) this._logIdx=new WeakMap();
+    let m=this._capIdx.get(srcCapacity);
+    if(!m){
+      m=new Map();
+      const lm=new Map();
+      for(let i=0;i<srcCapacity.length;i++){
+        const c=srcCapacity[i];
+        const rk=String(c.rs||'').trim().toLowerCase();
+        if(rk){ if(!m.has(rk))m.set(rk,[]); m.get(rk).push(c); }
+        const isRouteLimit=(c.cat==='route')||(c.locFr&&c.locTo);
+        const isLogCat=(c.cat==='route'||c.cat==='logistics'||c.cat==='warehouse'||c.cat==='loading'||c.cat==='unloading');
+        if(isRouteLimit&&isLogCat){
+          if(!lm.has(rk))lm.set(rk,[]); lm.get(rk).push(c);
+        }
+      }
+      this._capIdx.set(srcCapacity,m);
+      this._logIdx.set(srcCapacity,lm);
+    }
+    return [m,this._logIdx.get(srcCapacity)];
+  },
   getCap(rsId, plId, orderPeriod, orderDate){
     if(!rsId || !String(rsId).trim()) return null;
     if(!DS || !DS.hasCap || !DS.capacity || !DS.capacity.length) return null;
     const rLower = String(rsId||'').trim().toLowerCase();
     const pLower = String(plId||'').trim().toLowerCase();
     const targetDate = normalizePeriodKey(orderDate);
+    const [capIdx]=this._idxFor(DS.capacity);
+    const cand=capIdx.get(rLower);
+    if(!cand) return null;
 
     // 1. Точное совпадение по периоду (YYYY-MM)
     if(targetDate){
-      const match = DS.capacity.find(c => 
-        c.rs.toLowerCase() === rLower &&
+      const match = cand.find(c =>
         (!plId || (c.pl && c.pl.toLowerCase() === pLower)) &&
         (c.periodKey === targetDate || c.isGlobal)
       );
@@ -2114,8 +2163,7 @@ const CapacityRCA = {
 
     // 2. Совпадение по номеру периода
     if(orderPeriod !== undefined && orderPeriod !== null){
-      const matchP = DS.capacity.find(c => 
-        c.rs.toLowerCase() === rLower &&
+      const matchP = cand.find(c =>
         (!plId || (c.pl && c.pl.toLowerCase() === pLower)) &&
         (c.p === Number(orderPeriod) || c.isGlobal)
       );
@@ -2123,10 +2171,9 @@ const CapacityRCA = {
     }
 
     // 3. Глобальное ограничение или общее совпадение
-    return DS.capacity.find(c => 
-      c.rs.toLowerCase() === rLower &&
+    return cand.find(c =>
       (!plId || (c.pl && c.pl.toLowerCase() === pLower))
-    ) || DS.capacity.find(c => c.rs.toLowerCase() === rLower) || null;
+    ) || cand[0] || null;
   },
 
   /**
@@ -2143,8 +2190,10 @@ const CapacityRCA = {
     const toLower = locTo ? String(locTo).trim().toLowerCase() : '';
     const prodLower = prod ? String(prod).trim().toLowerCase() : '';
     const targetDate = normalizePeriodKey(orderDate);
+    const [,_logIdx]=this._idxFor(DS.capacity);
+    const cand = rLower ? (_logIdx.get(rLower)||[]) : DS.capacity;
 
-    return DS.capacity.find(c => {
+    return cand.find(c => {
       // Только лимиты направлений с явными масками (res_loc_loc / merged route rows)
       const isRouteLimit = (c.cat === 'route') || (c.locFr && c.locTo);
       if(!isRouteLimit) return false;
@@ -2444,6 +2493,18 @@ function flowChainOf(legsList,startNode){
 
 /* ═══════════════ 5. ФИЛЬТРЫ UI ═══════════════ */
 const POPQ={};
+/* Кэш уникальных значений фильтров: пересчитываем списки только при смене
+   датасета, а не при каждом render() (на десятках тысяч заказов uq-скан
+   по всем строкам — заметная доля времени отрисовки). */
+let _fillListCache=null, _fillListDS=null, _fillListLen=-1;
+function fillList(key, fn){
+  const len=DS?((DS.orders?DS.orders.length:0)+(DS.ops?DS.ops.length:0)):-1;
+  if(_fillListDS!==DS||!_fillListCache||_fillListLen!==len){
+    _fillListCache={};_fillListDS=DS;_fillListLen=len;
+  }
+  if(!_fillListCache[key])_fillListCache[key]=fn();
+  return _fillListCache[key];
+}
 function fillSelects(){
   const o=DS.orders, ops=DS.ops;
   const renderPill=(wrapId,key,list,fmt)=>{
@@ -2511,14 +2572,14 @@ function fillSelects(){
     });
   };
 
-  renderPill('#pop_p','p',uq(o,x=>x.p).sort(periodCompare),v=>periodLabel(v));
+  renderPill('#pop_p','p',fillList('p',()=>uq(o,x=>x.p).sort(periodCompare)),v=>periodLabel(v));
   renderPill('#pop_ch','ch',['RU','EX'],v=>v==='RU'?'RU · внутренний':'EX · экспорт');
-  renderPill('#pop_pi','pi',uq(o,x=>x.pk).sort(prioKeySort),v=>'Приоритет '+v);
-  renderPill('#pop_cl','cl',uq(o,x=>x.cl));
-  renderPill('#pop_pr','pr',uq(o,x=>x.prod));
-  renderPill('#pop_pl','pl',uq(ops,x=>x.pl));
-  renderPill('#pop_vd','vd',uq(ops,x=>x.vd));
-  renderPill('#pop_tm','tm',uq(ops,x=>x.tm));
+  renderPill('#pop_pi','pi',fillList('pi',()=>uq(o,x=>x.pk).sort(prioKeySort)),v=>'Приоритет '+v);
+  renderPill('#pop_cl','cl',fillList('cl',()=>uq(o,x=>x.cl)));
+  renderPill('#pop_pr','pr',fillList('pr',()=>uq(o,x=>x.prod)));
+  renderPill('#pop_pl','pl',fillList('pl',()=>uq(ops,x=>x.pl)));
+  renderPill('#pop_vd','vd',fillList('vd',()=>uq(ops,x=>x.vd)));
+  renderPill('#pop_tm','tm',fillList('tm',()=>uq(ops,x=>x.tm)));
 
   const nAct=Object.values(F).reduce((s,a)=>s+a.length,0);
   const rBtn=$('#bResetFlt');
@@ -4865,11 +4926,24 @@ function expireActiveDatasetIfNeeded(){
     DS=demoDataset();TAB='ov';STAT_PIN=false;clearF();render();
   }
 }
+/* Порог синхронной сериализации: JSON.stringify + setItem на десятках тысяч
+   строк блокирует главный поток на секунды и при переполнении квоты бросает
+   QuotaExceededError. Для больших датасетов полный снапшот в localStorage не
+   пишем — только маркер активного набора, чтобы expireActiveDatasetIfNeeded()
+   не сбрасывал DS в демо через 60 секунд. */
+const AUTOSAVE_MAX_ROWS=15000;
 function autosaveDS(){
   if(!DS)return;
+  /* Маркер активного набора — первым и в отдельном try/catch: даже если
+     полный снапшот ниже не влезет, DS не сбросится в демо. */
+  try{writeActiveDataset(DS)}catch(e){/* writeActiveDataset уже логирует */}
+  const nRows=(DS.orders?DS.orders.length:0)+(DS.ops?DS.ops.length:0);
+  if(nRows>AUTOSAVE_MAX_ROWS){
+    try{localStorage.removeItem(AUTOSAVE_KEY)}catch(e){}
+    return;
+  }
   try{
     localStorage.setItem(AUTOSAVE_KEY,JSON.stringify({v:1,ts:new Date().toISOString(),name:DS.name,ds:DS}));
-    writeActiveDataset(DS);
   }
   catch(e){/* приватный режим / переполнение квоты (~5 МБ) — просто не сохраняем */
     console.warn('Автосохранение не выполнено:',e)}
@@ -7384,17 +7458,31 @@ function parseRows(rows,fileName){
     const t=T2[str(pick(rw,COL.type)).toLowerCase()];
     if(!t){skippedOps++;return} // неизвестный тип — строка не теряется молча, а попадёт в отчёт загрузки
     const oid=str(pick(rw,COL.oid)),rs=str(pick(rw,COL.rs));
+    const v=num(pick(rw,COL.v)),rc=num(pick(rw,COL.rc));
+    /* Операции с нулевым объёмом и нулевым расходом ресурса бизнес-смысла не
+       несут — отбрасываем их сразу, чтобы не раздувать DS.ops на сотнях тысяч
+       строк XLSX и не тормозить отрисовку цепочки/таблицы. Реальные положительные
+       и отрицательные значения сохраняются (допуск ORD_TOL). */
+    if(Math.abs(v)<=ORD_TOL && Math.abs(rc)<=ORD_TOL)return;
     const key=id+'|'+oid+'|'+rs;if(seenOp.has(key))return;seenOp.add(key);
     ops.push({o:id,p:pnum(pick(rw,COL.p)),d:fmtDate(pick(rw,COL.dt)),t,
       pl:str(pick(rw,COL.pl)),pr:str(pick(rw,COL.oprod)),rs:(t==='mv'?'':rs),
       fr:str(pick(rw,COL.fr)),to:str(pick(rw,COL.to)),tm:str(pick(rw,COL.tm)),
-      v:num(pick(rw,COL.v)),r:Math.abs(num(pick(rw,COL.r))),
+      v,r:Math.abs(num(pick(rw,COL.r))),
       vd:str(pick(rw,COL.vd)),rt:str(pick(rw,COL.rt)),
-      oid,dp:oid?oid.split('.').length:1,rc:num(pick(rw,COL.rc))||undefined});
+      oid,dp:oid?oid.split('.').length:1,rc:rc||undefined});
   });
-  if(!orders.length)throw new Error('Не удалось распознать ни одного заказа');
+  /* Заказы без объёма спроса, продаж и непокрытого спроса одновременно —
+     пустые строки-дубликаты, не влияющие ни на один KPI. Выкидываем вместе с
+    их операциями, чтобы не засорять RCA и сводки. 100%-непокрытые (sal=0,
+    unm>0, dem>0) и нулевой-продажный план при наличии спроса сохраняются. */
+  const keptOrders = orders.filter(o =>
+    Math.abs(o.dem)>ORD_TOL || Math.abs(o.sal)>ORD_TOL || Math.abs(o.unm)>ORD_TOL);
+  const keptIds = new Set(keptOrders.map(o=>o.id));
+  const keptOps = keptIds.size===orders.length ? ops : ops.filter(op=>keptIds.has(op.o));
+  if(!keptOrders.length)throw new Error('Не удалось распознать ни одного заказа');
   const nm=fileName.replace(/\.(xlsx|xls)$/i,'')+(runId?` | run ${runId}`:'')+(cfg?` | cfg ${cfg}`:'');
-  return {name:nm,orders,ops,skippedOps};
+  return {name:nm,orders:keptOrders,ops:keptOps,skippedOps};
 }
 
 /* ═══════════════ 16.1. ТОЧНЫЙ ПАРСЕР capacity_view_sp ═══════════════ */

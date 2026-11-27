@@ -69,10 +69,10 @@ test('uncSql: полный набор ключевых колонок — period
   assert.match(q.periods.sql, /s\."date"/);
 });
 
-test('uncSql: минимум колонок — ничего лишнего не добавляем', () => {
+test('uncSql: минимум колонок — ничего лишнего не добавляем, нулевой спрос отсекается', () => {
   const cols = mapColumns(['demandqty'], 's1');
   const q = uncSql('s1', cols, 4);
-  assert.equal(q.total.sql, sq('SELECT sum("demandqty") AS demUnc, count(*)::bigint AS n FROM (SELECT "demandqty" FROM "s1"."independent_demand") s'));
+  assert.equal(q.total.sql, sq('SELECT sum("demandqty") AS demUnc, count(*)::bigint AS n FROM (SELECT "demandqty" FROM "s1"."independent_demand" WHERE abs("demandqty") > 0.000000001) s'));
   assert.deepEqual(q.total.params, []);
   assert.equal(q.periods, null, 'без колонки date/periodid периодный разрез не строится');
 });
@@ -395,3 +395,39 @@ test('статика: / отдаёт index.html дашборда', async () => {
     assert.match(r.headers.get('content-type') || '', /text\/html/);
   });
 });
+
+test('POST /api/pg/unc — нулевые строки independent_demand отсекаются и в SQL, и в orders + gzip для крупных ответов', async () => {
+  const bigRows = Array.from({ length: 40 }, (_, i) => ({
+    item: `SKU-${i}`,
+    demandqty: i % 2 === 0 ? '0' : String((i + 1) * 10),
+    periodid: '420260901',
+    dmdstream: 'BASE',
+    periodtype: 4,
+    demandtype: '1',
+    loc: 'LOC-1',
+    date: '2026-09-01'
+  }));
+  await withServer((sql) => {
+    if (/information_schema\.columns/.test(sql)) return { rows: FULL_COLS.map((c) => ({ c })) };
+    if (/count\(\*\)::bigint/.test(sql)) return { rows: [{ demUnc: 8000, n: 20 }] };
+    if (/GROUP BY k ORDER BY k/.test(sql)) return { rows: [{ k: '2026-09', demUnc: 8000 }] };
+    if (/AS "item"/.test(sql)) return { rows: bigRows };
+    return { rows: [] };
+  }, async (base, calls) => {
+    const r = await fetch(base + '/api/pg/unc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept-Encoding': 'gzip' },
+      body: JSON.stringify({ ...CONN, schema: 'public_2', gran: 4 })
+    });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-encoding'), 'gzip', 'крупный JSON сжат gzip');
+    const data = await r.json();
+    assert.equal(data.orders.length, 20, 'нулевые строки спроса отсечены');
+    assert.ok(data.orders.every((o) => o.demandqty > 0), 'остались только ненулевые заказы');
+    assert.deepEqual(data.orders.map((o) => o.sourceId), Array.from({ length: 20 }, (_, i) => i + 1));
+    for (const c of calls.filter((x) => /"independent_demand"/.test(x.sql))) {
+      assert.match(c.sql, /abs\("demandqty"\) > 0\.000000001/, 'SQL фильтрует нули до DISTINCT');
+    }
+  });
+});
+
