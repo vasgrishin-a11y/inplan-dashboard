@@ -23,7 +23,7 @@ const CHX = window.CHX = {
     detailOrders:2000            // сколько заказов тянуть детально в основную схему
   },
   state:{
-    connected:false, dbs:[], granOptions:[], granByDb:{}, scenario:new Map(),
+    connected:false, dbs:[], granOptions:[], granByDb:{}, mdColsByDb:{}, scenario:new Map(),
     pgScenario:new Map(),
     lastError:null, busy:false
   },
@@ -154,12 +154,33 @@ function endpoint(){
   if(c.useProxy) return c.proxyUrl.replace(/\/+$/,'');
   return `${c.proto}://${c.host}:${c.port}`;
 }
+/* Ограничитель параллельных HTTP-запросов к ClickHouse: не перегружает
+   пул сокетов браузера (6 на хост) и лимит max_concurrent_queries_for_user
+   в кластере, но позволяет параллелить независимые агрегаты и чанки операций. */
+const CH_MAX_CONCURRENT = 4;
+let chActive = 0;
+const chWaitQueue = [];
+function withChSlot(fn){
+  return new Promise((resolve, reject)=>{
+    const run = ()=>{
+      chActive++;
+      Promise.resolve().then(fn).then(resolve, reject).finally(()=>{
+        chActive--;
+        if(chWaitQueue.length) chWaitQueue.shift()();
+      });
+    };
+    if(chActive < CH_MAX_CONCURRENT) run();
+    else chWaitQueue.push(run);
+  });
+}
+
 async function chQuery(sql, fmt){
   fmt = fmt || 'JSONEachRow';
   const c = CHX.cfg;
   const url = endpoint() + '/?' + new URLSearchParams({
     default_format: fmt,
     add_http_cors_header:'1',
+    enable_http_compression:'1',
     max_execution_time:'120',
     readonly:'1'
   });
@@ -168,36 +189,90 @@ async function chQuery(sql, fmt){
     if(c.user) headers['X-ClickHouse-User'] = c.user;
     if(c.pass) headers['X-ClickHouse-Key']  = c.pass;
   }
-  let res;
-  try{
-    res = await fetch(url, {method:'POST', headers, body:sql, mode:'cors', credentials:'omit'});
-  }catch(e){
-    throw new Error('Сеть/CORS: браузер не смог обратиться к '+endpoint()+
-      '. Проверьте CORS на стороне ClickHouse, валидность TLS-сертификата и доступность хоста. ('+e.message+')');
-  }
-  const text = await res.text();
-  if(!res.ok) throw new Error(`ClickHouse ${res.status}: ${text.slice(0,600)}`);
-  if(fmt !== 'JSONEachRow') return text;
-  return text.split('\n').filter(Boolean).map(l=>{
-    try{ return JSON.parse(l) }catch(e){ return null }
-  }).filter(Boolean);
+  return withChSlot(async ()=>{
+    let res;
+    try{
+      res = await fetch(url, {method:'POST', headers, body:sql, mode:'cors', credentials:'omit'});
+    }catch(e){
+      throw new Error('Сеть/CORS: браузер не смог обратиться к '+endpoint()+
+        '. Проверьте CORS на стороне ClickHouse, валидность TLS-сертификата и доступность хоста. ('+e.message+')');
+    }
+    const text = await res.text();
+    if(!res.ok) throw new Error(`ClickHouse ${res.status}: ${text.slice(0,600)}`);
+    if(fmt !== 'JSONEachRow') return text;
+    const out = [];
+    let i = 0, len = text.length;
+    while(i < len){
+      let j = text.indexOf('\n', i);
+      if(j < 0) j = len;
+      if(j > i){
+        const line = text.slice(i, j).trim();
+        if(line){
+          try{
+            const parsed = JSON.parse(line);
+            if(parsed) out.push(parsed);
+          }catch(e){}
+        }
+      }
+      i = j + 1;
+    }
+    return out;
+  });
 }
 CHX.query = chQuery;
 
 /* ─────────────── 4. SQL-ХЕЛПЕРЫ ─────────────── */
 const q = s => '`' + String(s).replace(/`/g,'') + '`';
 const qs = s => "'" + String(s).replace(/'/g,"\\'") + "'";
+const ZERO_TOL_SQL = '0.000000001';
+const ZERO_TOL = 1e-9;
+
+function uniqCols(cols){
+  const seen = new Set(), out = [];
+  for(const c of (cols||[])){
+    if(!c) continue;
+    const k = String(c).toLowerCase();
+    if(!seen.has(k)){ seen.add(k); out.push(c) }
+  }
+  return out;
+}
 
 /* Источник с дедупликацией: is_deleted=0 + последняя версия строки.
-   ReplacingMergeTree без FINAL может отдать дубли, поэтому LIMIT 1 BY. */
-function src(db, tbl, extraWhere){
+   ReplacingMergeTree без FINAL может отдать дубли, поэтому LIMIT 1 BY.
+   Когда передан список selectCols, во внутреннем подзапросе читаются только
+   нужные столбцы (+ ключи дедупликации и update_date_time), а не SELECT * —
+   в ClickHouse это кратно снижает расход памяти и диска при сортировке LIMIT 1 BY. */
+function src(db, tbl, extraWhere, selectCols){
   const t = TABLES[tbl] || {};
   const w = ['is_deleted = 0'];
   if(extraWhere) w.push('('+extraWhere+')');
-  let s = `SELECT * FROM ${q(db)}.${q(tbl)} WHERE ${w.join(' AND ')}`;
+  let proj = '*';
+  if(Array.isArray(selectCols) && selectCols.length){
+    const full = uniqCols([].concat(t.dedupBy||[], t.dedupBy && t.dedupBy.length ? ['update_date_time'] : [], selectCols));
+    proj = full.map(q).join(', ');
+  }
+  let s = `SELECT ${proj} FROM ${q(db)}.${q(tbl)} WHERE ${w.join(' AND ')}`;
   if(t.dedupBy && t.dedupBy.length)
     s += ` ORDER BY update_date_time DESC LIMIT 1 BY ${t.dedupBy.map(q).join(', ')}`;
   return '('+s+')';
+}
+
+/* Кэшированный набор столбцов marking_demand для конкретной базы:
+   убирает повторные запросы в system.columns между агрегатами, сводкой
+   заказов и детализацией основной схемы. */
+async function getMarkingDemandCols(db){
+  if(!db) return null;
+  const cache = CHX.state.mdColsByDb || (CHX.state.mdColsByDb = {});
+  if(Object.prototype.hasOwnProperty.call(cache, db)) return cache[db];
+  try{
+    const cl = await chQuery(`SELECT name FROM system.columns
+      WHERE database = ${qs(db)} AND table = 'marking_demand'`);
+    const set = new Set(cl.map(r=>String(r.name||'').toLowerCase()).filter(Boolean));
+    cache[db] = set.size ? set : null;
+  }catch(e){
+    cache[db] = null;
+  }
+  return cache[db];
 }
 
 /* Гранулярность: усечение даты под тип периода.
@@ -260,7 +335,7 @@ CHX.covPeriodCanon = covPeriodCanon;
 
 /* ─────────────── 5. ОБНАРУЖЕНИЕ СХЕМ И ГРАНУЛЯРНОСТЕЙ ─────────────── */
 CHX.connect = async function(){
-  CHX.state.busy = true; CHX.state.lastError = null;
+  CHX.state.busy = true; CHX.state.lastError = null; CHX.state.mdColsByDb = {};
   try{
     /* Полный список баз; фильтр data_public* — без учёта регистра,
        т.к. в кластере базы называются «Data_public_N» с заглавной буквы */
@@ -532,15 +607,13 @@ CHX.unmatchedSchemas = () =>
    локации, типа/потока спроса и ближайший объём (см. mergeIndependentOrders).
    Читаем только компактные поля статуса, а не все финансы/операции. */
 async function loadVersionOrderSummary(db,gran){
-  const S_MD = src(db,'marking_demand');
-  let mdCols = null;
-  try{
-    const cols = await chQuery(`SELECT name FROM system.columns
-      WHERE database = ${qs(db)} AND table = 'marking_demand'`);
-    mdCols = new Set(cols.map(r=>String(r.name||'').toLowerCase()));
-  }catch(e){ /* без system.columns пробуем гарантированный набор */ }
+  const mdCols = await getMarkingDemandCols(db);
   const anyOr = (col, fallback) => mdCols && !mdCols.has(String(col).toLowerCase())
     ? fallback : `any(${q(col)})`;
+  const sumCols = ['demand_period','demand_product','demand_location','demand_demandtype',
+    'dmdstream','demand_volume','results_sale','unsatisfied_demand','periodtype'];
+  const projCols = mdCols ? sumCols.filter(c=>mdCols.has(c)) : null;
+  const S_MD = src(db,'marking_demand', null, projCols);
   /* Сопоставляем тот же periodtype, что и DISTINCT-вход independent_demand.n.
      Если схема не публикует periodtype в marking_demand, оставляем её исходный
      охват: query ниже всё равно будет помечен как fallback в случае ошибки. */
@@ -554,17 +627,30 @@ async function loadVersionOrderSummary(db,gran){
       ${anyOr('demand_volume','0')} AS dem,
       ${anyOr('results_sale','0')} AS sal,
       ${anyOr('unsatisfied_demand','0')} AS unm
-    FROM ${S_MD} ${periodFilter} GROUP BY order_id`);
+    FROM ${S_MD} ${periodFilter} GROUP BY order_id
+    HAVING abs(toFloat64(dem)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(sal)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(unm)) > ${ZERO_TOL_SQL}`);
   return rows.map(r=>({id:num(r.id), p:r.p, prod:sany(r.prod), loc:sany(r.loc),
-    dt:sany(r.dt), stream:sany(r.stream), dem:num(r.dem), sal:num(r.sal), unm:num(r.unm)}));
+    dt:sany(r.dt), stream:sany(r.stream), dem:num(r.dem), sal:num(r.sal), unm:num(r.unm)}))
+    .filter(r=>Math.abs(r.dem)>ZERO_TOL || Math.abs(r.sal)>ZERO_TOL || Math.abs(r.unm)>ZERO_TOL);
 }
 
 /* ─────────────── 8. АГРЕГАТЫ ВЕРСИИ (считает ClickHouse) ─────────────── */
 async function loadVersionAgg(db, gran){
   const out = {db, gran, totals:{}, dims:{}, notes:[]};
-  const S_MD = src(db,'marking_demand');
+  const S_MD = src(db,'marking_demand', null, [
+    'demand_period','demand_product','demand_client','demand_location',
+    'demand_volume','results_sale','unsatisfied_demand',
+    'revenue','cost_of_demand','total_margin','margin_per_unit'
+  ]);
+  const S_MD_OPS = src(db,'marking_demand', null, [
+    'operation_type','cost_rate_of_operation','order_operation_volume'
+  ]);
 
    /* 8.1 финансы и объёмы: дедуп до уровня заказа, потом агрегация.
+     Полностью нулевые заказы (спрос = 0, отгрузка = 0, дефицит = 0) отсекаются
+     после дедупликации, чтобы не искажать счётчик заказов и долю непокрытых.
      ВАЖНО: колонки подзапроса названы с префиксом o_ — ClickHouse подставляет
      алиасы глобально по запросу, и если подзапрос даёт колонку «unm», а внешняя
      выборка объявляет sum(unm) AS unm, то внутри sum(unm*mpt) «unm» разворачивается
@@ -581,11 +667,33 @@ async function loadVersionAgg(db, gran){
       any(abs(${q('cost_of_demand')})) AS o_cost,
       any(${q('total_margin')})    AS o_mar,
       any(${q('margin_per_unit')}) AS o_mpt
-    FROM ${S_MD} GROUP BY order_id)`;
+    FROM ${S_MD} GROUP BY order_id
+    HAVING abs(toFloat64(o_dem)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(o_sal)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(o_unm)) > ${ZERO_TOL_SQL})`;
+
+  /* Запускаем независимые запросы к ClickHouse и PostgreSQL параллельно
+     (семафор chQuery ограничивает конкурентность к ClickHouse до 4 сокетов),
+     а запись в out.totals / out.notes выполняем строго в каноническом порядке
+     секций 8.1 → 8.1.1 → 8.2 → 8.3 → 8.4 → 8.4.1 → 8.5 → 8.6 → 8.7. */
+  const pgTask = (window.PGX && PGX.enabled())
+    ? PGX.uncFor(db, gran).then(async u => {
+        const orders = Array.isArray(u.orders) ? u.orders : [];
+        const hasCnt = !!u.countAvailable || orders.length > 0;
+        const cnt = u.countAvailable ? Math.max(0,Math.trunc(num(u.n))) : orders.length;
+        const complete = hasCnt && orders.length === cnt;
+        let summary = null, summaryErr = null;
+        if(hasCnt && complete && cnt > 0){
+          try{ summary = await loadVersionOrderSummary(db, gran); }
+          catch(e){ summaryErr = e; }
+        }
+        return { ok:true, u, summary, summaryErr };
+      }).catch(err => ({ ok:false, err }))
+    : Promise.resolve(null);
 
   /* toFloat64: unsatisfied_demand и margin_per_unit — Decimal(18,12),
      их произведение переполняет десятичный разряд (ошибка 407) */
-  const tot = await chQuery(`SELECT count() AS orders,
+  const totTask = chQuery(`SELECT count() AS orders,
       sum(toFloat64(o_rev)) AS rev, sum(toFloat64(o_cost)) AS cost, sum(toFloat64(o_mar)) AS mar,
       sum(toFloat64(o_dem)) AS dem, sum(toFloat64(o_sal)) AS sal, sum(toFloat64(o_unm)) AS unm,
       sum(toFloat64(o_unm)*toFloat64(o_mpt)) AS lm,
@@ -598,27 +706,205 @@ async function loadVersionAgg(db, gran){
       countIf(toFloat64(o_sal) > 0.000000001 AND toFloat64(o_unm) > 0.000000001) AS partCoveredOrders,
       countIf(toFloat64(o_sal) > 0.000000001 AND toFloat64(o_unm) <= 0.000000001) AS fullCoveredOrders
     FROM ${ordSub}`);
-  Object.assign(out.totals, tot[0]||{});
 
-  /* 8.1.1 итоговые финансы из margin_sales (задача владельца 2026-10-06):
-     «Валовая выручка» = Σ revenue, «Валовая маржа» = Σ total_margin по всей
-     таблице margin_sales — эти значения ПЕРЕКРЫВАЮТ rev/mar из marking_demand
-     и питают карточки верхнего ряда и сравнение версий (covBasis, snap,
-     vsFlat читают totals.rev/mar). Таблицы и графики остаются на детализации
-     marking_demand, поэтому прежние итоги сохраняем в revMd/marMd, а источник
-     фиксируем в finSrc. Дедупликация — стандартный src(): is_deleted = 0 +
-     последняя версия строки по sys_id. toFloat64 — Decimal-поля, как в 8.1.
-     Пустая/нулевая margin_sales — тихий фолбэк на marking_demand (finSrc не
-     ставится); ошибка запроса (нет таблицы, нет прав) — заметка загрузки. */
-  try{
-    const S_MS = src(db,'margin_sales');
-    const ms = await chQuery(`SELECT
+  const msTask = (async ()=>{
+    const S_MS = src(db,'margin_sales', null, ['revenue','total_margin','cost_of_demand']);
+    return chQuery(`SELECT
         sum(toFloat64(${q('revenue')}))      AS msRev,
         sum(toFloat64(${q('total_margin')})) AS msMar,
         sum(toFloat64(abs(${q('cost_of_demand')}))) AS msCost,
         count() AS msRows
       FROM ${S_MS}`);
-    const m0 = ms[0]||{};
+  })().then(rows=>({ok:true, rows}), err=>({ok:false, err}));
+
+  const opsTask = chQuery(`SELECT ${q('operation_type')} AS t,
+      sum(toFloat64(abs(${q('cost_rate_of_operation')})) * toFloat64(${q('order_operation_volume')})) AS c,
+      sum(toFloat64(${q('order_operation_volume')})) AS v, count() AS n
+    FROM ${S_MD_OPS}
+    WHERE abs(toFloat64(${q('order_operation_volume')})) > ${ZERO_TOL_SQL}
+    GROUP BY t`);
+
+  const dimQ = alias => chQuery(
+    `SELECT ${q('o_'+alias)} AS k, sum(o_mar) AS mar, sum(o_sal) AS sal, sum(o_unm) AS unm, sum(o_rev) AS rev
+     FROM ${ordSub} GROUP BY k ORDER BY mar DESC LIMIT 60`);
+  const dimsTask = Promise.all([dimQ('p'), dimQ('prod'), dimQ('cl')]);
+
+  const covTask = (async ()=>{
+    const gw = granWhere('demand_coverage', gran);
+    const pk = periodKeyExpr('demand_coverage', gran);
+    const S_DC = src(db,'demand_coverage', gw, [
+      'fullfilleddemandqty','unfullfilleddemandqty','demandfullfilledintimeqty',
+      'demandfullfilledlateqty','lostrevenue','plannedrevenue','propagated_demand',
+      'date','periodtype'
+    ]);
+    /* Помесячный разрез читает только объёмы и дату: отдельная узкая проекция
+       без lostrevenue/plannedrevenue/propagated_demand (меньше трафика и
+       подзапрос не тянет финансовые колонки ради трёх сумм). */
+    const S_DCP = src(db,'demand_coverage', gw, [
+      'fullfilleddemandqty','unfullfilleddemandqty','demandfullfilledlateqty',
+      'date','periodtype'
+    ]);
+    const dcNonZero = `(abs(toFloat64(${q('fullfilleddemandqty')})) > ${ZERO_TOL_SQL} OR abs(toFloat64(${q('unfullfilleddemandqty')})) > ${ZERO_TOL_SQL})`;
+    const [cov, covP] = await Promise.all([
+      chQuery(`SELECT
+          sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
+          sum(${q('fullfilleddemandqty')})    AS ff,
+          sum(${q('unfullfilleddemandqty')})  AS uf,
+          sum(${q('demandfullfilledintimeqty')}) AS inTime,
+          sum(${q('demandfullfilledlateqty')})   AS late,
+          count() AS orderRows,
+          /* Классификация заказов по demand_coverage (задача владельца 2026-10-05):
+             всего строк = все заказы неограниченного спроса;
+             100% не покрыто — fullfilleddemandqty = 0;
+             частично покрыто — unfullfilleddemandqty > 0 И fullfilleddemandqty > 0;
+             полностью покрыто — unfullfilleddemandqty = 0 И fullfilleddemandqty > 0.
+             Три группы — разбиение всех строк: A + B + C = orderRows (ловится
+             проверкой в «Данных и качестве»). Допуск 1e-9 — тот же, что у
+             countIf(unm <= 0.000000001) в marking_demand: Decimal(18,12) даёт
+             шум в двенадцатом знаке, и строгое «= 0» считало бы его данными.
+             Приведение — toFloat64, а НЕ toFloat64OrZero: функции с постфиксом
+             OrZero/OrNull принимают только String, а столбцы demand_coverage —
+             Decimal, и реальный ClickHouse отвечает «Code: 43. DB::Exception:
+             Illegal type Decimal ... should take String argument», роняя весь
+             агрегат вместе с demUnc (фолбэком PG) — ошибка продакшена 2026-10-05. */
+          countIf(toFloat64(${q('fullfilleddemandqty')}) <= 0.000000001) AS fullyUncoveredOrders,
+          countIf(toFloat64(${q('unfullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS partiallyCoveredOrders,
+          countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS fullyCoveredOrders,
+          /* Опоздания в заказах: считаем среди ПОЛНОСТЬЮ покрытых (решение
+             владельца 2026-10-05), чтобы водопад сходился:
+             План продаж (заказов) = В срок + Отгружено с опозданием.
+             lateOrdersAll — все строки с признаком опоздания (для тултипа:
+             сколько опозданий скрывается у частично покрытых). */
+          countIf(toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateOrdersAll,
+          countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateFullyCoveredOrders,
+          sum(${q('lostrevenue')})   AS lostRev,
+          sum(${q('plannedrevenue')}) AS planRev,
+          sum(${q('propagated_demand')}) AS prop
+        FROM ${S_DC} WHERE ${dcNonZero}`),
+      chQuery(`SELECT ${pk} AS k,
+          sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
+          sum(${q('fullfilleddemandqty')}) AS ff,
+          sum(${q('unfullfilleddemandqty')}) AS uf,
+          sum(${q('demandfullfilledlateqty')}) AS late
+        FROM ${S_DCP} WHERE ${dcNonZero} GROUP BY k ORDER BY k`)
+    ]);
+    return {ok:true, cov, covP};
+  })().catch(err=>({ok:false, err}));
+
+  const capTask = (async ()=>{
+    const gw = granWhere('capacity_view_sp', gran);
+    const pk = periodKeyExpr('capacity_view_sp', gran);
+    const S_CV = src(db,'capacity_view_sp', gw, [
+      'res','loc','restypedescr','restype','resgroup','date','periodtype',
+      'calendarcapacity','calcavailablebucketcapacity','availbucketcapacity',
+      'netavailablecapacity','freecapacity','totalcapausage',
+      'inipcapaplannedusage','pcapaplannedusage','scapaplannedusage','transcapaplannedusage',
+      'maintenance','plannedmaintenance','capitalmaintenance','externalmaintenance','oee'
+    ]);
+    const cap0=c=>`toFloat64(ifNull(${q(c)},0))`;
+    const rowLoadExpr=`greatest(${cap0('totalcapausage')},${cap0('inipcapaplannedusage')},
+        ${cap0('pcapaplannedusage')},${cap0('scapaplannedusage')},${cap0('transcapaplannedusage')})`;
+    const availExpr = `greatest(${cap0('calcavailablebucketcapacity')},
+        ${cap0('availbucketcapacity')}, ${cap0('netavailablecapacity')},
+        ${cap0('freecapacity')} + ${rowLoadExpr})`;
+    const cap = await chQuery(`SELECT
+        ${q('res')} AS rs, any(${q('loc')}) AS pl,
+        any(${q('restypedescr')}) AS resTypeDescr, any(${q('restype')}) AS resType,
+        any(${q('resgroup')}) AS grp, ${pk} AS periodKey,
+        sum(${q('calendarcapacity')}) AS norm,
+        sum(${availExpr})             AS avail,
+        sum(${q('totalcapausage')})   AS load,
+        sum(${q('inipcapaplannedusage')})   AS useIp,
+        sum(${q('pcapaplannedusage')})      AS useP,
+        sum(${q('scapaplannedusage')})      AS useS,
+        sum(${q('transcapaplannedusage')})  AS useT,
+        sum(${q('maintenance')} + ${q('plannedmaintenance')} +
+            ${q('capitalmaintenance')} + ${q('externalmaintenance')}) AS maint,
+        avg(${q('oee')}) AS oee
+      FROM ${S_CV} GROUP BY rs, periodKey
+      HAVING abs(toFloat64(norm)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(avail)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(load)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(useIp)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(useP)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(useS)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(useT)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(maint)) > ${ZERO_TOL_SQL}`);
+    return {ok:true, cap};
+  })().catch(err=>({ok:false, err}));
+
+  const rcTask = (async ()=>{
+    const gw = granWhere('rescapacity', gran);
+    const pk = periodKeyExpr('rescapacity', gran);
+    const S_RC = src(db,'rescapacity', gw, [
+      'res','loc','datefr','periodtype','calendarcapacity',
+      'netavailbucketcapacity','availbucketcapacity','capaexpansion',
+      'maintenance','plannedmaintenance'
+    ]);
+    const rc = await chQuery(`SELECT ${q('res')} AS rs, any(${q('loc')}) AS pl,
+        ${pk} AS periodKey,
+        sum(${q('calendarcapacity')})     AS norm,
+        sum(${q('netavailbucketcapacity')}) AS availNet,
+        sum(${q('availbucketcapacity')})  AS avail,
+        sum(${q('capaexpansion')})        AS expansion,
+        sum(${q('maintenance')} + ${q('plannedmaintenance')}) AS maint
+      FROM ${S_RC} GROUP BY rs, periodKey
+      HAVING abs(toFloat64(norm)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(availNet)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(avail)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(expansion)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(maint)) > ${ZERO_TOL_SQL}`);
+    return {ok:true, rc};
+  })().catch(err=>({ok:false, err}));
+
+  const dcPenTask = (async ()=>{
+    const gw = granWhere('demand_cost', gran);
+    const S_DCst = src(db,'demand_cost', gw, [
+      'item','loc','demandtype','dmdstream','nondelcostrate',
+      'latedelivcostrate','latedelivperiods','periodtype'
+    ]);
+    const dc = await chQuery(`SELECT
+        ${q('item')} AS item, ${q('loc')} AS loc,
+        ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
+        avg(${q('nondelcostrate')})   AS nonDel,
+        avg(${q('latedelivcostrate')}) AS lateRate,
+        avg(${q('latedelivperiods')})  AS latePeriods
+      FROM ${S_DCst} GROUP BY item, loc, dt, stream
+      HAVING abs(toFloat64(nonDel)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(lateRate)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(latePeriods)) > ${ZERO_TOL_SQL}
+      LIMIT 100000`);
+    return {ok:true, dc};
+  })().catch(err=>({ok:false, err}));
+
+  const tiPenTask = (async ()=>{
+    const S_TI = src(db,'demand_cost_ti', null, [
+      'item','loc','demandtype','dmdstream','nondelcostrate',
+      'latedelivcostrate','latedelivperiods','priority','quota'
+    ]);
+    const ti = await chQuery(`SELECT ${q('item')} AS item, ${q('loc')} AS loc,
+        ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
+        avg(${q('nondelcostrate')}) AS nonDel, avg(${q('latedelivcostrate')}) AS lateRate,
+        avg(${q('latedelivperiods')}) AS latePeriods,
+        avg(${q('priority')}) AS priority, avg(${q('quota')}) AS quota
+      FROM ${S_TI} GROUP BY item, loc, dt, stream
+      HAVING abs(toFloat64(nonDel)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(lateRate)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(latePeriods)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(priority)) > ${ZERO_TOL_SQL}
+          OR abs(toFloat64(quota)) > ${ZERO_TOL_SQL}
+      LIMIT 100000`);
+    return {ok:true, ti};
+  })().catch(err=>({ok:false, err}));
+
+  const [tot, msRes, ops, [dP,dPr,dCl], covRes, pgRes, capRes, rcRes, dcPenRes, tiPenRes] =
+    await Promise.all([totTask, msTask, opsTask, dimsTask, covTask, pgTask, capTask, rcTask, dcPenTask, tiPenTask]);
+
+  Object.assign(out.totals, tot[0]||{});
+
+  /* 8.1.1 итоговые финансы из margin_sales */
+  if(msRes.ok){
+    const m0 = msRes.rows[0]||{};
     const msRev = num(m0.msRev), msMar = num(m0.msMar), msRows = num(m0.msRows);
     if(msRows>0 && (msRev!==0 || msMar!==0)){
       out.totals.revMd = num(out.totals.rev);   // прежние итоги marking_demand —
@@ -630,81 +916,28 @@ async function loadVersionAgg(db, gran){
       out.totals.finSrc = 'margin_sales';
       CHX.loaded.margin_sales = true;
     }
-  }catch(e){
-    out.notes.push('margin_sales: '+e.message+' — выручка и маржа посчитаны по marking_demand');
+  }else{
+    out.notes.push('margin_sales: '+msRes.err.message+' — выручка и маржа посчитаны по marking_demand');
   }
 
-  /* 8.2 затраты по блокам операций.
-     toFloat64: cost_rate_of_operation и order_operation_volume — Decimal(18,12),
-     их произведение переполняет разряд (ошибка 407) */
-  const ops = await chQuery(`SELECT ${q('operation_type')} AS t,
-      sum(toFloat64(abs(${q('cost_rate_of_operation')})) * toFloat64(${q('order_operation_volume')})) AS c,
-      sum(toFloat64(${q('order_operation_volume')})) AS v, count() AS n
-    FROM ${S_MD} GROUP BY t`);
+  /* 8.2 затраты по блокам операций (нулевые операции уже отсечены в SQL) */
   out.totals.byOp = {};
-  ops.forEach(r=>{ out.totals.byOp[r.t] = {c:num(r.c), v:num(r.v), n:num(r.n)} });
+  ops.forEach(r=>{
+    const v = num(r.v), c = num(r.c);
+    if(Math.abs(v) <= ZERO_TOL && Math.abs(c) <= ZERO_TOL) return;
+    out.totals.byOp[r.t] = {c, v, n:num(r.n)};
+  });
 
-  /* 8.3 разрезы для тепловой карты сравнения.
-     Внешний SELECT ссылается только на колонки подзапроса o_*: подзапрос
-     отдаёт o_p / o_prod / o_cl (префикс против глобальной подстановки алиасов,
-     ошибка 184), поэтому имена без префикса ClickHouse не находит —
-     «Unknown expression identifier 'p'» (ошибка 47). */
-  const dimQ = alias => chQuery(
-    `SELECT ${q('o_'+alias)} AS k, sum(o_mar) AS mar, sum(o_sal) AS sal, sum(o_unm) AS unm, sum(o_rev) AS rev
-     FROM ${ordSub} GROUP BY k ORDER BY mar DESC LIMIT 60`);
-  const [dP,dPr,dCl] = await Promise.all([dimQ('p'), dimQ('prod'), dimQ('cl')]);
+  /* 8.3 разрезы для тепловой карты сравнения */
   out.dims.period  = dP.map(r=>({k:String(r.k), mar:num(r.mar), sal:num(r.sal), unm:num(r.unm)}));
   out.dims.product = dPr.map(r=>({k:String(r.k), mar:num(r.mar), sal:num(r.sal), unm:num(r.unm)}));
   out.dims.client  = dCl.map(r=>({k:String(r.k), mar:num(r.mar), sal:num(r.sal), unm:num(r.unm)}));
 
-  /* 8.4 покрытие спроса (demand_coverage): покрытый/непокрытый/опоздания.
-     Сама таблица отдаёт и «покрытый + непокрытый» как demUnc — сохраняем его
-     отдельным полем demUncCov: это сверка источников для DQ, а НЕ определение
-     неограниченного спроса (см. 8.4.1). */
+  /* 8.4 покрытие спроса (demand_coverage) */
   let coverageAvailable = false;
-  try{
-    const gw = granWhere('demand_coverage', gran);
-    const pk = periodKeyExpr('demand_coverage', gran);
-    const S_DC = src(db,'demand_coverage', gw);
-    const cov = await chQuery(`SELECT
-        sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
-        sum(${q('fullfilleddemandqty')})    AS ff,
-        sum(${q('unfullfilleddemandqty')})  AS uf,
-        sum(${q('demandfullfilledintimeqty')}) AS inTime,
-        sum(${q('demandfullfilledlateqty')})   AS late,
-        count() AS orderRows,
-        /* Классификация заказов по demand_coverage (задача владельца 2026-10-05):
-           всего строк = все заказы неограниченного спроса;
-           100% не покрыто — fullfilleddemandqty = 0;
-           частично покрыто — unfullfilleddemandqty > 0 И fullfilleddemandqty > 0;
-           полностью покрыто — unfullfilleddemandqty = 0 И fullfilleddemandqty > 0.
-           Три группы — разбиение всех строк: A + B + C = orderRows (ловится
-           проверкой в «Данных и качестве»). Допуск 1e-9 — тот же, что у
-           countIf(unm <= 0.000000001) в marking_demand: Decimal(18,12) даёт
-           шум в двенадцатом знаке, и строгое «= 0» считало бы его данными.
-           Приведение — toFloat64, а НЕ toFloat64OrZero: функции с постфиксом
-           OrZero/OrNull принимают только String, а столбцы demand_coverage —
-           Decimal, и реальный ClickHouse отвечает «Code: 43. DB::Exception:
-           Illegal type Decimal ... should take String argument», роняя весь
-           агрегат вместе с demUnc (фолбэком PG) — ошибка продакшена 2026-10-05. */
-        countIf(toFloat64(${q('fullfilleddemandqty')}) <= 0.000000001) AS fullyUncoveredOrders,
-        countIf(toFloat64(${q('unfullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS partiallyCoveredOrders,
-        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001) AS fullyCoveredOrders,
-        /* Опоздания в заказах: считаем среди ПОЛНОСТЬЮ покрытых (решение
-           владельца 2026-10-05), чтобы водопад сходился:
-           План продаж (заказов) = В срок + Отгружено с опозданием.
-           lateOrdersAll — все строки с признаком опоздания (для тултипа:
-           сколько опозданий скрывается у частично покрытых). */
-        countIf(toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateOrdersAll,
-        countIf(toFloat64(${q('unfullfilleddemandqty')}) <= 0.000000001 AND toFloat64(${q('fullfilleddemandqty')}) > 0.000000001 AND toFloat64(${q('demandfullfilledlateqty')}) > 0.000000001) AS lateFullyCoveredOrders,
-        sum(${q('lostrevenue')})   AS lostRev,
-        sum(${q('plannedrevenue')}) AS planRev,
-        sum(${q('propagated_demand')}) AS prop
-      FROM ${S_DC}`);
-    out.totals.cov = cov[0] || {};
+  if(covRes.ok){
+    out.totals.cov = covRes.cov[0] || {};
     out.totals.cov.demUncCov = num(out.totals.cov.demUnc);
-    /* Сохраняем исходную гранулярность demand_coverage до того, как основной
-       independent_demand-счётчик может заменить legacy-поля orderRows. */
     if(Object.prototype.hasOwnProperty.call(out.totals.cov,'orderRows'))
       out.totals.cov.demandCoverageOrderRows=num(out.totals.cov.orderRows);
     if(Object.prototype.hasOwnProperty.call(out.totals.cov,'fullyUncoveredOrders'))
@@ -715,16 +948,12 @@ async function loadVersionAgg(db, gran){
       out.totals.cov.demandCoverageFullyCoveredOrders=num(out.totals.cov.fullyCoveredOrders);
     out.totals.covAvailable = true;
     coverageAvailable = true;
-    const covP = await chQuery(`SELECT ${pk} AS k,
-        sum(${q('fullfilleddemandqty')} + ${q('unfullfilleddemandqty')}) AS demUnc,
-        sum(${q('fullfilleddemandqty')}) AS ff,
-        sum(${q('unfullfilleddemandqty')}) AS uf,
-        sum(${q('demandfullfilledlateqty')}) AS late
-      FROM ${S_DC} GROUP BY k ORDER BY k`);
-    out.dims.coverage = covP.map(r=>({k:r.k, demUnc:num(r.demUnc), demUncCov:num(r.demUnc),
+    out.dims.coverage = covRes.covP.map(r=>({k:r.k, demUnc:num(r.demUnc), demUncCov:num(r.demUnc),
       ff:num(r.ff), uf:num(r.uf), late:num(r.late)}));
     CHX.loaded.demand_coverage = true;
-  }catch(e){ out.notes.push('demand_coverage: '+e.message) }
+  }else{
+    out.notes.push('demand_coverage: '+covRes.err.message);
+  }
 
   /* 8.4.1 НЕОГРАНИЧЕННЫЙ СПРОС = Σ demandqty из таблицы independent_demand.
      Основной источник — вход модели independent_demand. Если PostgreSQL
@@ -791,9 +1020,9 @@ async function loadVersionAgg(db, gran){
     if(reason) out.notes.push(reason);
   };
   const uncErrs = [];
-  if(window.PGX && PGX.enabled()){
-    try{
-      const u = await PGX.uncFor(db, gran);   // backend агрегирует в самой PG
+  if(pgRes){
+    if(pgRes.ok){
+      const u = pgRes.u;
       const totalUnc = num(u.demUnc);
       const qty = u.qtySource||'demandqty';
       const detail = 'PostgreSQL · '+u.schema;
@@ -801,7 +1030,9 @@ async function loadVersionAgg(db, gran){
          Σ demandqty. Сохраняем его отдельно от необязательной детализации API:
          count(*) важнее длины пустого массива, если backend старый/не смог
          прочитать строки. */
-      out.independentOrders = Array.isArray(u.orders) ? u.orders : [];
+      out.independentOrders = Array.isArray(u.orders)
+        ? u.orders.filter(r => Math.abs(num(r.demandqty)) > ZERO_TOL)
+        : [];
       const hasIndependentOrderCount=!!u.countAvailable||out.independentOrders.length>0;
       if(hasIndependentOrderCount){
         out.totals.independentOrderCount = u.countAvailable
@@ -810,14 +1041,9 @@ async function loadVersionAgg(db, gran){
         out.totals.independentOrderDetailsCount = out.independentOrders.length;
         out.totals.independentOrderDetailsComplete = out.independentOrders.length === out.totals.independentOrderCount;
       }
-      /* Для каждой версии нужна такая же классификация входного заказа по
-         фактическому результату плана, как в covBasis()/DS основной версии.
-         Ошибка этого необязательного запроса не скрывает независимый счётчик:
-         матрица тогда покажет резервную классификацию и явную невязку. */
-      if(hasIndependentOrderCount && out.totals.independentOrderDetailsComplete && out.totals.independentOrderCount>0){
-        try{ out.orderSummary = await loadVersionOrderSummary(db,gran); }
-        catch(e){ out.notes.push('independent_demand × marking_demand: '+e.message+' — разбиение заказов сверяется по demand_coverage'); }
-      }
+      if(pgRes.summary) out.orderSummary = pgRes.summary;
+      else if(pgRes.summaryErr)
+        out.notes.push('independent_demand × marking_demand: '+pgRes.summaryErr.message+' — разбиение заказов сверяется по demand_coverage');
       if(totalUnc>0){
         applyUnc(totalUnc, u.periods, detail, qty);
       }else{
@@ -834,7 +1060,9 @@ async function loadVersionAgg(db, gran){
           out.notes.push(zeroNote+'; demand_coverage пуст — фолбэк не применён');
         }
       }
-    }catch(e){ uncErrs.push('PG: '+e.message); }
+    }else{
+      uncErrs.push('PG: '+pgRes.err.message);
+    }
   }
   if(!out.totals.uncSrc){
     if(coverageAvailable){
@@ -846,45 +1074,11 @@ async function loadVersionAgg(db, gran){
     }
   }
 
-  /* 8.5 мощности: единицы — ЧАСЫ (calendarcapacity/OEE), не тонны.
-     Свободно берём расчётом avail − load: поле freecapacity в примере
-     расходится (411 против 423) и не согласуется с составляющими. */
-  try{
-    const gw = granWhere('capacity_view_sp', gran);
-    const pk = periodKeyExpr('capacity_view_sp', gran);
-    const S_CV = src(db,'capacity_view_sp', gw);
-    /* Актуальный доступный фонд: calcavailable — основной, но у складов и
-       погрузки он бывает NULL. Тогда используем avail/net/freecapacity.
-       greatest безопасен для приведённых Float64 и не теряет 21 600 ч
-       погрузки из freecapacity в реальных данных владельца. */
-    const cap0=c=>`toFloat64(ifNull(${q(c)},0))`;
-    const rowLoadExpr=`greatest(${cap0('totalcapausage')},${cap0('inipcapaplannedusage')},
-        ${cap0('pcapaplannedusage')},${cap0('scapaplannedusage')},${cap0('transcapaplannedusage')})`;
-    /* freecapacity — остаток, поэтому полный фонд в fallback = free + load. */
-    const availExpr = `greatest(${cap0('calcavailablebucketcapacity')},
-        ${cap0('availbucketcapacity')}, ${cap0('netavailablecapacity')},
-        ${cap0('freecapacity')} + ${rowLoadExpr})`;
-    const cap = await chQuery(`SELECT
-        ${q('res')} AS rs, any(${q('loc')}) AS pl,
-        any(${q('restypedescr')}) AS resTypeDescr, any(${q('restype')}) AS resType,
-        any(${q('resgroup')}) AS grp, ${pk} AS periodKey,
-        sum(${q('calendarcapacity')}) AS norm,
-        sum(${availExpr})             AS avail,
-        sum(${q('totalcapausage')})   AS load,
-        sum(${q('inipcapaplannedusage')})   AS useIp,
-        sum(${q('pcapaplannedusage')})      AS useP,
-        sum(${q('scapaplannedusage')})      AS useS,
-        sum(${q('transcapaplannedusage')})  AS useT,
-        sum(${q('maintenance')} + ${q('plannedmaintenance')} +
-            ${q('capitalmaintenance')} + ${q('externalmaintenance')}) AS maint,
-        avg(${q('oee')}) AS oee
-      FROM ${S_CV} GROUP BY rs, periodKey`);
-    out.capacity = cap.map(r=>{
+  /* 8.5 мощности: единицы — ЧАСЫ (calendarcapacity/OEE), не тонны. */
+  if(capRes.ok){
+    out.capacity = capRes.cap.map(r=>{
       const avail = num(r.avail), code=num(r.resType);
       const use={ip:num(r.useIp),p:num(r.useP),s:num(r.useS),t:num(r.useT)};
-      /* totalcapausage — основной итог. Компоненты страхуют NULL/неполный итог:
-         для склада важен scapaplannedusage, для погрузки — transcapaplannedusage.
-         Компоненты не суммируем: они могут уже входить в totalcapausage. */
       const load=Math.max(num(r.load),use.ip,use.p,use.s,use.t);
       const preferred=code===2?'s':code===4?'t':code===1?'p':'ip';
       const sourceNames={ip:'inipcapaplannedusage',p:'pcapaplannedusage',
@@ -902,83 +1096,75 @@ async function loadVersionAgg(db, gran){
         use,
         maint:num(r.maint), oee:num(r.oee),
         isBottleneck: util >= 0.90, isCrit: util >= 0.999};
-    });
+    }).filter(c => Math.abs(c.avail)>ZERO_TOL || Math.abs(c.load)>ZERO_TOL
+      || Math.abs(c.norm)>ZERO_TOL || Math.abs(c.maint)>ZERO_TOL);
     out.totals.capAvail = S(out.capacity,c=>c.avail);
     out.totals.capLoad  = S(out.capacity,c=>c.load);
     out.totals.capUtil  = out.totals.capAvail>0 ? out.totals.capLoad/out.totals.capAvail : 0;
     out.totals.bnCount  = out.capacity.filter(c=>c.isBottleneck).length;
     out.resTypes        = uq(out.capacity, c=>c.resType);   // справочник строим из данных
     CHX.loaded.capacity_view_sp = true;
-  }catch(e){ out.notes.push('capacity_view_sp: '+e.message) }
+  }else{
+    out.notes.push('capacity_view_sp: '+capRes.err.message);
+  }
 
   /* 8.6 плановые мощности (rescapacity) — вход прогона, для «план vs факт» */
-  try{
-    const gw = granWhere('rescapacity', gran);
-    const pk = periodKeyExpr('rescapacity', gran);
-    const S_RC = src(db,'rescapacity', gw);
-    const rc = await chQuery(`SELECT ${q('res')} AS rs, any(${q('loc')}) AS pl,
-        ${pk} AS periodKey,
-        sum(${q('calendarcapacity')})     AS norm,
-        sum(${q('netavailbucketcapacity')}) AS availNet,
-        sum(${q('availbucketcapacity')})  AS avail,
-        sum(${q('capaexpansion')})        AS expansion,
-        sum(${q('maintenance')} + ${q('plannedmaintenance')}) AS maint
-      FROM ${S_RC} GROUP BY rs, periodKey`);
-    out.capacityPlan = rc.map(r=>({rs:sany(r.rs), pl:sany(r.pl),
+  if(rcRes.ok){
+    out.capacityPlan = rcRes.rc.map(r=>({rs:sany(r.rs), pl:sany(r.pl),
       periodKey:String(r.periodKey||''), unit:'h',
       norm:num(r.norm), avail:num(r.avail)||num(r.availNet),
-      expansion:num(r.expansion), maint:num(r.maint)}));
+      expansion:num(r.expansion), maint:num(r.maint)}))
+      .filter(c => Math.abs(c.avail)>ZERO_TOL || Math.abs(c.norm)>ZERO_TOL
+        || Math.abs(c.expansion)>ZERO_TOL || Math.abs(c.maint)>ZERO_TOL);
     out.totals.planAvail = S(out.capacityPlan,c=>c.avail);
     out.totals.expansion = S(out.capacityPlan,c=>c.expansion);
     CHX.loaded.rescapacity = true;
-  }catch(e){ out.notes.push('rescapacity: '+e.message) }
+  }else{
+    out.notes.push('rescapacity: '+rcRes.err.message);
+  }
 
   /* 8.7 экономика отказов: периодные ставки перекрывают безпериодные */
-  try{
-    const gw = granWhere('demand_cost', gran);
-    const S_DCst = src(db,'demand_cost', gw);
-    const dc = await chQuery(`SELECT
-        ${q('item')} AS item, ${q('loc')} AS loc,
-        ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
-        avg(${q('nondelcostrate')})   AS nonDel,
-        avg(${q('latedelivcostrate')}) AS lateRate,
-        avg(${q('latedelivperiods')})  AS latePeriods
-      FROM ${S_DCst} GROUP BY item, loc, dt, stream LIMIT 20000`);
-    out.penalty = dc.map(r=>({item:sany(r.item), loc:sany(r.loc), dt:num(r.dt),
+  if(dcPenRes.ok){
+    out.penalty = dcPenRes.dc.map(r=>({item:sany(r.item), loc:sany(r.loc), dt:num(r.dt),
       stream:sany(r.stream), nonDel:num(r.nonDel), lateRate:num(r.lateRate),
-      latePeriods:num(r.latePeriods), grain:'period'}));
+      latePeriods:num(r.latePeriods), grain:'period'}))
+      .filter(r => Math.abs(r.nonDel)>ZERO_TOL || Math.abs(r.lateRate)>ZERO_TOL || Math.abs(r.latePeriods)>ZERO_TOL);
     CHX.loaded.demand_cost = true;
-  }catch(e){ out.notes.push('demand_cost: '+e.message) }
-  try{
-    const S_TI = src(db,'demand_cost_ti');
-    const ti = await chQuery(`SELECT ${q('item')} AS item, ${q('loc')} AS loc,
-        ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
-        avg(${q('nondelcostrate')}) AS nonDel, avg(${q('latedelivcostrate')}) AS lateRate,
-        avg(${q('latedelivperiods')}) AS latePeriods,
-        avg(${q('priority')}) AS priority, avg(${q('quota')}) AS quota
-      FROM ${S_TI} GROUP BY item, loc, dt, stream LIMIT 20000`);
-    out.penaltyFlat = ti.map(r=>({item:sany(r.item), loc:sany(r.loc), dt:num(r.dt),
+  }else{
+    out.notes.push('demand_cost: '+dcPenRes.err.message);
+  }
+  if(tiPenRes.ok){
+    out.penaltyFlat = tiPenRes.ti.map(r=>({item:sany(r.item), loc:sany(r.loc), dt:num(r.dt),
       stream:sany(r.stream), nonDel:num(r.nonDel), lateRate:num(r.lateRate),
       latePeriods:num(r.latePeriods), priority:num(r.priority), quota:num(r.quota),
-      grain:'flat'}));
+      grain:'flat'}))
+      .filter(r => Math.abs(r.nonDel)>ZERO_TOL || Math.abs(r.lateRate)>ZERO_TOL
+        || Math.abs(r.latePeriods)>ZERO_TOL || Math.abs(r.priority)>ZERO_TOL || Math.abs(r.quota)>ZERO_TOL);
     CHX.loaded.demand_cost_ti = true;
-  }catch(e){ out.notes.push('demand_cost_ti: '+e.message) }
+  }else{
+    out.notes.push('demand_cost_ti: '+tiPenRes.err.message);
+  }
 
   /* 8.8 оценка штрафов: ставка × неудовлетворённый объём */
   out.totals.penaltyNonDel = 0;
-  if(out.penalty || out.penaltyFlat){
+  if((out.penalty && out.penalty.length) || (out.penaltyFlat && out.penaltyFlat.length)){
     const key = r => [r.item,r.loc,r.dt,r.stream].join('|');
     const rate = new Map();
     (out.penaltyFlat||[]).forEach(r=>rate.set(key(r), r));   // fallback
     (out.penalty||[]).forEach(r=>rate.set(key(r), r));       // период перекрывает
     try{
       const gw = granWhere('demand_coverage', gran);
-      const S_DC = src(db,'demand_coverage', gw);
+      const S_DC = src(db,'demand_coverage', gw, [
+        'item','loc','demandtype','dmdstream','unfullfilleddemandqty','demandfullfilledlateqty','periodtype'
+      ]);
       const uf = await chQuery(`SELECT ${q('item')} AS item, ${q('loc')} AS loc,
           ${q('demandtype')} AS dt, ${q('dmdstream')} AS stream,
           sum(${q('unfullfilleddemandqty')}) AS uf,
           sum(${q('demandfullfilledlateqty')}) AS late
-        FROM ${S_DC} GROUP BY item, loc, dt, stream`);
+        FROM ${S_DC}
+        WHERE abs(toFloat64(${q('unfullfilleddemandqty')})) > ${ZERO_TOL_SQL}
+           OR abs(toFloat64(${q('demandfullfilledlateqty')})) > ${ZERO_TOL_SQL}
+        GROUP BY item, loc, dt, stream`);
       let pen = 0, penLate = 0;
       uf.forEach(r=>{
         const k = [sany(r.item),sany(r.loc),num(r.dt),sany(r.stream)].join('|');
@@ -993,31 +1179,9 @@ async function loadVersionAgg(db, gran){
     }catch(e){ out.notes.push('penalty calc: '+e.message) }
   }
 
-  /* 8.9 ПРИОРИТЕТНАЯ ВЫРУЧКА: выполненный спрос × цена спроса (2026-10-07).
-     Методика владельца: выручка = Σ fullfilleddemandqty (demand_coverage) ×
-     цена из справочника demand_cost / demand_cost_ti; сшивка по
-     item + loc + dmdstream + demandtype + период. Нет цены в периоде строки —
-     берём цену ближайшего периода (в любую сторону, при равном удалении —
-     более ранний). demand_cost (по периодам) приоритетнее demand_cost_ti
-     (без периодов); строки demand_cost без распознаваемого периода работают
-     как безпериодная цена. Колонка цены — nondelcostrate (решение владельца),
-     при её отсутствии/нулевых значениях — первый подходящий кандидат
-     (наборы колонок различаются между версиями планов → смотрим
-     system.columns). Колонка периода — periodid, если есть, иначе штатные
-     date/datefr; обе тянутся одновременно и канонизируются covPeriodCanon,
-     поэтому periodid ↔ date разных таблиц сопоставимы.
-
-     Метод приоритетен над margin_sales: при успехе totals.rev = Σ qty×цена,
-     источник — totals.revSrc, прежние итоги сохраняются для сверок DQ
-     (revMd — marking_demand, revMs — margin_sales). Маржа и себестоимость
-     НЕ пересчитываются. Любая ошибка или пусто → тихий возврат к прежней
-     цепочке margin_sales → marking_demand; заметка — только когда цены есть,
-     а сопоставить не удалось (или все нулевые), и про объём без цены. */
+  /* 8.9 ПРИОРИТЕТНАЯ ВЫРУЧКА: выполненный спрос × цена спроса (2026-10-07). */
   if(coverageAvailable){
     try{
-      /* фактические колонки таблиц (паттерн loadMainDetail). Нет прав на
-         system.columns → знаем только гарантированную nondelcostrate и
-         штатные колонки периода из реестра TABLES. */
       const cpCols = {};
       try{
         const cl = await chQuery(`SELECT table AS t, name FROM system.columns
@@ -1029,26 +1193,24 @@ async function loadVersionAgg(db, gran){
         });
       }catch(e){ /* колонки неизвестны — работаем по реестру */ }
       const cpKnow = Object.keys(cpCols).length > 0;
-      const cpTabCols = t => cpKnow ? (cpCols[t] || new Set()) : null;  // null = нет информации
+      const cpTabCols = t => cpKnow ? (cpCols[t] || new Set()) : null;
       const cpCol = (t, want, dflt) => {
         const s = cpTabCols(t);
-        if(!s) return dflt;                      // нет информации — колонка реестра
+        if(!s) return dflt;
         return want.some(c => s.has(c)) ? want.find(c => s.has(c)) : '';
       };
-      /* кандидаты цены: nondelcostrate приоритетен (владелец 2026-10-07),
-         далее — другие правдоподобные имена колонки цены */
       const CP_PRICE_COLS = ['nondelcostrate','price','demandprice','demandcost','demand_cost','cost','unitcost','value'];
       const dcCand = cpKnow ? CP_PRICE_COLS.filter(c=>cpTabCols('demand_cost').has(c)) : ['nondelcostrate'];
       const tiCand = cpKnow ? CP_PRICE_COLS.filter(c=>cpTabCols('demand_cost_ti').has(c)) : ['nondelcostrate'];
-      /* колонки периода: periodid приоритетнее штатной date/datefr; тянутся обе */
       const covPid = cpCol('demand_coverage', ['periodid'], '');
       const covPd  = cpCol('demand_coverage', ['date'], TABLES.demand_coverage.periodCol);
       const dcPid  = cpCol('demand_cost', ['periodid'], '');
       const dcPd   = cpCol('demand_cost', ['datefr'], TABLES.demand_cost.periodCol);
 
-      /* объём выполненного спроса, сгруппированный по ключу + период */
-      const S_DCc = src(db,'demand_coverage', granWhere('demand_coverage', gran));
-      const vol = await chQuery(`SELECT
+      const S_DCc = src(db,'demand_coverage', granWhere('demand_coverage', gran),
+        ['item','loc','dmdstream','demandtype','fullfilleddemandqty','periodtype', covPid, covPd].filter(Boolean));
+
+      const volPromise = chQuery(`SELECT
           ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
           toString(${covPid ? q(covPid) : "''"}) AS vpid,
           toString(${covPd ? q(covPd) : "''"}) AS vdate,
@@ -1058,41 +1220,54 @@ async function loadVersionAgg(db, gran){
         WHERE toFloat64(${q('fullfilleddemandqty')}) > 0.000000001
         GROUP BY item, loc, stream, dt, vpid, vdate
         LIMIT 200001`);
-      if(vol.length > 200000)
-        throw new Error('в demand_coverage больше 200000 групп товар×локация×поток×тип×период');
 
-      /* цены demand_cost — по периодам. Без фильтра periodtype: ближайший
-         период ищем по всему справочнику; дедупликация src() стандартная.
-         Строки справочника без распознаваемого периода — безпериодная цена. */
-      let dcRows = [];
-      if(dcCand.length && (dcPid || dcPd)){
+      const dcPromise = (dcCand.length && (dcPid || dcPd)) ? (async ()=>{
         try{
           const exprs = dcCand.map((c,i)=>`avg(toFloat64(${q(c)})) AS pc${i}`).join(', ');
-          dcRows = await chQuery(`SELECT
+          const dcSrc = src(db,'demand_cost', null,
+            ['item','loc','dmdstream','demandtype', dcPid, dcPd].concat(dcCand).filter(Boolean));
+          const baseSql = `SELECT
               ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
               toString(${dcPid ? q(dcPid) : "''"}) AS vpid,
               toString(${dcPd ? q(dcPd) : "''"}) AS vdate,
               count() AS cpn${exprs ? ', ' + exprs : ''}
-            FROM ${src(db,'demand_cost')}
-            GROUP BY item, loc, stream, dt, vpid, vdate
-            LIMIT 200001`);
-          if(dcRows.length > 200000) dcRows = [];
-        }catch(e){ dcRows = [] }
-      }
-      /* цены demand_cost_ti — без периодов */
-      let tiRows = [];
-      if(tiCand.length){
+            FROM ${dcSrc}
+            GROUP BY item, loc, stream, dt, vpid, vdate`;
+          let rows = await chQuery(`${baseSql}\n            LIMIT 200001`);
+          /* Если справочник забит сотнями тысяч нулевых строк, переспрашиваем
+             только ненулевые цены вместо тихого отключения расчёта выручки. */
+          if(rows.length > 200000){
+            const nz = dcCand.map((_,i)=>`abs(toFloat64(pc${i})) > ${ZERO_TOL_SQL}`).join(' OR ');
+            rows = await chQuery(`${baseSql}\n            HAVING ${nz}\n            LIMIT 200001`);
+            if(rows.length > 200000) rows = [];
+          }
+          return rows;
+        }catch(e){ return [] }
+      })() : Promise.resolve([]);
+
+      const tiPromise = tiCand.length ? (async ()=>{
         try{
           const exprs = tiCand.map((c,i)=>`avg(toFloat64(${q(c)})) AS pc${i}`).join(', ');
-          tiRows = await chQuery(`SELECT
+          const tiSrc = src(db,'demand_cost_ti', null,
+            ['item','loc','dmdstream','demandtype'].concat(tiCand).filter(Boolean));
+          const baseSql = `SELECT
               ${q('item')} AS item, ${q('loc')} AS loc, ${q('dmdstream')} AS stream, ${q('demandtype')} AS dt,
               count() AS cpn${exprs ? ', ' + exprs : ''}
-            FROM ${src(db,'demand_cost_ti')}
-            GROUP BY item, loc, stream, dt
-            LIMIT 200001`);
-          if(tiRows.length > 200000) tiRows = [];
-        }catch(e){ tiRows = [] }
-      }
+            FROM ${tiSrc}
+            GROUP BY item, loc, stream, dt`;
+          let rows = await chQuery(`${baseSql}\n            LIMIT 200001`);
+          if(rows.length > 200000){
+            const nz = tiCand.map((_,i)=>`abs(toFloat64(pc${i})) > ${ZERO_TOL_SQL}`).join(' OR ');
+            rows = await chQuery(`${baseSql}\n            HAVING ${nz}\n            LIMIT 200001`);
+            if(rows.length > 200000) rows = [];
+          }
+          return rows;
+        }catch(e){ return [] }
+      })() : Promise.resolve([]);
+
+      const [vol, dcRows, tiRows] = await Promise.all([volPromise, dcPromise, tiPromise]);
+      if(vol.length > 200000)
+        throw new Error('в demand_coverage больше 200000 групп товар×локация×поток×тип×период');
 
       /* колонка цены: первая кандидатная колонка с хоть одним ненулевым
          значением (nondelcostrate может существовать, но быть пустой) */
@@ -1223,22 +1398,21 @@ CHX.loadVersionAgg = loadVersionAgg;
 const T2 = {movement:'mv', production:'pd', procurement:'pc', stock:'st'};
 
 async function loadMainDetail(db, gran, limitOrders){
-    /* заказы: дедуп до order_id, отсечение по марже — детали нужны для топа */
-  const S_MD = src(db,'marking_demand');
-
   /* Набор колонок marking_demand различается между схемами/версиями:
      в части схем нет dmdstream, demand_demandtype, margin_per_hour и т.п.
      Без проверки запрос падает с ошибкой 47 «Unknown expression identifier».
-     Читаем фактический список колонок и включаем только существующие. */
-  let mdCols = new Set();
-  try{
-    const cl = await chQuery(`SELECT name FROM system.columns
-      WHERE database = ${qs(db)} AND table = 'marking_demand'`);
-    mdCols = new Set(cl.map(r=>String(r.name).toLowerCase()));
-  }catch(e){ /* нет прав на system.columns — работаем полным набором, как раньше */ }
+     Читаем фактический список колонок (из кэша) и включаем только существующие. */
+  const mdSet = await getMarkingDemandCols(db);
+  const mdCols = mdSet || new Set();
   const has = c => !mdCols.size || mdCols.has(String(c).toLowerCase());
   const orNot = (col, fallback) => has(col) ? `any(${q(col)})` : fallback;
   const colOr = (col, fallback) => has(col) ? q(col) : fallback;
+
+  const ordColNames = ['demand_period','demand_location','demand_product','demand_client',
+    'demand_demandtype','dmdstream','demand_volume','results_sale','unsatisfied_demand',
+    'price','cost_per_unit_order','margin_per_unit','revenue','cost_of_demand',
+    'total_margin','demand_demandtypepriority','margin_per_hour'];
+  const S_MD = src(db,'marking_demand', null, mdCols.size ? ordColNames.filter(has) : null);
 
   const ords = await chQuery(`SELECT order_id AS id,
       ${orNot('demand_period','0')}      AS p,
@@ -1259,7 +1433,10 @@ async function loadMainDetail(db, gran, limitOrders){
       ${orNot('demand_demandtypepriority','0')} AS prio,
       ${orNot('margin_per_hour','0')}    AS mph
     FROM ${S_MD} GROUP BY order_id
-    ORDER BY abs(mar) DESC
+    HAVING abs(toFloat64(dem)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(sal)) > ${ZERO_TOL_SQL}
+        OR abs(toFloat64(unm)) > ${ZERO_TOL_SQL}
+    ORDER BY abs(mar) DESC, abs(toFloat64(dem)) DESC
     LIMIT ${Number(limitOrders)||2000}`);
 
   const orders = ords.map(r=>({
@@ -1278,35 +1455,52 @@ async function loadMainDetail(db, gran, limitOrders){
     price:num(r.price), cpt:Math.abs(num(r.cpt)), mpt:num(r.mpt),
     rev:num(r.rev), cost:Math.abs(num(r.cost)), mar:num(r.mar),
     mph:num(r.mph)
-  }));
+  })).filter(o => Math.abs(o.dem)>ZERO_TOL || Math.abs(o.sal)>ZERO_TOL || Math.abs(o.unm)>ZERO_TOL);
   if(!orders.length) throw new Error('В схеме '+db+' не найдено заказов в marking_demand');
 
-  /* операции: только для загруженных заказов, чанками по IN */
+  /* операции: только для загруженных заказов и только ненулевые по объёму/расходу,
+     укрупнёнными чанками в POST-теле с параллельным выполнением через семафор */
+  const opColNames = ['order_id','demand_period','operation_type','location','product',
+    'resource','loc_from','loc_to','transport_type','order_operation_volume',
+    'cost_rate_of_operation','supplier','bom_num','order_operation_id',
+    'resource_consumption_operation'];
+  const opProj = mdCols.size ? opColNames.filter(has) : null;
+  const opNonZeroSql = has('resource_consumption_operation')
+    ? `(abs(toFloat64(${q('order_operation_volume')})) > ${ZERO_TOL_SQL} OR abs(toFloat64(${q('resource_consumption_operation')})) > ${ZERO_TOL_SQL})`
+    : `abs(toFloat64(${q('order_operation_volume')})) > ${ZERO_TOL_SQL}`;
+
   const ids = orders.map(o=>o.id);
+  const OP_CHUNK = 5000;
+  const chunks = [];
+  for(let i=0; i<ids.length; i+=OP_CHUNK) chunks.push(ids.slice(i, i+OP_CHUNK));
+  const chunkRows = await Promise.all(chunks.map(chunk => chQuery(`SELECT
+      ${colOr('order_id','0')} AS o, ${colOr('demand_period','0')} AS p,
+      ${colOr('operation_type',"''")} AS type, ${colOr('location',"''")} AS pl,
+      ${colOr('product',"''")} AS pr, ${colOr('resource',"''")} AS rs,
+      ${colOr('loc_from',"''")} AS fr, ${colOr('loc_to',"''")} AS to,
+      ${colOr('transport_type',"''")} AS tm, ${colOr('order_operation_volume','0')} AS v,
+      abs(${colOr('cost_rate_of_operation','0')}) AS r, ${colOr('supplier',"''")} AS vd,
+      ${colOr('bom_num',"''")} AS rt, ${colOr('order_operation_id',"''")} AS oid,
+      ${colOr('resource_consumption_operation','0')} AS rc
+    FROM ${src(db,'marking_demand', `${q('order_id')} IN (${chunk.join(',')})`, opProj)}
+    WHERE ${opNonZeroSql}`)));
+
   const ops = [];
-  for(let i=0;i<ids.length;i+=500){
-    const chunk = ids.slice(i,i+500);
-    const rows = await chQuery(`SELECT
-        ${colOr('order_id','0')} AS o, ${colOr('demand_period','0')} AS p,
-        ${colOr('operation_type',"''")} AS type, ${colOr('location',"''")} AS pl,
-        ${colOr('product',"''")} AS pr, ${colOr('resource',"''")} AS rs,
-        ${colOr('loc_from',"''")} AS fr, ${colOr('loc_to',"''")} AS to,
-        ${colOr('transport_type',"''")} AS tm, ${colOr('order_operation_volume','0')} AS v,
-        abs(${colOr('cost_rate_of_operation','0')}) AS r, ${colOr('supplier',"''")} AS vd,
-        ${colOr('bom_num',"''")} AS rt, ${colOr('order_operation_id',"''")} AS oid,
-        ${colOr('resource_consumption_operation','0')} AS rc
-      FROM ${src(db,'marking_demand', `${q('order_id')} IN (${chunk.join(',')})`)}`);
-    rows.forEach(r=>{
+  for(const rows of chunkRows){
+    for(let k=0; k<rows.length; k++){
+      const r = rows[k];
       const t = T2[String(r.type||'').toLowerCase()];
-      if(!t) return;
+      if(!t) continue;
+      const v = num(r.v), rc = num(r.rc);
+      if(Math.abs(v) <= ZERO_TOL && Math.abs(rc) <= ZERO_TOL) continue;
       const oid = sany(r.oid);
       ops.push({o:num(r.o), p:pnum(r.p), d:'', t,
         pl:sany(r.pl), pr:sany(r.pr), rs:(t==='mv'?'':sany(r.rs)),
         fr:sany(r.fr), to:sany(r.to), tm:sany(r.tm),
-        v:num(r.v), r:Math.abs(num(r.r)), vd:sany(r.vd), rt:sany(r.rt),
+        v, r:Math.abs(num(r.r)), vd:sany(r.vd), rt:sany(r.rt),
         oid, dp:oid?oid.split('.').length:1,
-        rc:num(r.rc)||undefined});
-    });
+        rc:rc||undefined});
+    }
   }
   return {orders, ops};
 }
@@ -1315,28 +1509,43 @@ CHX.loadMainDetail = loadMainDetail;
 /* точечный drill-down: операции конкретного заказа (для «Цепочки заказа») */
 CHX.loadOpsForOrder = async function(orderId){
   const db = CHX.cfg.base; if(!db) return [];
-  const rows = await chQuery(`SELECT ${q('order_id')} AS o, ${q('demand_period')} AS p,
-      ${q('operation_type')} AS type, ${q('location')} AS pl, ${q('product')} AS pr,
-      ${q('resource')} AS rs, ${q('loc_from')} AS fr, ${q('loc_to')} AS to,
-      ${q('transport_type')} AS tm, ${q('order_operation_volume')} AS v,
-      abs(${q('cost_rate_of_operation')}) AS r, ${q('supplier')} AS vd,
-      ${q('bom_num')} AS rt, ${q('order_operation_id')} AS oid,
-      ${q('resource_consumption_operation')} AS rc
-    FROM ${src(db,'marking_demand', `${q('order_id')} = ${Number(orderId)}`)}`);
+  const mdSet = await getMarkingDemandCols(db);
+  const mdCols = mdSet || new Set();
+  const has = c => !mdCols.size || mdCols.has(String(c).toLowerCase());
+  const colOr = (col, fallback) => has(col) ? q(col) : fallback;
+  const opColNames = ['order_id','demand_period','operation_type','location','product',
+    'resource','loc_from','loc_to','transport_type','order_operation_volume',
+    'cost_rate_of_operation','supplier','bom_num','order_operation_id',
+    'resource_consumption_operation'];
+  const opProj = mdCols.size ? opColNames.filter(has) : null;
+  const opNonZeroSql = has('resource_consumption_operation')
+    ? `(abs(toFloat64(${q('order_operation_volume')})) > ${ZERO_TOL_SQL} OR abs(toFloat64(${q('resource_consumption_operation')})) > ${ZERO_TOL_SQL})`
+    : `abs(toFloat64(${q('order_operation_volume')})) > ${ZERO_TOL_SQL}`;
+  const rows = await chQuery(`SELECT ${colOr('order_id','0')} AS o, ${colOr('demand_period','0')} AS p,
+      ${colOr('operation_type',"''")} AS type, ${colOr('location',"''")} AS pl, ${colOr('product',"''")} AS pr,
+      ${colOr('resource',"''")} AS rs, ${colOr('loc_from',"''")} AS fr, ${colOr('loc_to',"''")} AS to,
+      ${colOr('transport_type',"''")} AS tm, ${colOr('order_operation_volume','0')} AS v,
+      abs(${colOr('cost_rate_of_operation','0')}) AS r, ${colOr('supplier',"''")} AS vd,
+      ${colOr('bom_num',"''")} AS rt, ${colOr('order_operation_id',"''")} AS oid,
+      ${colOr('resource_consumption_operation','0')} AS rc
+    FROM ${src(db,'marking_demand', `${q('order_id')} = ${Number(orderId)}`, opProj)}
+    WHERE ${opNonZeroSql}`);
   const out = [];
   rows.forEach(r=>{
     const t = T2[String(r.type||'').toLowerCase()]; if(!t) return;
+    const v = num(r.v), rc = num(r.rc);
+    if(Math.abs(v) <= ZERO_TOL && Math.abs(rc) <= ZERO_TOL) return;
     const oid = sany(r.oid);
     out.push({o:num(r.o), p:pnum(r.p), d:'', t, pl:sany(r.pl), pr:sany(r.pr),
       rs:(t==='mv'?'':sany(r.rs)), fr:sany(r.fr), to:sany(r.to), tm:sany(r.tm),
-      v:num(r.v), r:Math.abs(num(r.r)), vd:sany(r.vd), rt:sany(r.rt),
-      oid, dp:oid?oid.split('.').length:1, rc:num(r.rc)||undefined});
+      v, r:Math.abs(num(r.r)), vd:sany(r.vd), rt:sany(r.rt),
+      oid, dp:oid?oid.split('.').length:1, rc:rc||undefined});
   });
   return out;
 };
 
 /* ─────────────── 10. ГЛАВНАЯ ТОЧКА ВХОДА ─────────────── */
-/* Сводим вход independent_demand с результатом marking_demand.
+/* Сводим вход independent_demand с результатом marking_demand за O(N + M).
    В independent_demand нет order_id, поэтому бизнес-ключ — товар, локация,
    тип и поток спроса; при повторах выбирается строка с ближайшим объёмом.
    Непарные строки — реальные входные заказы, не попавшие в план. */
@@ -1344,67 +1553,128 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
   if(!Array.isArray(inputRows) || !inputRows.length) return markingOrders;
   const norm=v=>String(v==null?'':v).trim().toLowerCase();
   const key=(prod,loc,dt,stream)=>[norm(prod),norm(loc),norm(dt),norm(stream)].join('|');
+  const pairKey=(prod,loc)=>norm(prod)+'|'+norm(loc);
   const rank=v=>{
     let s=String(v==null?'':v).replace(/\D/g,'');
     if(s.length===9 && /^[1-6]/.test(s))s=s.slice(1); // periodid: 4YYYYMMDD
     return s ? Number(s.slice(0,8)) : 0;
   };
   const dueRanks=[...new Set(inputRows.map(r=>rank(r.periodid||r.date)).filter(Boolean))].sort((a,b)=>a-b);
+  const dueRankIdx=new Map();
+  dueRanks.forEach((rv,idx)=>dueRankIdx.set(rv,idx));
   const planPeriods=[...new Set(markingOrders.map(o=>pnum(o.p)))].sort((a,b)=>a-b);
-  /* Совпавшие строки дают точный мост «календарный periodid → P-бакет плана».
-     Он нужен непарным строкам: раньше 420270401 превращался в P420270401, пока
-     тот же апрель в marking_demand назывался P0. */
+  const hasPlanZero=planPeriods.includes(0);
+  /* Совпавшие строки дают точный мост «календарный periodid → P-бакет плана». */
   const dueToPlan=new Map();
   const periodPosition=(v,isDue)=>{
     const r=rank(v);if(!r&&String(v)!=='0'&&String(v).toUpperCase()!=='P0')return 0;
-    if(isDue||r>=10000){const i=dueRanks.indexOf(r);return i>=0?i+1:0}
-    const p=pnum(v);return planPeriods.includes(0)?p+1:(p===0?1:p);
+    if(isDue||r>=10000){const i=dueRankIdx.has(r)?dueRankIdx.get(r):-1;return i>=0?i+1:0}
+    const p=pnum(v);return hasPlanZero?p+1:(p===0?1:p);
   };
-  const canonicalPeriod=due=>{
-    const r=rank(due),i=dueRanks.indexOf(r);
-    if(dueToPlan.has(r))return dueToPlan.get(r);
-    /* Для неизвестной даты продолжаем ближайшее известное соответствие. */
-    const anchors=[...dueToPlan.entries()].map(([dr,p])=>({i:dueRanks.indexOf(dr),p:pnum(p)}))
-      .filter(a=>a.i>=0).sort((a,b)=>Math.abs(a.i-i)-Math.abs(b.i-i));
-    if(anchors.length&&i>=0)return Math.max(0,anchors[0].p+(i-anchors[0].i));
-    if(i>=0&&planPeriods[i]!==undefined)return planPeriods[i];
-    if(i>=0&&planPeriods.length)return Math.max(0,planPeriods[0]+i);
-    return Math.max(0,i);
-  };
-  const pools=new Map();
-  inputRows.forEach((r,i)=>{
-    const x=Object.assign({_i:i,_used:false},r);
-    const k=key(x.item,x.loc,x.demandtype,x.dmdstream);
-    if(!pools.has(k))pools.set(k,[]);
-    pools.get(k).push(x);
-  });
+
   const compatible=(a,b)=>!norm(a)||!norm(b)||norm(a)===norm(b);
-  const lateAllowed=o=>(penalties||[]).some(r=>num(r.latePeriods)>0
-    &&norm(r.item)===norm(o.prod)&&norm(r.loc)===norm(o.loc)
-    &&compatible(r.dt,o.dt)&&compatible(r.stream,o.stream));
-  const allInputs=[...pools.values()].flat();
+
+  /* Индекс штрафов по (item|loc) вместо полного скана массива penalties на каждый заказ */
+  const penByItemLoc=new Map();
+  (penalties||[]).forEach(r=>{
+    if(!(num(r.latePeriods)>0))return;
+    const pk=pairKey(r.item,r.loc);
+    let arr=penByItemLoc.get(pk);
+    if(!arr){arr=[];penByItemLoc.set(pk,arr)}
+    arr.push(r);
+  });
+  const lateAllowed=o=>{
+    const arr=penByItemLoc.get(pairKey(o.prod,o.loc));
+    if(!arr)return false;
+    for(let i=0;i<arr.length;i++){
+      const r=arr[i];
+      if(compatible(r.dt,o.dt)&&compatible(r.stream,o.stream))return true;
+    }
+    return false;
+  };
+
+  /* Двойной индекс входа: точный ключ (item|loc|dt|stream) + фолбэк по (item|loc) */
+  const pools=new Map();
+  const poolsByItemLoc=new Map();
+  const wrappedInputs=new Array(inputRows.length);
+  for(let i=0;i<inputRows.length;i++){
+    const r=inputRows[i];
+    const x=Object.assign({_i:i,_used:false,_qty:num(r.demandqty)},r);
+    wrappedInputs[i]=x;
+    const k=key(x.item,x.loc,x.demandtype,x.dmdstream);
+    let p1=pools.get(k);
+    if(!p1){p1=[];pools.set(k,p1)}
+    p1.push(x);
+    const k2=pairKey(x.item,x.loc);
+    let p2=poolsByItemLoc.get(k2);
+    if(!p2){p2=[];poolsByItemLoc.set(k2,p2)}
+    p2.push(x);
+  }
+
+  const pickClosest=(arr, targetDem, checkCompat, oDt, oStream)=>{
+    if(!arr||!arr.length)return null;
+    let best=null, bestDiff=Infinity;
+    for(let i=0;i<arr.length;i++){
+      const cand=arr[i];
+      if(cand._used)continue;
+      if(checkCompat && (!compatible(cand.demandtype,oDt) || !compatible(cand.dmdstream,oStream)))continue;
+      const diff=Math.abs(cand._qty-targetDem);
+      if(diff<bestDiff){bestDiff=diff;best=cand;if(diff===0)break}
+    }
+    return best;
+  };
+
   const out=markingOrders.map(o=>{
-    let list=(pools.get(key(o.prod,o.loc,o.dt,o.stream))||[]).filter(r=>!r._used);
+    const oDem=num(o.dem);
+    let r=pickClosest(pools.get(key(o.prod,o.loc,o.dt,o.stream)), oDem, false, null, null);
     /* В некоторых marking_demand нет demandtype/dmdstream. Не превращаем
        совпадающий товар той же локации в ложный «не попал в план» из-за
        отсутствующего необязательного атрибута. */
-    if(!list.length)list=allInputs.filter(r=>!r._used&&norm(r.item)===norm(o.prod)
-      &&norm(r.loc)===norm(o.loc)&&compatible(r.demandtype,o.dt)&&compatible(r.dmdstream,o.stream));
-    if(!list.length)return o;
-    list.sort((a,b)=>Math.abs(num(a.demandqty)-num(o.dem))-Math.abs(num(b.demandqty)-num(o.dem)));
-    const r=list[0];r._used=true;
-    const due=r.periodid||r.date, dueRank=rank(due),allowed=lateAllowed(o);
+    if(!r)r=pickClosest(poolsByItemLoc.get(pairKey(o.prod,o.loc)), oDem, true, o.dt, o.stream);
+    if(!r)return o;
+    r._used=true;
+    const due=r.periodid||r.date, dueRank=rank(due), allowed=lateAllowed(o);
     if(dueRank)dueToPlan.set(dueRank,pnum(o.p));
     const late=allowed&&num(o.sal)>ORD_TOL&&periodPosition(o.p,false)>0&&periodPosition(due,true)>0
       &&periodPosition(o.p,false)>periodPosition(due,true);
     return Object.assign({},o,{independentSourceId:r.sourceId,duePeriod:due,
       duePeriodKey:normalizePeriodKey(due),lateAllowed:allowed,late:!!late});
   });
-  inputRows.forEach((r,i)=>{
-    const pool=pools.get(key(r.item,r.loc,r.demandtype,r.dmdstream))||[];
-    const x=pool.find(v=>v._i===i);
-    if(!x || x._used)return;
-    const qty=num(r.demandqty), due=r.periodid||r.date;
+
+  const anchors=[...dueToPlan.entries()]
+    .map(([dr,p])=>({i:dueRankIdx.has(dr)?dueRankIdx.get(dr):-1,p:pnum(p)}))
+    .filter(a=>a.i>=0);
+  const canonCache=new Map();
+  const canonicalPeriod=due=>{
+    const r=rank(due);
+    if(canonCache.has(r))return canonCache.get(r);
+    const i=dueRankIdx.has(r)?dueRankIdx.get(r):-1;
+    let res;
+    if(dueToPlan.has(r)){
+      res=dueToPlan.get(r);
+    }else if(anchors.length&&i>=0){
+      let bestA=anchors[0], bestDist=Math.abs(bestA.i-i);
+      for(let k=1;k<anchors.length;k++){
+        const d=Math.abs(anchors[k].i-i);
+        if(d<bestDist){bestDist=d;bestA=anchors[k]}
+      }
+      res=Math.max(0,bestA.p+(i-bestA.i));
+    }else if(i>=0&&planPeriods[i]!==undefined){
+      res=planPeriods[i];
+    }else if(i>=0&&planPeriods.length){
+      res=Math.max(0,planPeriods[0]+i);
+    }else{
+      res=Math.max(0,i);
+    }
+    canonCache.set(r,res);
+    return res;
+  };
+
+  for(let i=0;i<wrappedInputs.length;i++){
+    const x=wrappedInputs[i];
+    if(!x || x._used)continue;
+    const r=inputRows[i];
+    const qty=x._qty, due=r.periodid||r.date;
     out.push({
       id:-1000000000-i, idLabel:'ID-'+(r.sourceId||i+1), independentOnly:true,
       independentSourceId:r.sourceId||i+1, p:canonicalPeriod(due), d:normalizePeriodKey(r.date||due),
@@ -1414,23 +1684,42 @@ function mergeIndependentOrders(markingOrders, inputRows, penalties){
       price:0,cpt:0,mpt:0,rev:0,cost:0,mar:0,mph:0,duePeriod:due,
       lateAllowed:lateAllowed({prod:r.item,loc:r.loc,dt:r.demandtype,stream:r.dmdstream}),late:false
     });
-  });
-  /* Infer economics for demand that never entered the plan. */
+  }
+
+  /* Infer economics for demand that never entered the plan (индекс по prod|loc и prod). */
   const median=xs=>{xs=xs.filter(Number.isFinite).sort((a,b)=>a-b);return xs.length?xs[Math.floor(xs.length/2)]:0};
   const refs=out.filter(o=>!o.independentOnly&&num(o.sal)>ORD_TOL);
   const gp=median(refs.map(o=>num(o.price)).filter(v=>v>0));
   const gc=median(refs.map(o=>num(o.cpt)).filter(v=>v>=0));
-  out.filter(o=>o.independentOnly).forEach(o=>{
-    const same=refs.filter(x=>norm(x.prod)===norm(o.prod)&&norm(x.loc)===norm(o.loc));
-    const byProd=same.length?same:refs.filter(x=>norm(x.prod)===norm(o.prod));
-    const src=byProd.length?byProd:refs;
-    o.price=median(src.map(x=>num(x.price)).filter(v=>v>0))||gp;
-    o.cpt=median(src.map(x=>num(x.cpt)).filter(v=>v>=0))||gc;
+  const refsByProdLoc=new Map(), refsByProd=new Map();
+  for(let i=0;i<refs.length;i++){
+    const x=refs[i];
+    const kp=norm(x.prod), kpl=kp+'|'+norm(x.loc);
+    let a1=refsByProdLoc.get(kpl); if(!a1){a1=[];refsByProdLoc.set(kpl,a1)} a1.push(x);
+    let a2=refsByProd.get(kp);    if(!a2){a2=[];refsByProd.set(kp,a2)}     a2.push(x);
+  }
+  const econCache=new Map();
+  for(let i=0;i<out.length;i++){
+    const o=out[i];
+    if(!o.independentOnly)continue;
+    const kp=norm(o.prod), kpl=kp+'|'+norm(o.loc);
+    let ec=econCache.get(kpl);
+    if(!ec){
+      const same=refsByProdLoc.get(kpl);
+      const byProd=(same&&same.length)?same:refsByProd.get(kp);
+      const srcList=(byProd&&byProd.length)?byProd:refs;
+      const price=srcList===refs ? gp : (median(srcList.map(x=>num(x.price)).filter(v=>v>0))||gp);
+      const cpt=srcList===refs ? gc : (median(srcList.map(x=>num(x.cpt)).filter(v=>v>=0))||gc);
+      ec={price, cpt};
+      econCache.set(kpl, ec);
+    }
+    o.price=ec.price;
+    o.cpt=ec.cpt;
     /* Цена и маржа на тонну нужны для оценки потерь. Фактические выручка,
        себестоимость и валовая маржа остаются нулевыми: заказ не был продан и
        не должен попадать в финансовый результат как будто выполненный. */
     o.mpt=Math.max(0,o.price-o.cpt); o.rev=0; o.cost=0; o.mar=0;
-  });
+  }
   let next=out.filter(o=>!o.independentOnly).length;
   out.filter(o=>o.independentOnly).forEach(o=>o.idLabel='ID-'+(++next));
   return out;
@@ -1473,22 +1762,28 @@ CHX.loadAll = async function(onProgress){
     .catch(()=>CHX.applyPostgresScenarioRows([]));
 
   step('Загрузка агрегатов версий…');
-  const aggs = [];
-  for(const db of c.schemas){
-    step(`Агрегаты: ${CHX.labelFor(db)}…`);
-    /* У версии может быть свой набор periodtype. Если выбранной общей
-       гранулярности в ней нет, фильтр `periodtype = N` не попадёт ни в одну
-       строку и периодные агрегаты версии (покрытие, мощности, штрафы)
-       прилетят нулями. Берём самую массовую гранулярность ЭТОЙ версии
-       и честно помечаем смену в заметках. */
-    const opts = await CHX.granOptionsFor(db);
-    let g = c.gran;
-    if(opts && !opts.some(o=>o.t===g)) g = opts[0].t;
-    const a = await loadVersionAgg(db, g);
-    if(g !== c.gran)
-      a.notes.push('в версии нет periodtype '+c.gran+' — периодные агрегаты (покрытие, мощности, штрафы) посчитаны по periodtype '+g+' ('+CHX.granLabel(g)+')');
-    aggs.push(a);
-  }
+  const aggs = new Array(c.schemas.length);
+  let nextSchemaIdx = 0;
+  const VER_CONCURRENCY = Math.min(2, c.schemas.length);
+  await Promise.all(Array.from({length: VER_CONCURRENCY}, async ()=>{
+    while(nextSchemaIdx < c.schemas.length){
+      const idx = nextSchemaIdx++;
+      const db = c.schemas[idx];
+      step(`Агрегаты: ${CHX.labelFor(db)}…`);
+      /* У версии может быть свой набор periodtype. Если выбранной общей
+         гранулярности в ней нет, фильтр `periodtype = N` не попадёт ни в одну
+         строку и периодные агрегаты версии (покрытие, мощности, штрафы)
+         прилетят нулями. Берём самую массовую гранулярность ЭТОЙ версии
+         и честно помечаем смену в заметках. */
+      const opts = await CHX.granOptionsFor(db);
+      let g = c.gran;
+      if(opts && !opts.some(o=>o.t===g)) g = opts[0].t;
+      const a = await loadVersionAgg(db, g);
+      if(g !== c.gran)
+        a.notes.push('в версии нет periodtype '+c.gran+' — периодные агрегаты (покрытие, мощности, штрафы) посчитаны по periodtype '+g+' ('+CHX.granLabel(g)+')');
+      aggs[idx] = a;
+    }
+  }));
   await scenarioNamesTask;
 
   /* Сопоставляем каждую PG-строку с заказами всей своей marking_demand-версии.
@@ -1553,6 +1848,9 @@ CHX.loadAll = async function(onProgress){
     baseAgg.totals.orderSource='independent_demand';
     baseAgg.totals.orderStatusSource='independent_demand × marking_demand (детализация)';
   }
+  /* Сырой построчный массив independentOrders после слияния больше нигде не
+     читается — освобождаем память у всех версий перед сборкой и автосохранением. */
+  aggs.forEach(a=>{ if(a) delete a.independentOrders });
   /* сборка DS через существующий build() — вкладки продолжают работать */
   const ds = build({
     name: CHX.labelFor(c.base) + ' · ' + CHX.granLabel(c.gran),
